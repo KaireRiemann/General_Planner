@@ -32,17 +32,23 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    nubs_opt_.setEnergyWeights(rho_energy_);
+    nubsOpt_.setEnergyWeights(rho_energy_);
 
-    Eigen::MatrixXd boundary_head = iniState; 
-    Eigen::MatrixXd boundary_tail = finState;
-    Eigen::MatrixXd inner_pts_mat = initInnerPts.transpose(); 
+    Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
+    waypoints.row(0) = iniState.col(0).transpose(); 
+    
+    for (int i = 0; i < initInnerPts.cols(); ++i) {
+        waypoints.row(i + 1) = initInnerPts.col(i).transpose(); 
+    }
+    
+    waypoints.row(piece_num_) = finState.col(0).transpose(); 
+
 
     std::vector<double> time_segs(piece_num_);
     for (int i = 0; i < piece_num_; ++i)
       time_segs[i] = initT(i);
 
-    nubs_opt_.setInitState(time_segs, inner_pts_mat, boundary_head, boundary_tail);
+    nubsOpt_.setInitState(time_segs, waypoints, iniState, finState);
 
     cost_manager_.grid_map = grid_map_;
     cost_manager_.cps = &cps_;
@@ -64,7 +70,7 @@ namespace ego_planner
     cost_manager_.cps_per_piece = cps_num_prePiece_;
     cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = nubs_opt_.generateInitialGuess();
+    Eigen::VectorXd x0 = nubsOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
     double x_init[variable_num_];
@@ -126,7 +132,7 @@ namespace ego_planner
 
         if (!flag_swarm_too_close)
         {
-          const nubs::NUBSTrajectory<3> &traj = nubs_opt_.getTrajectory();
+          const NUBSTraj &traj = nubsOpt_.getTrajectory();
           Eigen::MatrixXd init_points = getInitConstraintPoints(); 
 
           std::vector<std::pair<int, int>> segments_nouse;
@@ -1006,3 +1012,4 @@ namespace ego_planner
   void PolyTrajOptimizer::setIfTouchGoal(const bool touch_goal) { touch_goal_ = touch_goal; }
   void PolyTrajOptimizer::setConstraintPoints(Types::ConstraintPoints cps) { cps_ = cps; }
   void PolyTrajOptimizer::setUseMultitopologyTrajs(bool use_multitopology_trajs) { multitopology_data_.use_multitopology_trajs = use_multitopology_trajs; }
+}//namespace ego_planner

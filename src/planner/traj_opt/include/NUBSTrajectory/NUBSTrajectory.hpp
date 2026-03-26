@@ -434,5 +434,5 @@ public:
     }
 };
 
-} 
+} //namespace nubs
 #endif

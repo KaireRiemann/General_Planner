@@ -237,7 +237,7 @@ namespace ego_planner
   // =================================================================================
   // 核心重构：利用控制点 + Greville 时间映射进行极速碰撞检测
   // =================================================================================
-  void EGOReplanFSM::checkCollisionCallback(const ros::TimerEvent &e)
+ void EGOReplanFSM::checkCollisionCallback(const ros::TimerEvent &e)
   {
     if (enable_ground_height_measurement_)
     {
@@ -247,6 +247,8 @@ namespace ego_planner
 
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
     auto map = planner_manager_->grid_map_;
+    
+    // 当前已经在该段轨迹上飞行的时间
     const double t_cur = ros::Time::now().toSec() - info->start_time;
 
     if (exec_state_ == WAIT_TARGET || info->traj_id <= 0) return;
@@ -256,84 +258,83 @@ namespace ego_planner
       ROS_ERROR("Depth Lost! EMERGENCY_STOP");
       enable_fail_safe_ = false;
       changeFSMExecState(EMERGENCY_STOP, "SAFETY");
+      return;
     }
 
-    // 获取 NUBS 轨迹的底层属性
-    const Eigen::VectorXd& u = info->traj.getKnots();
-    int p = info->traj.getP();
-    Eigen::MatrixXd C = info->traj.getControlPoints().transpose(); // 3 x N_c
-    int num_cps = C.cols();
-
-    // 找到当前时间 t_cur 处于哪个区间，并推算应该从哪个控制点开始查
-    int span = info->traj.findSpan(t_cur, num_cps, u);
-    int i_start = std::max(0, span - p); 
-
+    // 确定检测时间跨度：从当前时刻 t_cur 往后查
     const bool touch_the_end = ((local_target_pt_ - final_goal_).norm() < 1e-2);
-    int i_end = touch_the_end ? num_cps : num_cps * 3 / 4; // 终点豁免逻辑
+    double t_end = info->duration;
+    if (!touch_the_end) t_end *= 0.75; // 豁免终点附近的抖动
 
-    for (int i = i_start; i < i_end; ++i)
+    // 如果已经飞完，不需要检测
+    if (t_cur >= t_end) return;
+
+    // 核心重构：利用 NUBS 极速 evaluate，按 0.05s 步长精确推演未来轨迹！
+    constexpr double t_step = 0.05;
+    for (double t = t_cur; t < t_end; t += t_step)
     {
-      Eigen::Vector3d pt = C.col(i);
+      // 1. 精确获取曲线上当前时间点 t 的真实物理位置
+      Eigen::Vector3d pt = info->traj.evaluate(t, 0); 
       bool dangerous = false;
 
-      // 1. 静态障碍物：直接查询膨胀后的网格地图
-      dangerous |= map->getInflateOccupancy(pt);
+      // 2. 静态障碍物检测：绝无误报
+      if (map->getInflateOccupancy(pt)) {
+          dangerous = true;
+      }
 
-      // 2. 动态集群：利用 Greville 横坐标计算控制点 i 对应的物理时间 t_cp
-      double t_cp = 0.0;
-      for (int k = 1; k <= p; ++k) t_cp += u(i + k);
-      t_cp /= p;
-
-      for (size_t id = 0; id < planner_manager_->traj_.swarm_traj.size(); id++)
+      // 3. 动态集群检测：时间戳绝对同步，彻底消除躲避幽灵的现象！
+      if (!dangerous) 
       {
-        if ((planner_manager_->traj_.swarm_traj.at(id).drone_id != (int)id) ||
-            (planner_manager_->traj_.swarm_traj.at(id).drone_id == planner_manager_->pp_.drone_id))
+        for (size_t id = 0; id < planner_manager_->traj_.swarm_traj.size(); id++)
         {
-          continue;
-        }
-
-        // 同步时间：当前控制点的时间 + 我们的发车时间 - 对方的发车时间
-        double t_X = t_cp + (info->start_time - planner_manager_->traj_.swarm_traj.at(id).start_time);
-        
-        if (t_X > 0 && t_X < planner_manager_->traj_.swarm_traj.at(id).duration)
-        {
-          Eigen::Vector3d swarm_pridicted = planner_manager_->traj_.swarm_traj.at(id).traj.evaluate(t_X, 0);
-          double dist = (pt - swarm_pridicted).norm();
-          double allowed_dist = planner_manager_->getSwarmClearance() + planner_manager_->traj_.swarm_traj.at(id).des_clearance;
-          
-          if (dist < allowed_dist)
+          if ((planner_manager_->traj_.swarm_traj.at(id).drone_id != (int)id) ||
+              (planner_manager_->traj_.swarm_traj.at(id).drone_id == planner_manager_->pp_.drone_id))
           {
-            ROS_WARN("Swarm distance between drone %d and drone %d is %f at t_cp=%f, too close!",
-                     planner_manager_->pp_.drone_id, (int)id, dist, t_cp);
-            dangerous = true;
-            break;
+            continue;
+          }
+
+          // 时间绝对对齐：预测点 t 加上 两机发车时间差
+          double t_X = t + (info->start_time - planner_manager_->traj_.swarm_traj.at(id).start_time);
+          
+          if (t_X > 0 && t_X < planner_manager_->traj_.swarm_traj.at(id).duration)
+          {
+            Eigen::Vector3d swarm_predicted = planner_manager_->traj_.swarm_traj.at(id).traj.evaluate(t_X, 0);
+            double dist = (pt - swarm_predicted).norm();
+            double allowed_dist = planner_manager_->getSwarmClearance() + planner_manager_->traj_.swarm_traj.at(id).des_clearance;
+            
+            if (dist < allowed_dist)
+            {
+              ROS_WARN("Swarm warning: drone %d and %d too close (%f m) at future t=%f",
+                       planner_manager_->pp_.drone_id, (int)id, dist, t);
+              dangerous = true;
+              break;
+            }
           }
         }
       }
 
+      // 4. 危机处理逻辑
       if (dangerous)
       {
-        if (planFromLocalTraj(1)) // 尝试局部重规划
+        if (planFromLocalTraj(1)) // 尝试利用优化器重新拉回安全区
         {
-          ROS_INFO("Plan success when detect collision. t_cp/duration: %f", t_cp / info->duration);
+          ROS_INFO("Plan success when detect collision at future t=%f", t);
           changeFSMExecState(EXEC_TRAJ, "SAFETY");
-          return;
         }
         else
         {
-          if (t_cp - t_cur < emergency_time_) // 距离危险发生不足紧急刹车时间
+          if (t - t_cur < emergency_time_) // 距离撞击时间不足，直接急刹
           {
-            ROS_WARN("Emergency stop! time_left=%f", t_cp - t_cur);
+            ROS_WARN("Emergency stop! Crash in %f seconds", t - t_cur);
             changeFSMExecState(EMERGENCY_STOP, "SAFETY");
           }
           else
           {
-            ROS_WARN("current traj in collision, replan.");
+            ROS_WARN("Future collision detected, replan.");
             changeFSMExecState(REPLAN_TRAJ, "SAFETY");
           }
-          return;
         }
-        break;
+        return; 
       }
     }
   }

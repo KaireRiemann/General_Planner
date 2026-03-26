@@ -55,16 +55,14 @@ namespace cost_functional
             Types::Vec3 swarm_v;
             if (point_time < (*swarm_trajs)[id].duration)
             {
-                swarm_p = (*swarm_trajs)[id].traj.evaluate((*swarm_trajs)[id].traj.getStartTime() + point_time,
-                                                        SplineTrajectory::Deriv::Pos);
-                swarm_v = (*swarm_trajs)[id].traj.evaluate((*swarm_trajs)[id].traj.getStartTime() + point_time,
-                                                        SplineTrajectory::Deriv::Vel);
+                swarm_p = (*swarm_trajs)[id].traj.evaluate(0.0 + point_time,0);
+                swarm_v = (*swarm_trajs)[id].traj.evaluate(0.0 + point_time,1);
             }
             else
             {
-                const double end_t = (*swarm_trajs)[id].traj.getStartTime() + (*swarm_trajs)[id].duration;
-                swarm_v = (*swarm_trajs)[id].traj.evaluate(end_t, SplineTrajectory::Deriv::Vel);
-                swarm_p = (*swarm_trajs)[id].traj.evaluate(end_t, SplineTrajectory::Deriv::Pos) +
+                const double end_t = 0.0 + (*swarm_trajs)[id].duration;
+                swarm_v = (*swarm_trajs)[id].traj.evaluate(end_t, 1);
+                swarm_p = (*swarm_trajs)[id].traj.evaluate(end_t, 0) +
                         (point_time - (*swarm_trajs)[id].duration) * swarm_v;
             }
 

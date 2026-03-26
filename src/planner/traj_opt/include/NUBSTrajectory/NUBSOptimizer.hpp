@@ -3,6 +3,7 @@
 
 #include "NUBSTrajectory.hpp" 
 #include "optimizer/lbfgs.hpp"  
+#include "SpatialMap/IdentityMap.hpp"
 #include "SpatialMap/PolytopeSpatialMap.hpp"
 #include <Eigen/Dense>
 #include <vector>
@@ -223,7 +224,7 @@ namespace nubs
     // =========================================================================
     template <int DIM, int MAX_P = 7,
               typename TimeMap = nubs::QuadInvTimeMap,           
-              typename SpatialMap = gcopter::PolytopeSpatialMap> 
+              typename SpatialMap = spatial_map::PolytopeSpatialMap> 
     class NUBSOptimizer
     {
         static_assert(TypeTraits::HasTimeMapInterface<TimeMap>::value, "TimeMap does not satisfy requirements.");
@@ -350,15 +351,16 @@ namespace nubs
          * @brief Evaluate，约束消除 -> 轨迹生成 -> 代价评估 -> 梯度反传
          */
         template <typename TimeCostFunc, typename ControlPointCostFunc>
-        double evaluate(const Eigen::VectorXd &x, Eigen::VectorXd &grad_out,
+        double evaluate(const Eigen::Ref<const Eigen::VectorXd>& x, 
+                        Eigen::Ref<Eigen::VectorXd> grad_out,
                         TimeCostFunc &&time_cost_func,
-                        ControlPointCostFunc &&cp_cost_func) 
+                        ControlPointCostFunc &&cp_cost_func)
         {
             static_assert(TypeTraits::HasTimeCostInterface<typename std::decay<TimeCostFunc>::type>::value, 
                           "TimeCostFunc does not satisfy requirements.");
 
             double total_cost = 0.0;
-            grad_out.setZero(x.size());
+            grad_out.setZero();
 
             for (int i = 0; i < num_segments_; ++i) 
             {

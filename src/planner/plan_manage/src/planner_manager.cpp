@@ -40,7 +40,7 @@ namespace ego_planner
 
     NUBSTraj3D traj(3);
     Eigen::MatrixXd p_full;
-    traj.generate(innerPts.transpose(), headState, tailState, T, p_full);
+    traj.generate(innerPts.transpose(), headState, tailState, durations, p_full);
     
     return traj;
   }
@@ -382,17 +382,19 @@ namespace ego_planner
 
   bool EGOPlannerManager::setLocalTrajFromOpt(const NUBSTraj3D &traj, const bool touch_goal)
   {
-    Eigen::MatrixXd cps = traj.getControlPoints().transpose();
+    // Eigen::MatrixXd cps = traj.getControlPoints().transpose();
     
-    PtsChk_t pts_to_check;
-    bool ret = ploy_traj_opt_->computePointsToCheck(traj, Types::ConstraintPoints::two_thirds_id(cps, touch_goal), pts_to_check);
+    // PtsChk_t pts_to_check;
+    // bool ret = ploy_traj_opt_->computePointsToCheck(traj, Types::ConstraintPoints::two_thirds_id(cps, touch_goal), pts_to_check);
     
-    if (ret && pts_to_check.size() >= 1 && pts_to_check.back().size() >= 1)
-    {
-      traj_.setLocalTraj(traj, pts_to_check, ros::Time::now().toSec());
-    }
+    // if (ret && pts_to_check.size() >= 1 && pts_to_check.back().size() >= 1)
+    // {
+    //   traj_.setLocalTraj(traj, pts_to_check, ros::Time::now().toSec());
+    // }
 
-    return ret;
+    // return ret;
+    traj_.setLocalTraj(traj,ros::Time::now().toSec());
+    return true;
   }
 
   bool EGOPlannerManager::EmergencyStop(Eigen::Vector3d stop_pos)

@@ -16,26 +16,13 @@
 namespace ego_planner
 {
   // =====================================================
-  //  Type aliases for the Spline-based trajectory system
-  // =====================================================
-  constexpr int TRAJ_DIM = 3;
-  using SplineOpt = SplineTrajectory::SplineOptimizer<TRAJ_DIM,
-                                                       SplineTrajectory::QuinticSplineND<TRAJ_DIM>,
-                                                       SplineTrajectory::QuadInvTimeMap>;
-  using SplineTraj = SplineTrajectory::QuinticSplineND<TRAJ_DIM>;
-  // PPoly3D is already defined in plan_container.hpp
-  using Vec3 = Eigen::Vector3d;
-  using BCs = SplineTrajectory::BoundaryConditions<TRAJ_DIM>;
-  using WaypointsMat = typename SplineTraj::MatrixType;
-
-  // =====================================================
   //  Type aliases for the NUBSpline-based trajectory system
   // =====================================================
-  constexpr int DIM = 3;
+  constexpr int TRAJ_DIM = 3;
   constexpr int NUBS_ORDER = 5;
   constexpr int NUBS_MAX_P = 7;
-  using NUBSOpt = nubs::NUBSOptimizer<DIM,NUBS_MAX_P,temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<DIM>>;
-  using NUBSTraj = nubs::NUBSTrajectory<DIM,NUBS_MAX_P>;
+  using NUBSOpt = nubs::NUBSOptimizer<TRAJ_DIM,NUBS_MAX_P,temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using NUBSTraj = nubs::NUBSTrajectory<TRAJ_DIM,NUBS_MAX_P>;
   using Vec3 = Eigen::Vector3d;
   using WaypointsMat = Eigen::Matrix<double, Eigen::Dynamic, TRAJ_DIM>;
   

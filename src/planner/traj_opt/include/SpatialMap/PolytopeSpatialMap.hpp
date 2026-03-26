@@ -1,5 +1,5 @@
-#ifndef POLYTOPE_SPATIAL_MAP_HPP
-#define POLYTOPE_SPATIAL_MAP_HPP
+#ifndef SPLINE_TRAJECTORY_POLYTOPE_SPATIAL_MAP_HPP
+#define SPLINE_TRAJECTORY_POLYTOPE_SPATIAL_MAP_HPP
 
 #include "SpatialMap/SFCCommonTypes.hpp"
 #include "optimizer/lbfgs.hpp"
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cfloat>
 
-namespace spatial_map
+namespace spatial_map 
 {
 struct PolytopeSpatialMap
 {
@@ -67,14 +67,26 @@ struct PolytopeSpatialMap
         xi.setConstant(std::sqrt(1.0 / static_cast<double>(k)));
 
         lbfgs::lbfgs_parameter_t params;
+        lbfgs::lbfgs_load_default_parameters(&params); // 最好先加载一次默认参数防脏数据
         params.past = 0;
         params.delta = 1.0e-5;
         params.g_epsilon = FLT_EPSILON;
         params.max_iterations = 128;
 
         double min_cost = 0.0;
-        lbfgs::lbfgs_optimize(xi, min_cost, &PolytopeSpatialMap::costTinyNLS,
-                              nullptr, nullptr, &ov_poly, params);
+        
+        // --- 核心修复 1：适配 C-Style 调用签名 ---
+        // 参数依次为：维度(n), 数据指针(x), 成本指针(fx), 评估函数, 步长函数, 进度函数, 实例指针(instance), 优化参数
+        lbfgs::lbfgs_optimize(
+            xi.size(), 
+            xi.data(), 
+            &min_cost, 
+            &PolytopeSpatialMap::costTinyNLS,
+            nullptr, 
+            nullptr, 
+            &ov_poly, 
+            &params
+        );
 
         return xi;
     }
@@ -116,11 +128,16 @@ struct PolytopeSpatialMap
     }
 
 private:
-    static inline double costTinyNLS(void *ptr,
-                                     const Eigen::VectorXd &xi,
-                                     Eigen::VectorXd &gradXi)
+    // --- 核心修复 2：完全匹配 lbfgs_evaluate_t 的 C-Style 签名 ---
+    static double costTinyNLS(void *ptr,
+                              const double *x,
+                              double *g,
+                              const int n)
     {
-        const int n = xi.size();
+        // 使用 Eigen::Map 零开销包装 C 数组，完美复用后续的 Eigen 代码！
+        Eigen::Map<const Eigen::VectorXd> xi(x, n);
+        Eigen::Map<Eigen::VectorXd> gradXi(g, n);
+
         const Eigen::Matrix3Xd &ov_poly = *(Eigen::Matrix3Xd *)ptr;
 
         const double sqrNormXi = xi.squaredNorm();
@@ -149,6 +166,6 @@ private:
         return cost;
     }
 };
-}
+} // namespace spatial_map
 
 #endif

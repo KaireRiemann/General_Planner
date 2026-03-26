@@ -34,7 +34,6 @@ namespace ego_planner
   struct LocalTrajData
   {
     NUBSTraj3D traj;
-    PtsChk_t pts_chk;
     int drone_id; // A negative value indicates no received trajectories.
     int traj_id;
     double duration;
@@ -58,7 +57,6 @@ namespace ego_planner
       local_traj.traj_id = 0;
     }
     ~TrajContainer() {}
--
     void setGlobalTraj(const NUBSTraj3D &trajectory, const double &world_time)
     {
       global_traj.traj = trajectory;
@@ -72,7 +70,7 @@ namespace ego_planner
       local_traj.traj_id = 0;
     }
 
-    void setLocalTraj(const NUBSTraj3D &trajectory, const PtsChk_t &pts_to_chk, const double &world_time, const int drone_id = -1)
+    void setLocalTraj(const NUBSTraj3D &trajectory, const double &world_time, const int drone_id = -1)
     {
       local_traj.drone_id = drone_id;
       local_traj.traj_id++;
@@ -82,7 +80,6 @@ namespace ego_planner
       
       local_traj.start_time = world_time;
       local_traj.traj = trajectory;
-      local_traj.pts_chk = pts_to_chk;
     }
   };
 

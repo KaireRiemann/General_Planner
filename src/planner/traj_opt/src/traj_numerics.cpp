@@ -4,21 +4,6 @@ using namespace std;
 
 namespace ego_planner
 {
-  SplineOpt::EvaluationResult PolyTrajOptimizer::evaluateCurrentDecisionVariables(
-      const Eigen::VectorXd &x,
-      Eigen::VectorXd &grad)
-  {
-    SplineOpt::EvaluateSpec<TimeCostFunction,
-                            IntegralCostFunction,
-                            SplineTrajectory::VoidWaypointsCost,
-                            SampleCostFunction> spec;
-    spec.time_cost = &time_cost_func_;
-    spec.integral_cost = &integral_cost_func_;
-    spec.sample_cost = &sample_cost_func_;
-    spec.workspace = &spline_workspace_;
-    return splineOpt_.evaluate(x, grad, spec);
-  }
-
   // =====================================================
   //  Generate trajectory from states using NUBSTrajectory
   // =====================================================
@@ -118,6 +103,7 @@ namespace ego_planner
   double PolyTrajOptimizer::costFunctionCallback(void *func_data, const double *x, double *grad, const int n)
   {
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
+
     fill(opt->min_ellip_dist2_.begin(), opt->min_ellip_dist2_.end(), std::numeric_limits<double>::max());
     opt->cost_manager_.resetAccumulation();
 
@@ -125,32 +111,24 @@ namespace ego_planner
     Eigen::Map<Eigen::VectorXd> grad_vec(grad, n);
 
     opt->iter_num_++;
+    opt->time_cost_.weight = opt->wei_time_;
 
-    // 1. Time Mapping: Convert unbounded variables x to real segment durations d
-
-    // 2. Define Time Penalty Closure
-    //time_cost_.weight = opt->wei_time_;
-    auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) 
+    auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
     {
       opt->cost_manager_.segment_dt_ = T_vec;
-
-  
       gdT.setZero(T_vec.size());
-      return time_cost_(T_vec, gdT);
+      return opt->time_cost_(T_vec, gdT);
     };
 
-    // 3. Evaluate total cost and gradients via NUBS framework
-    double total_cost = opt->nubs_opt_.evaluate(
+    double total_cost = opt->nubsOpt_.evaluate(
         x_vec, 
         grad_vec, 
-        time_cost_, 
+        time_cost_wrapper, 
         opt->cost_manager_
     );
 
-    // 4. Update the visual/logic cps_.points directly from the NUBS trajectory
-    opt->cps_.points = opt->nubs_opt_.getTrajectory().getControlPoints().transpose();
+    opt->cps_.points = opt->nubsOpt_.getTrajectory().getControlPoints().transpose();
 
-    // 5. Check for rebound
     if (opt->allowRebound())
     {
       opt->roughlyCheckConstraintPoints();

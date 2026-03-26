@@ -7,7 +7,7 @@ namespace cost_functional
 {
     using Types = PlanningTypesAdapter;
 
-    inline double ObstacleSoftPenalty(const double distance,
+    inline double accumulateObstacleSoftPenalty(const double distance,
                                       const double clearance,
                                       const double weight,
                                       const Types::Vec3 &direction,

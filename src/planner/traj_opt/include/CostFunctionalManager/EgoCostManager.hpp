@@ -1,12 +1,13 @@
 #ifndef EGO_COST_MANAGER_HPP
 #define EGO_COST_MANAGER_HPP
 
+#include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/EgoFeasibilityPenalty.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/GuidePointObstaclePenalty.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/EgoSwarmPenalty.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/VarianceSampleCost.hpp"
 #include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
-#include "CostFunctionalManager/PlanningTypesAdapter.hpp"
+
 
 namespace cost_functional
 {
@@ -29,7 +30,7 @@ namespace cost_functional
         mutable Eigen::VectorXd accumulated_costs;
         mutable std::vector<double> segment_dt_;
 
-        EgoCostFunctionalManager() : grid_map(nullptr), cps(nullptr), swarm_trajs(nullptr),
+        EgoCostFunctionalManager() : grid_map(nullptr), cps(nullptr), swarm_traj(nullptr),
                                      wei_obs(0), wei_obs_soft(0), wei_swarm(0), wei_feas(0), wei_sqrvar(0),
                                      obs_clearance(0), obs_clearance_soft(0), swarm_clearance(0),
                                      max_vel(0), max_acc(0), max_jer(0),
@@ -62,30 +63,64 @@ namespace cost_functional
             double cost_smooth = 0.0;
 
             //feasibility
-            for(int i = 0; i <= V.rows(); i++)
+            // for(int i = 0; i <= V.rows(); i++)
+            // {
+            //     Types::Vec3 v_row = V.row(i).transpose();
+
+            //     Types::Vec3 a_row = (i < A.rows()) ? Types::Vec3(A.row(i).transpose()) : Types::Vec3::Zero();
+            //     Types::Vec3 j_row = (i < J.rows()) ? Types::Vec3(J.row(i).transpose()) : Types::Vec3::Zero();
+
+            //     Types::Vec3 grad_v = Types::Vec3::Zero();
+            //     Types::Vec3 grad_a = Types::Vec3::Zero();
+            //     Types::Vec3 grad_j = Types::Vec3::Zero();
+
+                   
+            //     cost_feasibility += cost_functional::accumulateFeasibilityPenalty(
+            //         v_row, a_row, j_row, 
+            //         max_vel, max_acc, max_jer, 
+            //         wei_feas, 
+            //         grad_v, grad_a, grad_j
+            //     );
+
+
+            //     gdV.row(i) += grad_v.transpose();
+            //     if (i < A.rows()) gdA.row(i) += grad_a.transpose();
+            //     if (i < J.rows()) gdJ.row(i) += grad_j.transpose();
+            // }
+            // feasibility
+            for(int i = 0; i < V.rows(); i++)
             {
                 Types::Vec3 v_row = V.row(i).transpose();
-
-                Types::Vec3 a_row = (i < A.rows()) ? A.row(i).transpose() : Types::Vec3::Zero();
-
-                Types::Vec3 j_row = (i < J.rows()) ? J.row(i).transpose() : Types::Vec3::Zero();
+                
+                Types::Vec3 a_row = Types::Vec3::Zero();
+                if (i < A.rows()) 
+                {
+                    a_row = A.row(i).transpose();
+                }
+                
+                Types::Vec3 j_row = Types::Vec3::Zero();
+                if (i < J.rows()) 
+                {
+                    j_row = J.row(i).transpose();
+                }
 
                 Types::Vec3 grad_v = Types::Vec3::Zero();
                 Types::Vec3 grad_a = Types::Vec3::Zero();
                 Types::Vec3 grad_j = Types::Vec3::Zero();
-
-                   
+                    
                 cost_feasibility += cost_functional::accumulateFeasibilityPenalty(
-                    v_row, a_row, j_row, 
-                    max_vel, max_acc, max_jer, 
-                    wei_feas, 
-                    grad_v, grad_a, grad_j
+                    v_row, a_row, j_row, max_vel, max_acc, max_jer, wei_feas, grad_v, grad_a, grad_j
                 );
 
-
                 gdV.row(i) += grad_v.transpose();
-                if (i < A.rows()) gdA.row(i) += grad_a.transpose();
-                if (i < J.rows()) gdJ.row(i) += grad_j.transpose();
+                if (i < A.rows()) 
+                {
+                    gdA.row(i) += grad_a.transpose();
+                }
+                if (i < J.rows()) 
+                {
+                    gdJ.row(i) += grad_j.transpose();
+                }
             }
 
             std::vector<double> time_accum(segment_dt_.size() + 1, 0.0);

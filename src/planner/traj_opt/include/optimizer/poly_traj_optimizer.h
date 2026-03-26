@@ -1,8 +1,10 @@
 #ifndef _POLY_TRAJ_OPTIMIZER_H_
 #define _POLY_TRAJ_OPTIMIZER_H_
 
+#include "plan_env/grid_map.h"
 #include "optimizer/traj_types.h"
 #include "CostFunctionalManager/EgoCostManager.hpp"
+#include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include <path_searching/dyn_a_star.h>
 #include <ros/ros.h>
@@ -17,14 +19,9 @@ namespace ego_planner
   // =====================================================
   class PolyTrajOptimizer
   {
-
   private:
     GridMap::Ptr grid_map_;
     AStar::Ptr a_star_;
-
-    // SplineOptimizer replaces MinJerkOpt
-    SplineOpt splineOpt_;
-    SplineOpt::Workspace spline_workspace_;
 
     //general cost functional manager
     cost_functional::LinearTimeCost time_cost_;
@@ -73,11 +70,6 @@ namespace ego_planner
 
     //typedef std::vector<std::vector<std::pair<double, Eigen::Vector3d>>> PtsChk_t;
 
-    // Cost function instances
-    TimeCostFunction time_cost_func_;
-    IntegralCostFunction integral_cost_func_;
-    SampleCostFunction sample_cost_func_;
-
   public:
     PolyTrajOptimizer() {}
     ~PolyTrajOptimizer() {}
@@ -102,9 +94,7 @@ namespace ego_planner
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }
     inline const NUBSOpt &getNUBSOpt(void) const { return nubsOpt_; }
-    inline const NUBSTraj &getTraj(void) const { return nubsOpt_.getTrajectory(); }
-    inline const SplineOpt &getSplineOpt(void) const { return splineOpt_; }
-    inline const SplineTraj &getWorkingSpline(void) const { return splineOpt_.getWorkingSpline(spline_workspace_); }
+    inline const NUBSTraj &getTrajectory(void) const { return nubsOpt_.getTrajectory(); }
     inline int get_cps_num_prePiece_(void) { return cps_num_prePiece_; }
     inline double get_swarm_clearance_(void) { return swarm_clearance_; }
 
@@ -149,7 +139,7 @@ namespace ego_planner
 
     bool roughlyCheckConstraintPoints(void);
     bool allowRebound(void);
-    std::vector<Types::ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);S
+    std::vector<Types::ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);
 
   public:
     using Ptr = std::unique_ptr<PolyTrajOptimizer>;
