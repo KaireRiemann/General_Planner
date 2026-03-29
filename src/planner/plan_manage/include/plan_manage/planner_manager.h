@@ -24,13 +24,13 @@ namespace ego_planner
     /* main planning interface */
     void initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis = NULL);
     
-    // PPoly3D 被全面替换为 NUBSTraj3D
+    // Planner trajectory now uses MINCO
     bool computeInitState(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
         const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
         const bool flag_randomPolyTraj, const double &ts,
-        NUBSTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
+        MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
         Eigen::Matrix<double, 3, 3> &headState, Eigen::Matrix<double, 3, 3> &tailState);
         
     bool reboundReplan(
@@ -53,7 +53,7 @@ namespace ego_planner
     bool EmergencyStop(Eigen::Vector3d stop_pos);
     bool checkCollision(int drone_id);
     
-    bool setLocalTrajFromOpt(const NUBSTraj3D &traj, const bool touch_goal);
+    bool setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal);
     
     inline double getSwarmClearance(void) { return ploy_traj_opt_->get_swarm_clearance_(); }
     inline int getCpsNumPrePiece(void) { return ploy_traj_opt_->get_cps_num_prePiece_(); }

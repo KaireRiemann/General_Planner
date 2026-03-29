@@ -130,23 +130,38 @@ void Traj2ROSMsg(const poly_traj::Trajectory &traj,
   poly_msg.order = 5;
   poly_msg.des_clearance = des_clear;
   poly_msg.duration.resize(piece_num);
-  poly_msg.coef_x.resize(6 * piece_num);
-  poly_msg.coef_y.resize(6 * piece_num);
-  poly_msg.coef_z.resize(6 * piece_num);
+  poly_msg.coef_x.resize(3 + std::max(0, piece_num - 1) + 3);
+  poly_msg.coef_y.resize(3 + std::max(0, piece_num - 1) + 3);
+  poly_msg.coef_z.resize(3 + std::max(0, piece_num - 1) + 3);
 
   for (int i = 0; i < piece_num; i++)
   {
     poly_msg.duration[i] = durs[i];
+  }
 
-    const auto &seg_coeffs = traj[i].getCoeffMat();
-    const int base = i * 6;
-    for (int j = 0; j < 6; ++j)
+  const double total_t = traj.getTotalDuration();
+  for (int d = 0; d < 3; ++d)
+  {
+    const Eigen::Vector3d head_d =
+        (d == 0) ? traj.getPos(0.0) : (d == 1) ? traj.getVel(0.0) : traj.getAcc(0.0);
+    const Eigen::Vector3d tail_d =
+        (d == 0) ? traj.getPos(total_t) : (d == 1) ? traj.getVel(total_t) : traj.getAcc(total_t);
+    poly_msg.coef_x[d] = head_d(0);
+    poly_msg.coef_y[d] = head_d(1);
+    poly_msg.coef_z[d] = head_d(2);
+    poly_msg.coef_x[poly_msg.coef_x.size() - 3 + d] = tail_d(0);
+    poly_msg.coef_y[poly_msg.coef_y.size() - 3 + d] = tail_d(1);
+    poly_msg.coef_z[poly_msg.coef_z.size() - 3 + d] = tail_d(2);
+  }
+
+  if (piece_num > 1)
+  {
+    const Eigen::MatrixXd positions = traj.getPositions();
+    for (int i = 0; i < piece_num - 1; ++i)
     {
-      // poly_traj stores coeffs as [t^5 ... t^0], while PolyTraj expects [t^0 ... t^5].
-      const int src_col = 5 - j;
-      poly_msg.coef_x[base + j] = seg_coeffs(0, src_col);
-      poly_msg.coef_y[base + j] = seg_coeffs(1, src_col);
-      poly_msg.coef_z[base + j] = seg_coeffs(2, src_col);
+      poly_msg.coef_x[3 + i] = positions(0, i + 1);
+      poly_msg.coef_y[3 + i] = positions(1, i + 1);
+      poly_msg.coef_z[3 + i] = positions(2, i + 1);
     }
   }
 }

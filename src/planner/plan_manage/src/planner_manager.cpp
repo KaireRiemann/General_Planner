@@ -30,22 +30,18 @@ namespace ego_planner
     ploy_traj_opt_->setDroneId(pp_.drone_id);
   }
 
-  static NUBSTraj3D generateNUBSTraj(
+  static MINCOTraj3D generateMINCOTraj(
       const Eigen::Matrix<double, 3, 3> &headState,
       const Eigen::Matrix<double, 3, 3> &tailState,
       const Eigen::MatrixXd &innerPts,
       const Eigen::VectorXd &durations)
   {
-
-
-    NUBSTraj3D traj(3);
-    Eigen::MatrixXd p_full;
-    traj.generate(innerPts.transpose(), headState, tailState, durations, p_full);
-    
+    MINCOTraj3D traj;
+    traj.generate(innerPts, headState, tailState, durations);
     return traj;
   }
 
-  static double getMaxVelRate(const NUBSTraj3D &traj)
+  static double getMaxVelRate(const MINCOTraj3D &traj)
   {
     double maxVel = 0.0;
     double dt = 0.01;
@@ -76,7 +72,7 @@ namespace ego_planner
     ploy_traj_opt_->setIfTouchGoal(touch_goal);
     double ts = pp_.polyTraj_piece_length / pp_.max_vel_;
 
-    NUBSTraj3D initTraj;
+    MINCOTraj3D initTraj;
     Eigen::MatrixXd innerPts;
     Eigen::VectorXd durations;
     Eigen::Matrix<double, 3, 3> headState, tailState;
@@ -88,7 +84,7 @@ namespace ego_planner
       return false;
     }
 
-    Eigen::MatrixXd cstr_pts = initTraj.getControlPoints().transpose();
+    Eigen::MatrixXd cstr_pts = initTraj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
     
     std::vector<std::pair<int, int>> segments;
     if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) == PolyTrajOptimizer::CHK_RET::ERR)
@@ -114,7 +110,7 @@ namespace ego_planner
       std::vector<Types::ConstraintPoints> trajs = ploy_traj_opt_->distinctiveTrajs(segments);
       Eigen::VectorXi success = Eigen::VectorXi::Zero(trajs.size());
       double final_cost, min_cost = 999999.0;
-      NUBSTraj3D best_traj;
+      MINCOTraj3D best_traj;
 
       for (int i = trajs.size() - 1; i >= 0; i--)
       {
@@ -132,8 +128,8 @@ namespace ego_planner
             flag_success = true;
           }
 
-          NUBSTraj3D vis_traj = ploy_traj_opt_->getTrajectory();
-          Eigen::MatrixXd ctrl_pts_temp = vis_traj.getControlPoints().transpose();
+          MINCOTraj3D vis_traj = ploy_traj_opt_->getTrajectory();
+          Eigen::MatrixXd ctrl_pts_temp = vis_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
           std::vector<Eigen::Vector3d> vis_pts;
           for (int j = 0; j < ctrl_pts_temp.cols(); j++)
             vis_pts.push_back(ctrl_pts_temp.col(j));
@@ -154,7 +150,7 @@ namespace ego_planner
       if (flag_success)
       {
         setLocalTrajFromOpt(best_traj, touch_goal);
-        cstr_pts = best_traj.getControlPoints().transpose();
+        cstr_pts = best_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
         visualization_->displayOptimalList(cstr_pts, 0);
       }
     }
@@ -168,10 +164,10 @@ namespace ego_planner
 
       if (flag_success)
       {
-        NUBSTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+        MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
         setLocalTrajFromOpt(opt_traj, touch_goal);
         
-        cstr_pts = opt_traj.getControlPoints().transpose();
+        cstr_pts = opt_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
         visualization_->displayOptimalList(cstr_pts, 0);
       }
     }
@@ -191,8 +187,8 @@ namespace ego_planner
     }
     else
     {
-      NUBSTraj3D fail_traj = ploy_traj_opt_->getTrajectory();
-      cstr_pts = fail_traj.getControlPoints().transpose();
+      MINCOTraj3D fail_traj = ploy_traj_opt_->getTrajectory();
+      cstr_pts = fail_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
       visualization_->displayFailedList(cstr_pts, 0);
 
       continous_failures_count_++;
@@ -205,7 +201,7 @@ namespace ego_planner
       const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
       const Eigen::Vector3d &local_target_pt, const Eigen::Vector3d &local_target_vel,
       const bool flag_polyInit, const bool flag_randomPolyTraj, const double &ts,
-      NUBSTraj3D &initTraj, Eigen::MatrixXd &outInnerPts, Eigen::VectorXd &outDurations,
+      MINCOTraj3D &initTraj, Eigen::MatrixXd &outInnerPts, Eigen::VectorXd &outDurations,
       Eigen::Matrix<double, 3, 3> &headState, Eigen::Matrix<double, 3, 3> &tailState)
   {
     static bool flag_first_call = true;
@@ -246,7 +242,7 @@ namespace ego_planner
       }
 
       // Generate init of init trajectory
-      NUBSTraj3D initOfInitTraj = generateNUBSTraj(headState, tailState, innerPs, piece_dur_vec);
+      MINCOTraj3D initOfInitTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
 
       // Generate the real init trajectory
       double dist = (headState.col(0) - tailState.col(0)).norm();
@@ -272,7 +268,7 @@ namespace ego_planner
         return false;
       }
 
-      initTraj = generateNUBSTraj(headState, tailState, innerPs, piece_dur_vec);
+      initTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
 
       outInnerPts = innerPs;
       outDurations = piece_dur_vec;
@@ -326,7 +322,7 @@ namespace ego_planner
         t += piece_dur_vec(i + 1);
       }
 
-      initTraj = generateNUBSTraj(headState, tailState, innerPs, piece_dur_vec);
+      initTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
       outInnerPts = innerPs;
       outDurations = piece_dur_vec;
     }
@@ -380,7 +376,7 @@ namespace ego_planner
     }
   }
 
-  bool EGOPlannerManager::setLocalTrajFromOpt(const NUBSTraj3D &traj, const bool touch_goal)
+  bool EGOPlannerManager::setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal)
   {
     // Eigen::MatrixXd cps = traj.getControlPoints().transpose();
     
@@ -406,7 +402,7 @@ namespace ego_planner
     Eigen::MatrixXd innerPs = stop_pos; // 3x1
     Eigen::VectorXd durs = Eigen::Vector2d(1.0, 1.0);
 
-    NUBSTraj3D stopTraj = generateNUBSTraj(headState, tailState, innerPs, durs);
+    MINCOTraj3D stopTraj = generateMINCOTraj(headState, tailState, innerPs, durs);
     setLocalTrajFromOpt(stopTraj, false);
 
     return true;
@@ -460,7 +456,7 @@ namespace ego_planner
     double des_vel = pp_.max_vel_ / 1.5;
     Eigen::VectorXd time_vec(waypoints.size());
 
-    NUBSTraj3D globalTraj;
+    MINCOTraj3D globalTraj;
     for (int j = 0; j < 2; ++j)
     {
       for (size_t i = 0; i < waypoints.size(); ++i)
@@ -469,7 +465,7 @@ namespace ego_planner
                                : (waypoints[i] - waypoints[i - 1]).norm() / des_vel;
       }
 
-      globalTraj = generateNUBSTraj(headState, tailState, innerPts, time_vec);
+      globalTraj = generateMINCOTraj(headState, tailState, innerPts, time_vec);
 
       if (getMaxVelRate(globalTraj) < pp_.max_vel_ ||
           start_vel.norm() > pp_.max_vel_ ||

@@ -546,13 +546,13 @@ namespace ego_planner
   }
 
   // ==================================================================
-  // ROS 集群通讯模块：基于 NUBS 控制点编解码机制
+  // ROS 集群通讯模块：基于紧凑 MINCO 参数编解码
   // ==================================================================
   void EGOReplanFSM::RecvBroadcastPolyTrajCallback(const traj_utils::PolyTrajConstPtr &msg)
   {
     const size_t recv_id = (size_t)msg->drone_id;
     if ((int)recv_id == planner_manager_->pp_.drone_id) return;
-    if (msg->drone_id < 0 || msg->order != 3) return; // 只接受 NUBS_ORDER = 3 
+    if (msg->drone_id < 0 || msg->order != 5) return;
 
     ros::Time t_now = ros::Time::now();
     if (abs((t_now - msg->start_time).toSec()) > 0.25)
@@ -577,7 +577,6 @@ namespace ego_planner
 
     if (msg->start_time.toSec() <= planner_manager_->traj_.swarm_traj[recv_id].start_time) return;
 
-    // NUBS 解码: duration 数组存 T_vec, coef 存 Head, Tail, 和 Inner_Pts
     const int M = static_cast<int>(msg->duration.size());
     if(M == 0) return;
 
@@ -585,7 +584,8 @@ namespace ego_planner
     for (int i = 0; i < M; ++i) T(i) = msg->duration[i];
 
     const int Nc = msg->coef_x.size();
-    if(Nc < 6) return;
+    const int expected = std::max(6, M + 5);
+    if (Nc != expected) return;
 
     Eigen::MatrixXd C(Nc, 3);
     for (int i = 0; i < Nc; ++i)
@@ -605,14 +605,13 @@ namespace ego_planner
     tailState.col(2) = C.row(Nc - 1); 
 
     Eigen::MatrixXd P_inner;
-    if (M > 1) P_inner = C.block(3, 0, M - 1, 3);
-    else P_inner.resize(0, 3);
+    if (M > 1) P_inner = C.block(3, 0, M - 1, 3).transpose();
+    else P_inner.resize(3, 0);
 
-    nubs::NUBSTrajectory<3> trajectory(3);
-    Eigen::MatrixXd dummy_C;
-    trajectory.generate(P_inner, headState, tailState, T, dummy_C);
+    MINCOTraj3D trajectory;
+    trajectory.generate(P_inner, headState, tailState, T);
 
-    Eigen::MatrixXd cps_chk = trajectory.getControlPoints().transpose(); 
+    Eigen::MatrixXd cps_chk = trajectory.getInitConstraintPoints(planner_manager_->getCpsNumPrePiece());
     bool far_away = true;
     for (int i = 0; i < cps_chk.cols(); ++i)
     {
@@ -660,7 +659,7 @@ namespace ego_planner
     poly_msg.drone_id = planner_manager_->pp_.drone_id;
     poly_msg.traj_id = data->traj_id;
     poly_msg.start_time = ros::Time(data->start_time);
-    poly_msg.order = 3; 
+    poly_msg.order = 5;
     poly_msg.des_clearance = planner_manager_->getSwarmClearance();
     
     poly_msg.duration.resize(M);
@@ -685,11 +684,11 @@ namespace ego_planner
     }
 
     if (M > 1) {
-        Eigen::MatrixXd cps = data->traj.getControlPoints();
+        Eigen::MatrixXd positions = data->traj.getPositions();
         for (int i = 0; i < M - 1; ++i) {
-            poly_msg.coef_x[3 + i] = cps(3 + i, 0);
-            poly_msg.coef_y[3 + i] = cps(3 + i, 1);
-            poly_msg.coef_z[3 + i] = cps(3 + i, 2);
+            poly_msg.coef_x[3 + i] = positions(0, i + 1);
+            poly_msg.coef_y[3 + i] = positions(1, i + 1);
+            poly_msg.coef_z[3 + i] = positions(2, i + 1);
         }
     }
   }

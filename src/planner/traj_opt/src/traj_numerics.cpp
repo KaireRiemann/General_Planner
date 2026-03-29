@@ -5,49 +5,46 @@ using namespace std;
 namespace ego_planner
 {
   // =====================================================
-  //  Generate trajectory from states using NUBSTrajectory
+  //  Generate trajectory from states using MINCO
   // =====================================================
-  NUBSTraj PolyTrajOptimizer::generateTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
-                                                 const Eigen::MatrixXd &innerPts, const Eigen::VectorXd &durations)
+  MINCOTraj PolyTrajOptimizer::generateTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                                  const Eigen::MatrixXd &innerPts, const Eigen::VectorXd &durations)
   {
-    NUBSTraj traj(3);
-    Eigen::MatrixXd P_full;
-    traj.generate(innerPts,iniState,finState,durations,P_full);
-
+    MINCOTraj traj;
+    traj.generate(innerPts, iniState, finState, durations);
     return traj;
   }
 
   Eigen::MatrixXd PolyTrajOptimizer::getInitConstraintPoints() const
   {
-    return nubsOpt_.getTrajectory().getControlPoints().transpose();
+    return mincoOpt_.getTrajectory().getInitConstraintPoints(cps_num_prePiece_);
   }
 
   bool PolyTrajOptimizer::computePointsToCheck(
-      const NUBSTraj &traj,
+      const MINCOTraj &traj,
       int id_cps_end, PtsChk_t &pts_check)
   {
     pts_check.clear();
-    int num_cps = traj.getControlPoints().rows();
-    pts_check.resize(num_cps);
-    
-    const double RES = grid_map_->getResolution();
-    const double RES_2 = RES / 2.0;
+    pts_check.resize(id_cps_end);
 
-    double t_total = traj.getTotalDuration();
-    
-    // Adaptive stepping: Ensure step doesn't exceed grid resolution
-    double max_v = std::max(max_vel_, 0.1); // Guard against zero max_vel
-    double t_step = std::min(RES / max_v, t_total / num_cps / 2.0); 
+    const double RES = grid_map_->getResolution(), RES_2 = RES / 2.0;
+    const Eigen::VectorXd durations = traj.getDurations();
+    Eigen::VectorXd t_seg_start(durations.size() + 1);
+    t_seg_start(0) = 0.0;
+    for (int i = 0; i < durations.size(); ++i)
+      t_seg_start(i + 1) = t_seg_start(i) + durations(i);
 
-    const Eigen::VectorXd& u = traj.getKnots();
-    int p = traj.getP(); // Degree of B-spline
+    const double DURATION = durations.sum();
+    const double t_step = std::min(RES / std::max(max_vel_, 0.1),
+                                   durations.minCoeff() / std::max(cps_num_prePiece_, 1) / 1.5);
 
-    Eigen::Vector3d pt_last = traj.evaluate(0.0);
+    Eigen::Vector3d pt_last = traj.evaluate(0.0, 0);
     double t = 0.0;
+    int id_cps_curr = 0, id_piece_curr = 0;
 
     while (true)
     {
-      if (t > t_total)
+      if (t > DURATION)
       {
         if (touch_goal_ && !pts_check.empty())
         {
@@ -70,28 +67,32 @@ namespace ego_planner
         }
       }
 
-      // Map time t to B-spline span
-      int span = traj.findSpan(t, num_cps, u);
-      
-      // Map the span to its dominant center control point index
-      int id_cps_curr = span - p / 2;
-      id_cps_curr = std::max(0, std::min(id_cps_curr, num_cps - 1));
+      const double next_t_stp =
+          t_seg_start(id_piece_curr) +
+          durations(id_piece_curr) / cps_num_prePiece_ *
+              ((id_cps_curr + 1) - cps_num_prePiece_ * id_piece_curr);
+      if (t >= next_t_stp)
+      {
+        if (id_cps_curr + 1 >= cps_num_prePiece_ * (id_piece_curr + 1))
+        {
+          ++id_piece_curr;
+        }
+        if (++id_cps_curr >= id_cps_end)
+        {
+          break;
+        }
+      }
 
-      if (id_cps_curr >= id_cps_end)
-        break;
+      Eigen::Vector3d pt = traj.evaluate(t, 0);
 
-      Eigen::Vector3d pt = traj.evaluate(t);
-
-      // Spatial downsampling
-      if (t < 1e-5 || pts_check[id_cps_curr].empty() || (pt - pt_last).cwiseAbs().maxCoeff() > RES_2)
+      if (t < 1e-5 || pts_check[id_cps_curr].empty() ||
+          (pt - pt_last).cwiseAbs().maxCoeff() > RES_2)
       {
         pts_check[id_cps_curr].emplace_back(std::make_pair(t, pt));
         pt_last = pt;
       }
 
-      if (t >= t_total) break;
       t += t_step;
-      if (t > t_total) t = t_total; 
     }
 
     return true;
@@ -120,14 +121,14 @@ namespace ego_planner
       return opt->time_cost_(T_vec, gdT);
     };
 
-    double total_cost = opt->nubsOpt_.evaluate(
+    double total_cost = opt->mincoOpt_.evaluate(
         x_vec, 
         grad_vec, 
         time_cost_wrapper, 
         opt->cost_manager_
     );
 
-    opt->cps_.points = opt->nubsOpt_.getTrajectory().getControlPoints().transpose();
+    opt->cps_.points = opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
 
     if (opt->allowRebound())
     {

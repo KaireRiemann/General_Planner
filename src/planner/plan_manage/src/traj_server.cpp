@@ -5,10 +5,10 @@
 #include <visualization_msgs/Marker.h>
 #include <ros/ros.h>
 
-#include "NUBSTrajectory/NUBSTrajectory.hpp"
+#include "MINCOTrajectory/MINCOTrajectory.hpp"
 
 using namespace Eigen;
-using NUBSTraj3D = nubs::NUBSTrajectory<3>;
+using MINCOTraj3D = minco::MINCOTrajectory<3>;
 
 ros::Publisher pos_cmd_pub;
 
@@ -18,7 +18,7 @@ quadrotor_msgs::PositionCommand cmd;
 #define TURN_YAW_TO_CENTER_AT_END 0
 
 bool receive_traj_ = false;
-boost::shared_ptr<NUBSTraj3D> traj_;
+boost::shared_ptr<MINCOTraj3D> traj_;
 double traj_duration_;
 ros::Time start_time_;
 int traj_id_;
@@ -35,13 +35,13 @@ void heartbeatCallback(std_msgs::EmptyPtr msg)
 }
 
 // ====================================================================
-// ROS 轨迹接收与 NUBS 解码
+// ROS trajectory reception with compact MINCO decoding
 // ====================================================================
 void polyTrajCallback(traj_utils::PolyTrajPtr msg)
 {
-  if (msg->order != 3) // NUBS 内部定义系统阶数为 3
+  if (msg->order != 5)
   {
-    ROS_ERROR("[traj_server] Only support NUBS order equals 3 now!");
+    ROS_ERROR("[traj_server] Only support MINCO trajectory order equals 5 now!");
     return;
   }
 
@@ -52,7 +52,8 @@ void polyTrajCallback(traj_utils::PolyTrajPtr msg)
   for (int i = 0; i < M; ++i) T(i) = msg->duration[i];
 
   const int Nc = msg->coef_x.size();
-  if (Nc < 6) return;
+  const int expected = std::max(6, M + 5);
+  if (Nc != expected) return;
 
   // 提取编码在系数中的边界与节点信息
   Eigen::MatrixXd C(Nc, 3);
@@ -74,16 +75,14 @@ void polyTrajCallback(traj_utils::PolyTrajPtr msg)
   tailState.col(2) = C.row(Nc - 1); // Acc
 
   Eigen::MatrixXd P_inner;
-  if (M > 1) P_inner = C.block(3, 0, M - 1, 3);
-  else P_inner.resize(0, 3);
+  if (M > 1) P_inner = C.block(3, 0, M - 1, 3).transpose();
+  else P_inner.resize(3, 0);
 
-  // 初始化并生成解析轨迹
-  traj_.reset(new NUBSTraj3D(3));
-  Eigen::MatrixXd dummy_C;
-  traj_->generate(P_inner, headState, tailState, T, dummy_C);
+  traj_.reset(new MINCOTraj3D());
+  traj_->generate(P_inner, headState, tailState, T);
 
   start_time_ = msg->start_time;
-  traj_duration_ = traj_->getTotalDuration(); // 直接获取总时间
+  traj_duration_ = traj_->getTotalDuration();
   traj_id_ = msg->traj_id;
 
   receive_traj_ = true;
@@ -95,7 +94,6 @@ std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, doub
   constexpr double YAW_DOT_DOT_MAX_PER_SEC = 5 * M_PI;
   std::pair<double, double> yaw_yawdot(0, 0);
 
-  // NUBS 求值 API: 0 代表求 Position
   Eigen::Vector3d dir = t_cur + time_forward_ <= traj_duration_
                             ? traj_->evaluate(t_cur + time_forward_, 0) - pos
                             : traj_->evaluate(traj_duration_, 0) - pos;
@@ -189,7 +187,6 @@ void cmdCallback(const ros::TimerEvent &e)
 
   if (t_cur < traj_duration_ && t_cur >= 0.0)
   {
-    // --- NUBS 求值 API：0=Pos, 1=Vel, 2=Acc, 3=Jerk ---
     pos = traj_->evaluate(t_cur, 0);
     vel = traj_->evaluate(t_cur, 1);
     acc = traj_->evaluate(t_cur, 2);

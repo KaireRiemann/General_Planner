@@ -4,19 +4,19 @@
 #include <Eigen/Eigen>
 #include <vector>
 #include <ros/ros.h>
-#include "NUBSTrajectory/NUBSTrajectory.hpp"
+#include "MINCOTrajectory/MINCOTrajectory.hpp"
 
 using std::vector;
 
 namespace ego_planner
 {
-  using NUBSTraj3D = nubs::NUBSTrajectory<3>;
+  using MINCOTraj3D = minco::MINCOTrajectory<3>;
 
   typedef std::vector<std::vector<std::pair<double, Eigen::Vector3d>>> PtsChk_t;
 
   struct GlobalTrajData
   {
-    NUBSTraj3D traj;
+    MINCOTraj3D traj;
     double global_start_time; // world time
     double duration;
 
@@ -33,7 +33,7 @@ namespace ego_planner
 
   struct LocalTrajData
   {
-    NUBSTraj3D traj;
+    MINCOTraj3D traj;
     int drone_id; // A negative value indicates no received trajectories.
     int traj_id;
     double duration;
@@ -57,7 +57,7 @@ namespace ego_planner
       local_traj.traj_id = 0;
     }
     ~TrajContainer() {}
-    void setGlobalTraj(const NUBSTraj3D &trajectory, const double &world_time)
+    void setGlobalTraj(const MINCOTraj3D &trajectory, const double &world_time)
     {
       global_traj.traj = trajectory;
       global_traj.duration = trajectory.getTotalDuration(); 
@@ -70,13 +70,13 @@ namespace ego_planner
       local_traj.traj_id = 0;
     }
 
-    void setLocalTraj(const NUBSTraj3D &trajectory, const double &world_time, const int drone_id = -1)
+    void setLocalTraj(const MINCOTraj3D &trajectory, const double &world_time, const int drone_id = -1)
     {
       local_traj.drone_id = drone_id;
       local_traj.traj_id++;
       
       local_traj.duration = trajectory.getTotalDuration(); 
-      local_traj.start_pos = trajectory.evaluate(0.0); 
+      local_traj.start_pos = trajectory.evaluate(0.0, 0); 
       
       local_traj.start_time = world_time;
       local_traj.traj = trajectory;

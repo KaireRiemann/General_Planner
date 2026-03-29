@@ -4,10 +4,8 @@
 #include <Eigen/Eigen>
 #include <ros/ros.h>
 #include <traj_utils/plan_container.hpp>
-#include "SplineTrajectory/SplineTrajectory.hpp"
-#include "SplineTrajectory/SplineOptimizer.hpp"
-#include "NUBSTrajectory/NUBSTrajectory.hpp"
-#include "NUBSTrajectory/NUBSOptimizer.hpp"
+#include "MINCOTrajectory/MINCOTrajectory.hpp"
+#include "MINCOTrajectory/MINCOOptimizer.hpp"
 #include "TemporalMap/IdentityTimeMap.hpp"
 #include "TemporalMap/QuadInvTimeMap.hpp"
 #include "SpatialMap/IdentityMap.hpp"
@@ -16,13 +14,12 @@
 namespace ego_planner
 {
   // =====================================================
-  //  Type aliases for the NUBSpline-based trajectory system
+  //  Type aliases for the MINCO-based trajectory system
   // =====================================================
   constexpr int TRAJ_DIM = 3;
-  constexpr int NUBS_ORDER = 5;
-  constexpr int NUBS_MAX_P = 7;
-  using NUBSOpt = nubs::NUBSOptimizer<TRAJ_DIM,NUBS_MAX_P,temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
-  using NUBSTraj = nubs::NUBSTrajectory<TRAJ_DIM,NUBS_MAX_P>;
+  constexpr int MINCO_ORDER = 5;
+  using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using MINCOTraj = minco::MINCOTrajectory<TRAJ_DIM>;
   using Vec3 = Eigen::Vector3d;
   using WaypointsMat = Eigen::Matrix<double, Eigen::Dynamic, TRAJ_DIM>;
   

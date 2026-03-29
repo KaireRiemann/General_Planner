@@ -15,7 +15,7 @@ namespace ego_planner
 {
   using Types = cost_functional::PlanningTypesAdapter;
   // =====================================================
-  //  PolyTrajOptimizer (using NUBSOptimizer)
+  //  PolyTrajOptimizer (using generic MINCOOptimizer)
   // =====================================================
   class PolyTrajOptimizer
   {
@@ -27,9 +27,8 @@ namespace ego_planner
     cost_functional::LinearTimeCost time_cost_;
     cost_functional::EgoCostFunctionalManager cost_manager_;
 
-    //NUBSOptimizer replaces MinJerkOpt
-    NUBSOpt nubsOpt_;
-    NUBSOpt::Workspace nubs_workspace_;
+    MINCOOpt mincoOpt_;
+    MINCOOpt::Workspace minco_workspace_;
 
     Types::SwarmTrajData *swarm_trajs_{NULL};
     Types::ConstraintPoints cps_;
@@ -93,29 +92,23 @@ namespace ego_planner
 
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }
-    inline const NUBSOpt &getNUBSOpt(void) const { return nubsOpt_; }
-    inline const NUBSTraj &getTrajectory(void) const { return nubsOpt_.getTrajectory(); }
+    inline const MINCOOpt &getMINCOOpt(void) const { return mincoOpt_; }
+    inline const MINCOTraj &getTrajectory(void) const { return mincoOpt_.getTrajectory(); }
     inline int get_cps_num_prePiece_(void) { return cps_num_prePiece_; }
     inline double get_swarm_clearance_(void) { return swarm_clearance_; }
 
     // --- Numerical computation (implemented in traj_numerics.cpp) ---
-    /**
-     * @brief Generate a trajectory using NUBSOptimizer from init states.
-     * Returns a NUBS<3> trajectory that can be used downstream.
-     */
-    NUBSTraj generateTrajectory(const Eigen::MatrixXd &initState, const Eigen::MatrixXd &finState,
-                                const Eigen::MatrixXd &innerPts, const Eigen::VectorXd &durations);
+    MINCOTraj generateTrajectory(const Eigen::MatrixXd &initState, const Eigen::MatrixXd &finState,
+                                 const Eigen::MatrixXd &innerPts, const Eigen::VectorXd &durations);
 
     /**
-     * @brief Get initial constraint points from the spline trajectory.
-     * Directly use control points as initial constraint points there.
+     * @brief Sample initial deformation points from the MINCO trajectory.
      */
     Eigen::MatrixXd getInitConstraintPoints(void) const;
     /**
-     * @brief Perform dense sampling in the time domain.
-     * map the sampled points to the B-spline control points that influence them the most
+     * @brief Perform dense sampling in the time domain and group points by guide sample index.
      */
-    bool computePointsToCheck(const NUBSTraj &traj, int id_end, PtsChk_t &pts_check);
+    bool computePointsToCheck(const MINCOTraj &traj, int id_end, PtsChk_t &pts_check);
 
     static double costFunctionCallback(void *func_data, const double *x, double *grad, const int n);
     static int earlyExitCallback(void *func_data, const double *x, const double *g,
@@ -133,7 +126,7 @@ namespace ego_planner
 
     /** @brief 细致碰撞检测及 A* 引导点生成 */
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
-                                              const nubs::NUBSTrajectory<3> &traj,
+                                              const MINCOTraj &traj,
                                               const Eigen::MatrixXd &init_points,
                                               const bool flag_first_init = true);
 

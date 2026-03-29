@@ -5,18 +5,17 @@
 #include <iostream>
 #include <nav_msgs/Odometry.h>
 #include <traj_utils/PolyTraj.h>
-#include <SplineTrajectory/SplineTrajectory.hpp>
+#include <traj_utils/plan_container.hpp>
 
 using namespace std;
 
-using PPoly3D = SplineTrajectory::PPolyND<3, 6>;
 struct Traj_t
 {
-  PPoly3D traj;
+  ego_planner::MINCOTraj3D traj;
   bool valid;
   ros::Time start_time;
   double duration;
-  double last_yaw;
+  double last_yaw = 0.0;
 };
 
 vector<Traj_t> trajs_;
@@ -35,13 +34,12 @@ void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
   }
   if (msg->order != 5)
   {
-    ROS_ERROR("Only support trajectory order equals 5 now!");
+    ROS_ERROR("Only support MINCO trajectory order equals 5 now!");
     return;
   }
   if (msg->duration.empty() ||
       msg->coef_x.size() != msg->coef_y.size() ||
-      msg->coef_x.size() != msg->coef_z.size() ||
-      msg->duration.size() * (msg->order + 1) != msg->coef_x.size())
+      msg->coef_x.size() != msg->coef_z.size())
   {
     ROS_ERROR("WRONG trajectory parameters.");
     return;
@@ -82,30 +80,46 @@ void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
 
   /* Store data */
   const int piece_nums = static_cast<int>(msg->duration.size());
-  const int num_coeffs = msg->order + 1;
-
-  std::vector<double> breakpoints(piece_nums + 1);
-  breakpoints[0] = 0.0;
-  for (int i = 0; i < piece_nums; ++i)
-    breakpoints[i + 1] = breakpoints[i] + msg->duration[i];
-
-  using MatrixType = Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>;
-  MatrixType coefficients(piece_nums * num_coeffs, 3);
-  for (int i = 0; i < piece_nums; ++i)
+  const int encoded_num = static_cast<int>(msg->coef_x.size());
+  const int expected_num = std::max(6, piece_nums + 5);
+  if (encoded_num != expected_num)
   {
-    const int base = i * num_coeffs;
-    for (int j = 0; j < num_coeffs; ++j)
-    {
-      coefficients(base + j, 0) = msg->coef_x[base + j];
-      coefficients(base + j, 1) = msg->coef_y[base + j];
-      coefficients(base + j, 2) = msg->coef_z[base + j];
-    }
+    ROS_ERROR("Unexpected encoded trajectory size. expected=%d, actual=%d", expected_num, encoded_num);
+    return;
   }
 
-  trajs_[recv_id].traj = PPoly3D(breakpoints, coefficients, num_coeffs);
+  Eigen::VectorXd durations(piece_nums);
+  for (int i = 0; i < piece_nums; ++i)
+    durations(i) = msg->duration[i];
+
+  Eigen::MatrixXd encoded(encoded_num, 3);
+  for (int i = 0; i < encoded_num; ++i)
+  {
+    encoded(i, 0) = msg->coef_x[i];
+    encoded(i, 1) = msg->coef_y[i];
+    encoded(i, 2) = msg->coef_z[i];
+  }
+
+  Eigen::Matrix3d head_state, tail_state;
+  head_state.col(0) = encoded.row(0);
+  head_state.col(1) = encoded.row(1);
+  head_state.col(2) = encoded.row(2);
+
+  tail_state.col(0) = encoded.row(encoded_num - 3);
+  tail_state.col(1) = encoded.row(encoded_num - 2);
+  tail_state.col(2) = encoded.row(encoded_num - 1);
+
+  Eigen::MatrixXd inner_points;
+  if (piece_nums > 1)
+    inner_points = encoded.block(3, 0, piece_nums - 1, 3).transpose();
+  else
+    inner_points.resize(3, 0);
+
+  trajs_[recv_id].traj = ego_planner::MINCOTraj3D();
+  trajs_[recv_id].traj.generate(inner_points, head_state, tail_state, durations);
   trajs_[recv_id].start_time = msg->start_time;
   trajs_[recv_id].valid = true;
-  trajs_[recv_id].duration = trajs_[recv_id].traj.getDuration();
+  trajs_[recv_id].duration = trajs_[recv_id].traj.getTotalDuration();
 }
 
 int main(int argc, char **argv)
@@ -132,8 +146,8 @@ int main(int argc, char **argv)
         if (t_to_start <= trajs_[id].duration)
         {
           double t = t_to_start;
-          Eigen::Vector3d p = trajs_[id].traj.evaluate(t, SplineTrajectory::Deriv::Pos);
-          Eigen::Vector3d v = trajs_[id].traj.evaluate(t, SplineTrajectory::Deriv::Vel);
+          Eigen::Vector3d p = trajs_[id].traj.evaluate(t, 0);
+          Eigen::Vector3d v = trajs_[id].traj.evaluate(t, 1);
           double yaw = v.head(2).norm() > 0.01 ? atan2(v(1), v(0)) : trajs_[id].last_yaw; //
           trajs_[id].last_yaw = yaw;
           Eigen::AngleAxisd rotation_vector(yaw, Eigen::Vector3d::UnitZ());

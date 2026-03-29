@@ -32,7 +32,8 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    nubsOpt_.setEnergyWeights(rho_energy_);
+    mincoOpt_.setEnergyWeight(rho_energy_);
+    mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose(); 
@@ -48,7 +49,7 @@ namespace ego_planner
     for (int i = 0; i < piece_num_; ++i)
       time_segs[i] = initT(i);
 
-    nubsOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
 
     cost_manager_.grid_map = grid_map_;
     cost_manager_.cps = &cps_;
@@ -70,7 +71,7 @@ namespace ego_planner
     cost_manager_.cps_per_piece = cps_num_prePiece_;
     cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = nubsOpt_.generateInitialGuess();
+    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
     double x_init[variable_num_];
@@ -132,7 +133,7 @@ namespace ego_planner
 
         if (!flag_swarm_too_close)
         {
-          const NUBSTraj &traj = nubsOpt_.getTrajectory();
+          const MINCOTraj &traj = mincoOpt_.getTrajectory();
           Eigen::MatrixXd init_points = getInitConstraintPoints(); 
 
           std::vector<std::pair<int, int>> segments_nouse;
@@ -179,7 +180,7 @@ namespace ego_planner
   // =====================================================
   PolyTrajOptimizer::CHK_RET PolyTrajOptimizer::finelyCheckAndSetConstraintPoints(
       std::vector<std::pair<int, int>> &segments,
-      const nubs::NUBSTrajectory<3> &traj,
+      const MINCOTraj &traj,
       const Eigen::MatrixXd &init_points,
       const bool flag_first_init)
   {
