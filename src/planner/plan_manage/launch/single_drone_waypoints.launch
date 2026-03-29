@@ -3,6 +3,7 @@
     <arg name="map_size_y" value="200.0"/>
     <arg name="map_size_z" value=" 3.0"/>
     <arg name="odom_topic" value="visual_slam/odom" />
+    <arg name="launch_prefix" default=""/>
 
     <!-- map -->
     <node pkg ="map_generator" name ="random_forest" type ="random_forest" output = "screen">
@@ -35,6 +36,7 @@
         <arg name="map_size_y" value="$(arg map_size_y)"/>
         <arg name="map_size_z" value="$(arg map_size_z)"/>
         <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="launch_prefix" value="$(arg launch_prefix)"/>
         <arg name="flight_type" value="2"/>
         <arg name="point_num" default="4"/>
         <arg name="target0_x" default="0.0"/>
@@ -51,4 +53,3 @@
         <arg name="target3_z" default="1.0"/>
     </include>
 </launch>
-

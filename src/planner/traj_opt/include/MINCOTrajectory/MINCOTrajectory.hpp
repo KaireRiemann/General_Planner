@@ -159,6 +159,29 @@ public:
 
   MINCOTrajectory() = default;
 
+  template <typename Derived>
+  bool generate(const Eigen::MatrixBase<Derived> &inner_points_expr,
+                const BoundaryState &head_state,
+                const BoundaryState &tail_state,
+                const Eigen::VectorXd &durations)
+  {
+    InnerPointsMat inner_points;
+    if (inner_points_expr.size() == 0)
+    {
+      inner_points.resize(DIM, 0);
+    }
+    else
+    {
+      if (inner_points_expr.rows() != DIM)
+      {
+        return false;
+      }
+      inner_points = inner_points_expr;
+    }
+
+    return generate(inner_points, head_state, tail_state, durations);
+  }
+
   void reset(const BoundaryState &head_state,
              const BoundaryState &tail_state,
              int piece_num)

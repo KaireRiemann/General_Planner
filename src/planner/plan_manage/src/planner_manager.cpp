@@ -37,7 +37,13 @@ namespace ego_planner
       const Eigen::VectorXd &durations)
   {
     MINCOTraj3D traj;
-    traj.generate(innerPts, headState, tailState, durations);
+    if (!traj.generate(innerPts, headState, tailState, durations))
+    {
+      ROS_ERROR("Failed to generate MINCO trajectory. innerPts=[%ld x %ld], duration_size=%ld",
+                static_cast<long>(innerPts.rows()),
+                static_cast<long>(innerPts.cols()),
+                static_cast<long>(durations.size()));
+    }
     return traj;
   }
 
@@ -210,7 +216,7 @@ namespace ego_planner
     {
       flag_first_call = false;
 
-      Eigen::MatrixXd innerPs;
+      Eigen::MatrixXd innerPs(3, 0);
       Eigen::VectorXd piece_dur_vec;
       int piece_nums;
       constexpr double init_of_init_totaldur = 2.0;
@@ -444,7 +450,7 @@ namespace ego_planner
     Eigen::Matrix<double, 3, 3> headState, tailState;
     headState << start_pos, start_vel, start_acc;
     tailState << waypoints.back(), end_vel, end_acc;
-    Eigen::MatrixXd innerPts;
+    Eigen::MatrixXd innerPts(3, 0);
 
     if (waypoints.size() > 1)
     {

@@ -24,6 +24,7 @@
     <arg name="target4_x" default="0.0"/>
     <arg name="target4_y" default="0.0"/>
     <arg name="target4_z" default="0.0"/>
+    <arg name="launch_prefix" default=""/>
     <!-- topic of your odometry such as VIO or LIO -->
     <arg name="odom_topic"/>
     <!-- main algorithm params -->
@@ -53,6 +54,7 @@
         <!--always set to 1.5 times grater than sensing horizen-->
         <arg name="planning_horizon" value="7.5" />
         <arg name="use_multitopology_trajs" value="false" />
+        <arg name="launch_prefix" value="$(arg launch_prefix)" />
         <!-- 1: use 2D Nav Goal to select goal  -->
         <!-- 2: use global waypoints below  -->
         <arg name="flight_type" value="$(arg flight_type)" />
