@@ -4,8 +4,10 @@
 #include "plan_env/grid_map.h"
 #include "optimizer/traj_types.h"
 #include "CostFunctionalManager/EgoCostManager.hpp"
+#include "CostFunctionalManager/CorridorCostManager.hpp"
 #include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
+#include "SpatialMap/SFCCommonTypes.hpp"
 #include <path_searching/dyn_a_star.h>
 #include <ros/ros.h>
 #include "optimizer/lbfgs.hpp"
@@ -26,6 +28,7 @@ namespace ego_planner
     //general cost functional manager
     cost_functional::LinearTimeCost time_cost_;
     cost_functional::EgoCostFunctionalManager cost_manager_;
+    cost_functional::CorridorCostFunctionalManager corridor_cost_manager_;
 
     MINCOOpt mincoOpt_;
     MINCOOpt::Workspace minco_workspace_;
@@ -59,9 +62,12 @@ namespace ego_planner
     double wei_feas_;
     double wei_sqrvar_;
     double wei_time_;
+    double wei_corridor_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
+    double corridor_clearance_, corridor_smoothing_;
     double max_vel_, max_acc_, max_jer_;
     double rho_energy_{1.0};
+    bool corridor_mode_{false};
 
     double t_now_;
 
@@ -124,6 +130,11 @@ namespace ego_planner
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             double &final_cost);
 
+    bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                            const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                            const spatial_map::PolyhedraH &corridor_hpolys,
+                            double &final_cost);
+
     /** @brief 细致碰撞检测及 A* 引导点生成 */
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
                                               const MINCOTraj &traj,
@@ -133,6 +144,7 @@ namespace ego_planner
     bool roughlyCheckConstraintPoints(void);
     bool allowRebound(void);
     std::vector<Types::ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);
+    bool isTrajectoryCollisionFree(const MINCOTraj &traj) const;
 
   public:
     using Ptr = std::unique_ptr<PolyTrajOptimizer>;

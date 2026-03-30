@@ -61,7 +61,7 @@ namespace optimizer_traits
   };
 } // namespace optimizer_traits
 
-template <int DIM, typename TimeMap, typename SpatialMap>
+template <int DIM, int S, typename TimeMap, typename SpatialMap>
 class MINCOOptimizer
 {
   static_assert(optimizer_traits::HasTimeMapInterface<TimeMap>::value,
@@ -70,9 +70,9 @@ class MINCOOptimizer
                 "SpatialMap does not satisfy the required interface.");
 
 public:
-  using TrajType = MINCOTrajectory<DIM>;
+  using TrajType = MINCOTrajectory<DIM, S>;
   using VectorType = Eigen::Matrix<double, DIM, 1>;
-  using BoundaryState = Eigen::Matrix<double, DIM, 3>;
+  using BoundaryState = typename TrajType::BoundaryState;
   using WaypointsType = Eigen::Matrix<double, Eigen::Dynamic, DIM>;
   using InnerPointsMat = Eigen::Matrix<double, DIM, Eigen::Dynamic>;
   using CoeffMat = Eigen::Matrix<double, Eigen::Dynamic, DIM>;
