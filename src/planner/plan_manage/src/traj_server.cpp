@@ -5,10 +5,11 @@
 #include <visualization_msgs/Marker.h>
 #include <ros/ros.h>
 
-#include "MINCOTrajectory/MINCOTrajectory.hpp"
+#include "traj_utils/minco_types.hpp"
 
 using namespace Eigen;
-using MINCOTraj3D = minco::MINCOTrajectory<3>;
+using ego_planner::MINCOBoundaryState3D;
+using ego_planner::MINCOTraj3D;
 
 ros::Publisher pos_cmd_pub;
 
@@ -39,9 +40,10 @@ void heartbeatCallback(std_msgs::EmptyPtr msg)
 // ====================================================================
 void polyTrajCallback(traj_utils::PolyTrajPtr msg)
 {
-  if (msg->order != 5)
+  constexpr int kBoundaryNum = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
+  if (msg->order != MINCOTraj3D::ORDER)
   {
-    ROS_ERROR("[traj_server] Only support MINCO trajectory order equals 5 now!");
+    ROS_ERROR("[traj_server] Only support MINCO trajectory order equals %d now!", MINCOTraj3D::ORDER);
     return;
   }
 
@@ -52,7 +54,7 @@ void polyTrajCallback(traj_utils::PolyTrajPtr msg)
   for (int i = 0; i < M; ++i) T(i) = msg->duration[i];
 
   const int Nc = msg->coef_x.size();
-  const int expected = std::max(6, M + 5);
+  const int expected = M + 2 * kBoundaryNum - 1;
   if (Nc != expected) return;
 
   // 提取编码在系数中的边界与节点信息
@@ -65,17 +67,16 @@ void polyTrajCallback(traj_utils::PolyTrajPtr msg)
   }
 
   // 重构边界状态
-  Eigen::Matrix3d headState, tailState;
-  headState.col(0) = C.row(0); // Pos
-  headState.col(1) = C.row(1); // Vel
-  headState.col(2) = C.row(2); // Acc
-
-  tailState.col(0) = C.row(Nc - 3); // Pos
-  tailState.col(1) = C.row(Nc - 2); // Vel
-  tailState.col(2) = C.row(Nc - 1); // Acc
+  MINCOBoundaryState3D headState = MINCOBoundaryState3D::Zero();
+  MINCOBoundaryState3D tailState = MINCOBoundaryState3D::Zero();
+  for (int d = 0; d < kBoundaryNum; ++d)
+  {
+    headState.col(d) = C.row(d).transpose();
+    tailState.col(d) = C.row(Nc - kBoundaryNum + d).transpose();
+  }
 
   Eigen::MatrixXd P_inner;
-  if (M > 1) P_inner = C.block(3, 0, M - 1, 3).transpose();
+  if (M > 1) P_inner = C.block(kBoundaryNum, 0, M - 1, 3).transpose();
   else P_inner.resize(3, 0);
 
   traj_.reset(new MINCOTraj3D());

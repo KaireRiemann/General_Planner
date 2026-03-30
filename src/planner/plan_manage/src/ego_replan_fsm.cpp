@@ -20,6 +20,7 @@ namespace ego_planner
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
+    nh.param("manager/use_sfc_corridor", use_sfc_corridor_, false);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -353,6 +354,31 @@ namespace ego_planner
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    if (use_sfc_corridor_)
+    {
+      if (!prepareLocalGuideAndCorridor(start_pt_, start_vel_, start_acc_))
+      {
+        return false;
+      }
+
+      bool plan_success = planner_manager_->reboundReplan(
+          start_pt_, start_vel_, start_acc_,
+          local_target_pt_, local_target_vel_,
+          local_guide_path_, local_corridor_hpolys_, touch_goal_);
+
+      have_new_target_ = false;
+
+      if (plan_success)
+      {
+        traj_utils::PolyTraj poly_msg;
+        polyTraj2ROSMsg(poly_msg);
+        poly_traj_pub_.publish(poly_msg);
+        broadcast_ploytraj_pub_.publish(poly_msg);
+      }
+
+      return plan_success;
+    }
+
     planner_manager_->getLocalTarget(
         planning_horizen_, start_pt_, final_goal_,
         local_target_pt_, local_target_vel_,
@@ -377,13 +403,46 @@ namespace ego_planner
     return plan_success;
   }
 
+  bool EGOReplanFSM::prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
+                                                  const Eigen::Vector3d &start_vel,
+                                                  const Eigen::Vector3d &start_acc)
+  {
+    (void)start_vel;
+    (void)start_acc;
+
+    planner_manager_->getLocalTarget(
+        planning_horizen_, start_pt, final_goal_,
+        local_target_pt_, local_target_vel_,
+        touch_goal_);
+
+    const double pos_tol = std::max(planner_manager_->grid_map_->getResolution() * 2.0, 0.2);
+    if (have_local_corridor_seed_ &&
+        (corridor_seed_start_ - start_pt).norm() < pos_tol &&
+        (corridor_seed_goal_ - local_target_pt_).norm() < pos_tol)
+    {
+      return true;
+    }
+
+    if (!planner_manager_->prepareLocalGuideAndCorridor(start_pt, local_target_pt_,
+                                                        local_guide_path_, local_corridor_hpolys_))
+    {
+      have_local_corridor_seed_ = false;
+      return false;
+    }
+
+    corridor_seed_start_ = start_pt;
+    corridor_seed_goal_ = local_target_pt_;
+    have_local_corridor_seed_ = true;
+    return true;
+  }
+
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times) 
   {
     start_pt_ = odom_pos_;
     start_vel_ = odom_vel_;
     start_acc_.setZero();
 
-    bool flag_random_poly_init = (timesOfConsecutiveStateCalls().first != 1);
+    bool flag_random_poly_init = (!use_sfc_corridor_) && (timesOfConsecutiveStateCalls().first != 1);
 
     for (int i = 0; i < trial_times; i++)
     {
@@ -400,10 +459,21 @@ namespace ego_planner
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
     double t_abs = ros::Time::now().toSec() - info->start_time;
 
-    // NUBS 导数获取: 0-Pos, 1-Vel, 2-Acc
     start_pt_ = info->traj.evaluate(t_abs, 0);
     start_vel_ = info->traj.evaluate(t_abs, 1);
     start_acc_ = info->traj.evaluate(t_abs, 2);
+
+    if (use_sfc_corridor_)
+    {
+      for (int i = 0; i < trial_times; ++i)
+      {
+        if (callReboundReplan(true, false))
+        {
+          return true;
+        }
+      }
+      return false;
+    }
 
     bool success = callReboundReplan(false, false);
 
@@ -447,6 +517,15 @@ namespace ego_planner
 
       have_target_ = true;
       have_new_target_ = true;
+      have_local_corridor_seed_ = false;
+
+      if (use_sfc_corridor_ && have_odom_)
+      {
+        start_pt_ = odom_pos_;
+        start_vel_ = odom_vel_;
+        start_acc_.setZero();
+        prepareLocalGuideAndCorridor(start_pt_, start_vel_, start_acc_);
+      }
 
       if (exec_state_ != WAIT_TARGET)
       {
@@ -550,9 +629,11 @@ namespace ego_planner
   // ==================================================================
   void EGOReplanFSM::RecvBroadcastPolyTrajCallback(const traj_utils::PolyTrajConstPtr &msg)
   {
+    constexpr int kBoundaryNum = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
+    constexpr int kOrder = MINCOTraj3D::ORDER;
     const size_t recv_id = (size_t)msg->drone_id;
     if ((int)recv_id == planner_manager_->pp_.drone_id) return;
-    if (msg->drone_id < 0 || msg->order != 5) return;
+    if (msg->drone_id < 0 || msg->order != kOrder) return;
 
     ros::Time t_now = ros::Time::now();
     if (abs((t_now - msg->start_time).toSec()) > 0.25)
@@ -584,7 +665,7 @@ namespace ego_planner
     for (int i = 0; i < M; ++i) T(i) = msg->duration[i];
 
     const int Nc = msg->coef_x.size();
-    const int expected = std::max(6, M + 5);
+    const int expected = M + 2 * kBoundaryNum - 1;
     if (Nc != expected) return;
 
     Eigen::MatrixXd C(Nc, 3);
@@ -595,17 +676,16 @@ namespace ego_planner
       C(i, 2) = msg->coef_z[i];
     }
 
-    Eigen::Matrix3d headState, tailState;
-    headState.col(0) = C.row(0); 
-    headState.col(1) = C.row(1); 
-    headState.col(2) = C.row(2); 
-    
-    tailState.col(0) = C.row(Nc - 3); 
-    tailState.col(1) = C.row(Nc - 2); 
-    tailState.col(2) = C.row(Nc - 1); 
+    MINCOBoundaryState3D headState = MINCOBoundaryState3D::Zero();
+    MINCOBoundaryState3D tailState = MINCOBoundaryState3D::Zero();
+    for (int d = 0; d < kBoundaryNum; ++d)
+    {
+      headState.col(d) = C.row(d).transpose();
+      tailState.col(d) = C.row(Nc - kBoundaryNum + d).transpose();
+    }
 
     Eigen::MatrixXd P_inner;
-    if (M > 1) P_inner = C.block(3, 0, M - 1, 3).transpose();
+    if (M > 1) P_inner = C.block(kBoundaryNum, 0, M - 1, 3).transpose();
     else P_inner.resize(3, 0);
 
     MINCOTraj3D trajectory;
@@ -652,6 +732,7 @@ namespace ego_planner
 
   void EGOReplanFSM::polyTraj2ROSMsg(traj_utils::PolyTraj &poly_msg)
   {
+    constexpr int kBoundaryNum = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
     auto data = &planner_manager_->traj_.local_traj;
     Eigen::VectorXd durs = data->traj.getDurations();
     int M = durs.size();
@@ -659,36 +740,36 @@ namespace ego_planner
     poly_msg.drone_id = planner_manager_->pp_.drone_id;
     poly_msg.traj_id = data->traj_id;
     poly_msg.start_time = ros::Time(data->start_time);
-    poly_msg.order = 5;
+    poly_msg.order = MINCOTraj3D::ORDER;
     poly_msg.des_clearance = planner_manager_->getSwarmClearance();
     
     poly_msg.duration.resize(M);
     for (int i = 0; i < M; ++i) poly_msg.duration[i] = durs(i);
 
-    int num_encoded = 3 + std::max(0, M - 1) + 3; 
+    int num_encoded = M + 2 * kBoundaryNum - 1;
     poly_msg.coef_x.resize(num_encoded);
     poly_msg.coef_y.resize(num_encoded);
     poly_msg.coef_z.resize(num_encoded);
 
     double T_total = data->traj.getTotalDuration();
-    for (int d = 0; d < 3; ++d) {
+    for (int d = 0; d < kBoundaryNum; ++d) {
         Eigen::Vector3d head_d = data->traj.evaluate(0.0, d);
         poly_msg.coef_x[d] = head_d(0);
         poly_msg.coef_y[d] = head_d(1);
         poly_msg.coef_z[d] = head_d(2);
 
         Eigen::Vector3d tail_d = data->traj.evaluate(T_total, d);
-        poly_msg.coef_x[num_encoded - 3 + d] = tail_d(0);
-        poly_msg.coef_y[num_encoded - 3 + d] = tail_d(1);
-        poly_msg.coef_z[num_encoded - 3 + d] = tail_d(2);
+        poly_msg.coef_x[num_encoded - kBoundaryNum + d] = tail_d(0);
+        poly_msg.coef_y[num_encoded - kBoundaryNum + d] = tail_d(1);
+        poly_msg.coef_z[num_encoded - kBoundaryNum + d] = tail_d(2);
     }
 
     if (M > 1) {
         Eigen::MatrixXd positions = data->traj.getPositions();
         for (int i = 0; i < M - 1; ++i) {
-            poly_msg.coef_x[3 + i] = positions(0, i + 1);
-            poly_msg.coef_y[3 + i] = positions(1, i + 1);
-            poly_msg.coef_z[3 + i] = positions(2, i + 1);
+            poly_msg.coef_x[kBoundaryNum + i] = positions(0, i + 1);
+            poly_msg.coef_y[kBoundaryNum + i] = positions(1, i + 1);
+            poly_msg.coef_z[kBoundaryNum + i] = positions(2, i + 1);
         }
     }
   }

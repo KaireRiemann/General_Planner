@@ -9,6 +9,8 @@
 #include <traj_utils/planning_visualization.h>
 #include <traj_utils/DataDisp.h>
 #include <plan_env/grid_map.h>
+#include <SpatialMap/SFCCommonTypes.hpp>
+#include <path_searching/dyn_a_star.h>
 
 namespace ego_planner
 {
@@ -31,13 +33,24 @@ namespace ego_planner
         const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
         const bool flag_randomPolyTraj, const double &ts,
         MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
-        Eigen::Matrix<double, 3, 3> &headState, Eigen::Matrix<double, 3, 3> &tailState);
+        MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState);
         
     bool reboundReplan(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit,
         const bool flag_randomPolyTraj, const bool touch_goal);
+
+    bool reboundReplan(
+        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
+        const Eigen::Vector3d &end_vel, const std::vector<Eigen::Vector3d> &guide_path,
+        const spatial_map::PolyhedraH &corridor_hpolys, const bool touch_goal);
+
+    bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
+                                      const Eigen::Vector3d &goal_pt,
+                                      std::vector<Eigen::Vector3d> &guide_path,
+                                      spatial_map::PolyhedraH &corridor_hpolys);
         
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
@@ -63,8 +76,23 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
+    bool searchLocalGuidePath(const Eigen::Vector3d &start_pt,
+                              const Eigen::Vector3d &goal_pt,
+                              std::vector<Eigen::Vector3d> &guide_path);
+    bool generateSafeFlightCorridor(const std::vector<Eigen::Vector3d> &guide_path,
+                                    spatial_map::PolyhedraH &corridor_hpolys) const;
+    bool buildGuideInitialGuess(const std::vector<Eigen::Vector3d> &guide_path,
+                                Eigen::MatrixXd &inner_pts,
+                                Eigen::VectorXd &durations) const;
+
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
+    AStar::Ptr local_astar_;
+    Eigen::Vector3i local_astar_pool_size_{Eigen::Vector3i::Zero()};
+    bool use_sfc_corridor_{false};
+    double sfc_path_timeout_{0.2};
+    double sfc_progress_{0.75};
+    double sfc_range_{0.8};
 
     int continous_failures_count_{0};
 

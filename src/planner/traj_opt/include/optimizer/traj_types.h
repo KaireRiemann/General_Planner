@@ -3,8 +3,8 @@
 
 #include <Eigen/Eigen>
 #include <ros/ros.h>
+#include <traj_utils/minco_types.hpp>
 #include <traj_utils/plan_container.hpp>
-#include "MINCOTrajectory/MINCOTrajectory.hpp"
 #include "MINCOTrajectory/MINCOOptimizer.hpp"
 #include "TemporalMap/IdentityTimeMap.hpp"
 #include "TemporalMap/QuadInvTimeMap.hpp"
@@ -16,10 +16,12 @@ namespace ego_planner
   // =====================================================
   //  Type aliases for the MINCO-based trajectory system
   // =====================================================
-  constexpr int TRAJ_DIM = 3;
-  constexpr int MINCO_ORDER = 5;
-  using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
-  using MINCOTraj = minco::MINCOTrajectory<TRAJ_DIM>;
+  constexpr int TRAJ_DIM = MINCO_TRAJ_DIM;
+  constexpr int MINCO_S = MINCO_TRAJ_S;
+  constexpr int MINCO_ORDER = MINCO_TRAJ_ORDER;
+  using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using CorridorMINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
+  using MINCOTraj = MINCOTraj3D;
   using Vec3 = Eigen::Vector3d;
   using WaypointsMat = Eigen::Matrix<double, Eigen::Dynamic, TRAJ_DIM>;
   

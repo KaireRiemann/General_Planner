@@ -8,6 +8,10 @@
     <arg name="init_y"/>
     <arg name="init_z"/>
     <arg name="flight_type" default="2"/>
+    <arg name="use_sfc_corridor" default="false"/>
+    <arg name="sfc_path_timeout" default="0.2"/>
+    <arg name="sfc_progress" default="0.75"/>
+    <arg name="sfc_range" default="0.8"/>
     <arg name="point_num" default="1"/>
     <arg name="target0_x" default="0.0"/>
     <arg name="target0_y" default="0.0"/>
@@ -54,6 +58,10 @@
         <!--always set to 1.5 times grater than sensing horizen-->
         <arg name="planning_horizon" value="7.5" />
         <arg name="use_multitopology_trajs" value="false" />
+        <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)" />
+        <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
+        <arg name="sfc_progress" value="$(arg sfc_progress)" />
+        <arg name="sfc_range" value="$(arg sfc_range)" />
         <arg name="launch_prefix" value="$(arg launch_prefix)" />
         <!-- 1: use 2D Nav Goal to select goal  -->
         <!-- 2: use global waypoints below  -->

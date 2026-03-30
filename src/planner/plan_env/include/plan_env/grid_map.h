@@ -142,9 +142,13 @@ public:
   ~GridMap() {}
 
   void initMap(ros::NodeHandle &nh);
-  inline int getOccupancy(Eigen::Vector3d pos);
-  inline int getInflateOccupancy(Eigen::Vector3d pos);
-  inline double getResolution();
+  inline int getOccupancy(Eigen::Vector3d pos) const;
+  inline int getInflateOccupancy(Eigen::Vector3d pos) const;
+  inline double getResolution() const;
+  inline int query(const Eigen::Vector3d &pos) const;
+  inline Eigen::Vector3d getUpdatedBoxLow() const;
+  inline Eigen::Vector3d getUpdatedBoxHigh() const;
+  inline void getInflatedOccupiedPoints(std::vector<Eigen::Vector3d> &points) const;
   bool getOdomDepthTimeout() { return md_.flag_depth_odom_timeout_; }
 
   typedef std::shared_ptr<GridMap> Ptr;
@@ -162,16 +166,16 @@ private:
     INVALID_IDX = -10000
   };
 
-  inline Eigen::Vector3d globalIdx2Pos(const Eigen::Vector3i &id);  // 1.69ns
-  inline Eigen::Vector3i pos2GlobalIdx(const Eigen::Vector3d &pos); // 0.13ns
-  inline int globalIdx2BufIdx(const Eigen::Vector3i &id);           // 2.2ns
-  inline int globalIdx2InfBufIdx(const Eigen::Vector3i &id);        // 2.2ns
-  inline Eigen::Vector3i BufIdx2GlobalIdx(size_t address);          // 10.18ns
-  inline Eigen::Vector3i infBufIdx2GlobalIdx(size_t address);       // 10.18ns
-  inline bool isInBuf(const Eigen::Vector3d &pos);
-  inline bool isInBuf(const Eigen::Vector3i &idx);
-  inline bool isInInfBuf(const Eigen::Vector3d &pos);
-  inline bool isInInfBuf(const Eigen::Vector3i &idx);
+  inline Eigen::Vector3d globalIdx2Pos(const Eigen::Vector3i &id) const;  // 1.69ns
+  inline Eigen::Vector3i pos2GlobalIdx(const Eigen::Vector3d &pos) const; // 0.13ns
+  inline int globalIdx2BufIdx(const Eigen::Vector3i &id) const;           // 2.2ns
+  inline int globalIdx2InfBufIdx(const Eigen::Vector3i &id) const;        // 2.2ns
+  inline Eigen::Vector3i BufIdx2GlobalIdx(size_t address) const;          // 10.18ns
+  inline Eigen::Vector3i infBufIdx2GlobalIdx(size_t address) const;       // 10.18ns
+  inline bool isInBuf(const Eigen::Vector3d &pos) const;
+  inline bool isInBuf(const Eigen::Vector3i &idx) const;
+  inline bool isInInfBuf(const Eigen::Vector3d &pos) const;
+  inline bool isInInfBuf(const Eigen::Vector3i &idx) const;
 
   void publishMap();
   void publishMapInflate();
@@ -315,7 +319,7 @@ inline void GridMap::changeInfBuf(const bool dir, const int inf_buf_idx, const E
       }
 }
 
-inline int GridMap::globalIdx2BufIdx(const Eigen::Vector3i &id)
+inline int GridMap::globalIdx2BufIdx(const Eigen::Vector3i &id) const
 {
   int x_buffer = (id(0) - md_.ringbuffer_origin3i_(0)) % md_.ringbuffer_size3i_(0);
   int y_buffer = (id(1) - md_.ringbuffer_origin3i_(1)) % md_.ringbuffer_size3i_(1);
@@ -330,7 +334,7 @@ inline int GridMap::globalIdx2BufIdx(const Eigen::Vector3i &id)
   return md_.ringbuffer_size3i_(0) * md_.ringbuffer_size3i_(1) * z_buffer + md_.ringbuffer_size3i_(0) * y_buffer + x_buffer;
 }
 
-inline int GridMap::globalIdx2InfBufIdx(const Eigen::Vector3i &id)
+inline int GridMap::globalIdx2InfBufIdx(const Eigen::Vector3i &id) const
 {
   int x_buffer = (id(0) - md_.ringbuffer_inf_origin3i_(0)) % md_.ringbuffer_inf_size3i_(0);
   int y_buffer = (id(1) - md_.ringbuffer_inf_origin3i_(1)) % md_.ringbuffer_inf_size3i_(1);
@@ -345,7 +349,7 @@ inline int GridMap::globalIdx2InfBufIdx(const Eigen::Vector3i &id)
   return md_.ringbuffer_inf_size3i_(0) * md_.ringbuffer_inf_size3i_(1) * z_buffer + md_.ringbuffer_inf_size3i_(0) * y_buffer + x_buffer;
 }
 
-inline Eigen::Vector3i GridMap::BufIdx2GlobalIdx(size_t address)
+inline Eigen::Vector3i GridMap::BufIdx2GlobalIdx(size_t address) const
 {
 
   const int ringbuffer_xysize = md_.ringbuffer_size3i_(0) * md_.ringbuffer_size3i_(1);
@@ -367,7 +371,7 @@ inline Eigen::Vector3i GridMap::BufIdx2GlobalIdx(size_t address)
   return Eigen::Vector3i(xid_global, yid_global, zid_global);
 }
 
-inline Eigen::Vector3i GridMap::infBufIdx2GlobalIdx(size_t address)
+inline Eigen::Vector3i GridMap::infBufIdx2GlobalIdx(size_t address) const
 {
 
   const int ringbuffer_xysize = md_.ringbuffer_inf_size3i_(0) * md_.ringbuffer_inf_size3i_(1);
@@ -389,7 +393,7 @@ inline Eigen::Vector3i GridMap::infBufIdx2GlobalIdx(size_t address)
   return Eigen::Vector3i(xid_global, yid_global, zid_global);
 }
 
-inline int GridMap::getOccupancy(Eigen::Vector3d pos)
+inline int GridMap::getOccupancy(Eigen::Vector3d pos) const
 {
   if (!isInBuf(pos))
     return 0;
@@ -400,7 +404,7 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos)
   return md_.occupancy_buffer_[globalIdx2BufIdx(pos2GlobalIdx(pos))] > mp_.min_occupancy_log_ ? 1 : 0;
 }
 
-inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos)
+inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos) const
 {
   if (!isInInfBuf(pos))
     return 0;
@@ -411,7 +415,7 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos)
   return int(md_.occupancy_buffer_inflate_[globalIdx2InfBufIdx(pos2GlobalIdx(pos))]);
 }
 
-inline bool GridMap::isInBuf(const Eigen::Vector3d &pos)
+inline bool GridMap::isInBuf(const Eigen::Vector3d &pos) const
 {
   if (pos(0) < md_.ringbuffer_lowbound3d_(0) || pos(1) < md_.ringbuffer_lowbound3d_(1) || pos(2) < md_.ringbuffer_lowbound3d_(2))
   {
@@ -424,7 +428,7 @@ inline bool GridMap::isInBuf(const Eigen::Vector3d &pos)
   return true;
 }
 
-inline bool GridMap::isInBuf(const Eigen::Vector3i &idx)
+inline bool GridMap::isInBuf(const Eigen::Vector3i &idx) const
 {
   if (idx(0) < md_.ringbuffer_lowbound3i_(0) || idx(1) < md_.ringbuffer_lowbound3i_(1) || idx(2) < md_.ringbuffer_lowbound3i_(2))
   {
@@ -437,7 +441,7 @@ inline bool GridMap::isInBuf(const Eigen::Vector3i &idx)
   return true;
 }
 
-inline bool GridMap::isInInfBuf(const Eigen::Vector3d &pos)
+inline bool GridMap::isInInfBuf(const Eigen::Vector3d &pos) const
 {
   if (pos(0) < md_.ringbuffer_inf_lowbound3d_(0) || pos(1) < md_.ringbuffer_inf_lowbound3d_(1) || pos(2) < md_.ringbuffer_inf_lowbound3d_(2))
   {
@@ -450,7 +454,7 @@ inline bool GridMap::isInInfBuf(const Eigen::Vector3d &pos)
   return true;
 }
 
-inline bool GridMap::isInInfBuf(const Eigen::Vector3i &idx)
+inline bool GridMap::isInInfBuf(const Eigen::Vector3i &idx) const
 {
   if (idx(0) < md_.ringbuffer_inf_lowbound3i_(0) || idx(1) < md_.ringbuffer_inf_lowbound3i_(1) || idx(2) < md_.ringbuffer_inf_lowbound3i_(2))
   {
@@ -463,16 +467,60 @@ inline bool GridMap::isInInfBuf(const Eigen::Vector3i &idx)
   return true;
 }
 
-inline Eigen::Vector3d GridMap::globalIdx2Pos(const Eigen::Vector3i &id) // t ~ 0us
+inline Eigen::Vector3d GridMap::globalIdx2Pos(const Eigen::Vector3i &id) const // t ~ 0us
 {
   return Eigen::Vector3d((id(0) + 0.5) * mp_.resolution_, (id(1) + 0.5) * mp_.resolution_, (id(2) + 0.5) * mp_.resolution_);
 }
 
-inline Eigen::Vector3i GridMap::pos2GlobalIdx(const Eigen::Vector3d &pos)
+inline Eigen::Vector3i GridMap::pos2GlobalIdx(const Eigen::Vector3d &pos) const
 {
   return (pos * mp_.resolution_inv_).array().floor().cast<int>(); // more than twice faster than std::floor()
 }
 
-inline double GridMap::getResolution() { return mp_.resolution_; }
+inline double GridMap::getResolution() const { return mp_.resolution_; }
+
+inline int GridMap::query(const Eigen::Vector3d &pos) const
+{
+  return getInflateOccupancy(pos);
+}
+
+inline Eigen::Vector3d GridMap::getUpdatedBoxLow() const
+{
+  return md_.ringbuffer_lowbound3d_;
+}
+
+inline Eigen::Vector3d GridMap::getUpdatedBoxHigh() const
+{
+  return md_.ringbuffer_upbound3d_;
+}
+
+inline void GridMap::getInflatedOccupiedPoints(std::vector<Eigen::Vector3d> &points) const
+{
+  points.clear();
+  points.reserve(md_.occupancy_buffer_inflate_.size() / 16);
+
+  for (size_t addr = 0; addr < md_.occupancy_buffer_inflate_.size(); ++addr)
+  {
+    if (md_.occupancy_buffer_inflate_[addr] == 0)
+    {
+      continue;
+    }
+
+    const Eigen::Vector3i global_idx = infBufIdx2GlobalIdx(addr);
+    if (!isInInfBuf(global_idx))
+    {
+      continue;
+    }
+
+    const Eigen::Vector3d pos = globalIdx2Pos(global_idx);
+    if (mp_.enable_virtual_walll_ &&
+        (pos(2) >= mp_.virtual_ceil_ || pos(2) <= mp_.virtual_ground_))
+    {
+      continue;
+    }
+
+    points.emplace_back(pos);
+  }
+}
 
 #endif
