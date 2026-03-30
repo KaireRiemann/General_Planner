@@ -106,7 +106,10 @@ namespace ego_planner
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
 
     fill(opt->min_ellip_dist2_.begin(), opt->min_ellip_dist2_.end(), std::numeric_limits<double>::max());
-    opt->cost_manager_.resetAccumulation();
+    if (opt->corridor_mode_)
+      opt->corridor_cost_manager_.resetAccumulation();
+    else
+      opt->cost_manager_.resetAccumulation();
 
     Eigen::Map<const Eigen::VectorXd> x_vec(x, n);
     Eigen::Map<Eigen::VectorXd> grad_vec(grad, n);
@@ -114,25 +117,42 @@ namespace ego_planner
     opt->iter_num_++;
     opt->time_cost_.weight = opt->wei_time_;
 
-    auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
+    double total_cost = 0.0;
+    if (opt->corridor_mode_)
     {
-      opt->cost_manager_.segment_dt_ = T_vec;
-      gdT.setZero(T_vec.size());
-      return opt->time_cost_(T_vec, gdT);
-    };
+      auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
+      {
+        gdT.setZero(T_vec.size());
+        return opt->time_cost_(T_vec, gdT);
+      };
 
-    double total_cost = opt->mincoOpt_.evaluate(
-        x_vec, 
-        grad_vec, 
-        time_cost_wrapper, 
-        opt->cost_manager_
-    );
-
-    opt->cps_.points = opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
-
-    if (opt->allowRebound())
+      total_cost = opt->mincoOpt_.evaluate(
+          x_vec,
+          grad_vec,
+          time_cost_wrapper,
+          opt->corridor_cost_manager_);
+    }
+    else
     {
-      opt->roughlyCheckConstraintPoints();
+      auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
+      {
+        opt->cost_manager_.segment_dt_ = T_vec;
+        gdT.setZero(T_vec.size());
+        return opt->time_cost_(T_vec, gdT);
+      };
+
+      total_cost = opt->mincoOpt_.evaluate(
+          x_vec,
+          grad_vec,
+          time_cost_wrapper,
+          opt->cost_manager_);
+
+      opt->cps_.points = opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+
+      if (opt->allowRebound())
+      {
+        opt->roughlyCheckConstraintPoints();
+      }
     }
 
     return total_cost;

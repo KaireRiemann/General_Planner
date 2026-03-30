@@ -25,6 +25,7 @@ namespace ego_planner
     ros::Publisher failed_list_pub;
     ros::Publisher a_star_list_pub;
     ros::Publisher guide_vector_pub;
+    ros::Publisher corridor_pub;
 
     ros::Publisher intermediate_pt0_pub;
     ros::Publisher intermediate_pt1_pub;
@@ -57,6 +58,9 @@ namespace ego_planner
     void displayFailedList(Eigen::MatrixXd failed_pts, int id);
     void displayAStarList(std::vector<std::vector<Eigen::Vector3d>> a_star_paths, int id);
     void displayArrowList(ros::Publisher &pub, const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id);
+    void displayCorridor(const vector<Eigen::Vector3d> &triangle_vertices,
+                         const vector<Eigen::Vector3d> &edge_vertices,
+                         int id);
     
     void displayIntermediatePt(std::string type, Eigen::MatrixXd &pts, int id, Eigen::Vector4d color);
     void displayIntermediateGrad(std::string type, Eigen::MatrixXd &pts, Eigen::MatrixXd &grad, int id, Eigen::Vector4d color);

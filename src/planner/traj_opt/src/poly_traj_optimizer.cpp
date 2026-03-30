@@ -17,6 +17,8 @@ namespace ego_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       double &final_cost)
   {
+    corridor_mode_ = false;
+
     if (initInnerPts.cols() != (initT.size() - 1))
     {
       ROS_ERROR("initInnerPts.cols() != (initT.size()-1)");
@@ -171,6 +173,137 @@ namespace ego_planner
 
     } while ((flag_still_unsafe && restart_nums < 3) ||
              (flag_force_return && force_stop_type_ == STOP_FOR_REBOUND && rebound_times <= 20));
+
+    return flag_success;
+  }
+
+  bool PolyTrajOptimizer::optimizeTrajectory(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const spatial_map::PolyhedraH &corridor_hpolys,
+      double &final_cost)
+  {
+    corridor_mode_ = true;
+
+    if (initInnerPts.cols() != (initT.size() - 1))
+    {
+      ROS_ERROR("initInnerPts.cols() != (initT.size()-1)");
+      return false;
+    }
+    if (corridor_hpolys.empty())
+    {
+      ROS_ERROR("corridor_hpolys is empty");
+      return false;
+    }
+
+    int restart_nums = 0;
+    bool flag_success = false, flag_swarm_too_close = false;
+    wei_swarm_mod_ = wei_swarm_;
+
+    t_now_ = ros::Time::now().toSec();
+    piece_num_ = initT.size();
+
+    mincoOpt_.setEnergyWeight(rho_energy_);
+    mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+
+    Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
+    waypoints.row(0) = iniState.col(0).transpose();
+    for (int i = 0; i < initInnerPts.cols(); ++i)
+    {
+      waypoints.row(i + 1) = initInnerPts.col(i).transpose();
+    }
+    waypoints.row(piece_num_) = finState.col(0).transpose();
+
+    std::vector<double> time_segs(piece_num_);
+    for (int i = 0; i < piece_num_; ++i)
+    {
+      time_segs[i] = initT(i);
+    }
+
+    mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+
+    corridor_cost_manager_.setCorridor(&corridor_hpolys, nullptr);
+    corridor_cost_manager_.cps = &cps_;
+    corridor_cost_manager_.swarm_traj = swarm_trajs_;
+    corridor_cost_manager_.wei_corridor = wei_corridor_;
+    corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+    corridor_cost_manager_.wei_feas = wei_feas_;
+    corridor_cost_manager_.wei_sqrvar = wei_sqrvar_;
+    corridor_cost_manager_.corridor_clearance = corridor_clearance_;
+    corridor_cost_manager_.corridor_smoothing = corridor_smoothing_;
+    corridor_cost_manager_.swarm_clearance = swarm_clearance_;
+    corridor_cost_manager_.max_vel = max_vel_;
+    corridor_cost_manager_.max_acc = max_acc_;
+    corridor_cost_manager_.max_jer = max_jer_;
+    corridor_cost_manager_.drone_id = drone_id_;
+    corridor_cost_manager_.t_now = t_now_;
+    corridor_cost_manager_.touch_goal = touch_goal_;
+    corridor_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
+    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
+    variable_num_ = x0.size();
+
+    double x_init[variable_num_];
+    memcpy(x_init, x0.data(), variable_num_ * sizeof(double));
+
+    min_ellip_dist2_.resize(swarm_trajs_ ? swarm_trajs_->size() : 0);
+
+    lbfgs::lbfgs_parameter_t lbfgs_params;
+    lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
+    lbfgs_params.mem_size = 16;
+    lbfgs_params.max_iterations = 200;
+    lbfgs_params.min_step = 1e-32;
+    lbfgs_params.past = 3;
+    lbfgs_params.delta = 1.0e-2;
+
+    do
+    {
+      iter_num_ = 0;
+      force_stop_type_ = DONT_STOP;
+      flag_success = false;
+      flag_swarm_too_close = false;
+      corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+
+      const int result = lbfgs::lbfgs_optimize(
+          variable_num_,
+          x_init,
+          &final_cost,
+          PolyTrajOptimizer::costFunctionCallback,
+          NULL,
+          PolyTrajOptimizer::earlyExitCallback,
+          this,
+          &lbfgs_params);
+
+      if (result == lbfgs::LBFGS_CONVERGENCE ||
+          result == lbfgs::LBFGSERR_MAXIMUMITERATION ||
+          result == lbfgs::LBFGS_ALREADY_MINIMIZED ||
+          result == lbfgs::LBFGS_STOP ||
+          result == lbfgs::LBFGSERR_ROUNDING_ERROR)
+      {
+        if (swarm_trajs_ != nullptr)
+        {
+          for (size_t i = 0; i < swarm_trajs_->size(); ++i)
+          {
+            flag_swarm_too_close |= min_ellip_dist2_[i] <
+                                    pow((swarm_clearance_ + swarm_trajs_->at(i).des_clearance) * 1.25, 2);
+          }
+        }
+
+        if (!flag_swarm_too_close && isTrajectoryCollisionFree(mincoOpt_.getTrajectory()))
+        {
+          flag_success = true;
+        }
+        else if (flag_swarm_too_close)
+        {
+          wei_swarm_mod_ *= 2.0;
+          restart_nums++;
+        }
+      }
+      else
+      {
+        ROS_WARN_COND(VERBOSE_OUTPUT, "Corridor solver error. Return = %d, %s.", result, lbfgs::lbfgs_strerror(result));
+      }
+    } while (!flag_success && flag_swarm_too_close && restart_nums < 3);
 
     return flag_success;
   }
@@ -974,6 +1107,27 @@ namespace ego_planner
     return control_pts_buf;
   }
 
+  bool PolyTrajOptimizer::isTrajectoryCollisionFree(const MINCOTraj &traj) const
+  {
+    if (!grid_map_)
+    {
+      return true;
+    }
+
+    const double t_step = std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1));
+    const double total_duration = traj.getTotalDuration();
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += t_step)
+    {
+      const double sample_t = std::min(t, total_duration);
+      if (grid_map_->getInflateOccupancy(traj.evaluate(sample_t, 0)) != 0)
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // =====================================================
   //  Setters
   // =====================================================
@@ -982,6 +1136,7 @@ namespace ego_planner
     nh.param("optimization/constraint_points_perPiece", cps_num_prePiece_, -1);
     nh.param("optimization/weight_obstacle", wei_obs_, -1.0);
     nh.param("optimization/weight_obstacle_soft", wei_obs_soft_, -1.0);
+    nh.param("optimization/weight_corridor", wei_corridor_, 1000.0);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);
@@ -989,6 +1144,8 @@ namespace ego_planner
     nh.param("optimization/weight_energy", rho_energy_, 1.0);
     nh.param("optimization/obstacle_clearance", obs_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, -1.0);
+    nh.param("optimization/corridor_clearance", corridor_clearance_, 0.0);
+    nh.param("optimization/corridor_smoothing", corridor_smoothing_, 0.05);
     nh.param("optimization/swarm_clearance", swarm_clearance_, -1.0);
     nh.param("optimization/max_vel", max_vel_, -1.0);
     nh.param("optimization/max_acc", max_acc_, -1.0);
