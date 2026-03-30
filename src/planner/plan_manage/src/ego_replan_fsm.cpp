@@ -249,7 +249,6 @@ namespace ego_planner
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
     auto map = planner_manager_->grid_map_;
     
-    // 当前已经在该段轨迹上飞行的时间
     const double t_cur = ros::Time::now().toSec() - info->start_time;
 
     if (exec_state_ == WAIT_TARGET || info->traj_id <= 0) return;
@@ -262,28 +261,24 @@ namespace ego_planner
       return;
     }
 
-    // 确定检测时间跨度：从当前时刻 t_cur 往后查
     const bool touch_the_end = ((local_target_pt_ - final_goal_).norm() < 1e-2);
     double t_end = info->duration;
-    if (!touch_the_end) t_end *= 0.75; // 豁免终点附近的抖动
+    if (!touch_the_end) t_end *= 0.75;
 
-    // 如果已经飞完，不需要检测
     if (t_cur >= t_end) return;
 
-    // 核心重构：利用 NUBS 极速 evaluate，按 0.05s 步长精确推演未来轨迹！
     constexpr double t_step = 0.05;
     for (double t = t_cur; t < t_end; t += t_step)
     {
-      // 1. 精确获取曲线上当前时间点 t 的真实物理位置
-      Eigen::Vector3d pt = info->traj.evaluate(t, 0); 
+      Eigen::Vector3d pt =info->traj.getPos(t);
       bool dangerous = false;
 
-      // 2. 静态障碍物检测：绝无误报
-      if (map->getInflateOccupancy(pt)) {
+      if (map->getInflateOccupancy(pt)) 
+      {
           dangerous = true;
       }
 
-      // 3. 动态集群检测：时间戳绝对同步，彻底消除躲避幽灵的现象！
+  
       if (!dangerous) 
       {
         for (size_t id = 0; id < planner_manager_->traj_.swarm_traj.size(); id++)
@@ -294,7 +289,6 @@ namespace ego_planner
             continue;
           }
 
-          // 时间绝对对齐：预测点 t 加上 两机发车时间差
           double t_X = t + (info->start_time - planner_manager_->traj_.swarm_traj.at(id).start_time);
           
           if (t_X > 0 && t_X < planner_manager_->traj_.swarm_traj.at(id).duration)

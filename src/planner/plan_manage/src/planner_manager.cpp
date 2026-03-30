@@ -240,17 +240,25 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> &guide_path,
       spatial_map::PolyhedraH &corridor_hpolys)
   {
-    if (!searchLocalGuidePath(start_pt, goal_pt, guide_path))
+    std::vector<Eigen::Vector3d> raw_guide_path;
+    if (!searchLocalGuidePath(start_pt, goal_pt, raw_guide_path))
     {
       ROS_WARN("Local guide path search failed.");
       return false;
     }
+
+    sfc_gen::refineSeedPath(raw_guide_path, grid_map_.get(), sfc_progress_, sfc_range_, guide_path);
+    if (guide_path.size() < 2)
+    {
+      guide_path = raw_guide_path;
+    }
+
     if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
     {
       return false;
     }
 
-    visualization_->displayGlobalPathList(guide_path, 0.08, 0);
+    visualization_->displayGlobalPathList(raw_guide_path, 0.08, 0);
     visualization_->displayInitPathList(guide_path, 0.12, 0);
     std::vector<Eigen::Vector3d> corridor_triangles;
     std::vector<Eigen::Vector3d> corridor_edges;

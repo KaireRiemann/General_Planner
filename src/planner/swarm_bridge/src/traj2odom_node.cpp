@@ -24,6 +24,7 @@ ros::Publisher other_odoms_pub_;
 
 void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
 {
+  constexpr int kBoundaryNum = ego_planner::MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
 
   const int recv_id = msg->drone_id;
 
@@ -32,9 +33,9 @@ void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
     ROS_ERROR("drone_id < 0 is not allowed in a swarm system!");
     return;
   }
-  if (msg->order != 5)
+  if (msg->order != ego_planner::MINCOTraj3D::ORDER)
   {
-    ROS_ERROR("Only support MINCO trajectory order equals 5 now!");
+    ROS_ERROR("Only support MINCO trajectory order equals %d now!", ego_planner::MINCOTraj3D::ORDER);
     return;
   }
   if (msg->duration.empty() ||
@@ -81,7 +82,7 @@ void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
   /* Store data */
   const int piece_nums = static_cast<int>(msg->duration.size());
   const int encoded_num = static_cast<int>(msg->coef_x.size());
-  const int expected_num = std::max(6, piece_nums + 5);
+  const int expected_num = piece_nums + 2 * kBoundaryNum - 1;
   if (encoded_num != expected_num)
   {
     ROS_ERROR("Unexpected encoded trajectory size. expected=%d, actual=%d", expected_num, encoded_num);
@@ -100,18 +101,17 @@ void one_traj_sub_cb(const traj_utils::PolyTrajPtr &msg)
     encoded(i, 2) = msg->coef_z[i];
   }
 
-  Eigen::Matrix3d head_state, tail_state;
-  head_state.col(0) = encoded.row(0);
-  head_state.col(1) = encoded.row(1);
-  head_state.col(2) = encoded.row(2);
-
-  tail_state.col(0) = encoded.row(encoded_num - 3);
-  tail_state.col(1) = encoded.row(encoded_num - 2);
-  tail_state.col(2) = encoded.row(encoded_num - 1);
+  ego_planner::MINCOBoundaryState3D head_state = ego_planner::MINCOBoundaryState3D::Zero();
+  ego_planner::MINCOBoundaryState3D tail_state = ego_planner::MINCOBoundaryState3D::Zero();
+  for (int d = 0; d < kBoundaryNum; ++d)
+  {
+    head_state.col(d) = encoded.row(d).transpose();
+    tail_state.col(d) = encoded.row(encoded_num - kBoundaryNum + d).transpose();
+  }
 
   Eigen::MatrixXd inner_points;
   if (piece_nums > 1)
-    inner_points = encoded.block(3, 0, piece_nums - 1, 3).transpose();
+    inner_points = encoded.block(kBoundaryNum, 0, piece_nums - 1, 3).transpose();
   else
     inner_points.resize(3, 0);
 
