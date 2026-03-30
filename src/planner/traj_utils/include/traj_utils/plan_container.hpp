@@ -4,14 +4,12 @@
 #include <Eigen/Eigen>
 #include <vector>
 #include <ros/ros.h>
-#include "MINCOTrajectory/MINCOTrajectory.hpp"
+#include "traj_utils/minco_types.hpp"
 
 using std::vector;
 
 namespace ego_planner
 {
-  using MINCOTraj3D = minco::MINCOTrajectory<3>;
-
   typedef std::vector<std::vector<std::pair<double, Eigen::Vector3d>>> PtsChk_t;
 
   struct GlobalTrajData

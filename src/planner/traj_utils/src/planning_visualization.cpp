@@ -14,6 +14,7 @@ namespace ego_planner
     optimal_list_pub = nh.advertise<visualization_msgs::Marker>("optimal_list", 2);
     failed_list_pub = nh.advertise<visualization_msgs::Marker>("failed_list", 2);
     a_star_list_pub = nh.advertise<visualization_msgs::Marker>("a_star_list", 20);
+    corridor_pub = nh.advertise<visualization_msgs::MarkerArray>("sfc_corridor", 2);
 
     // intermediate_pt0_pub = nh.advertise<visualization_msgs::Marker>("pt0_dur_opt", 10);
     // intermediate_grad0_pub = nh.advertise<visualization_msgs::MarkerArray>("grad0_dur_opt", 10);
@@ -316,6 +317,61 @@ namespace ego_planner
     generateArrowDisplayArray(array, list, scale, color, id);
 
     pub.publish(array);
+  }
+
+  void PlanningVisualization::displayCorridor(const vector<Eigen::Vector3d> &triangle_vertices,
+                                              const vector<Eigen::Vector3d> &edge_vertices,
+                                              int id)
+  {
+    if (corridor_pub.getNumSubscribers() == 0)
+    {
+      return;
+    }
+
+    visualization_msgs::MarkerArray array;
+    visualization_msgs::Marker mesh, edges;
+
+    mesh.header.frame_id = edges.header.frame_id = "world";
+    mesh.header.stamp = edges.header.stamp = ros::Time::now();
+    mesh.ns = "corridor_mesh";
+    edges.ns = "corridor_edge";
+    mesh.id = id * 2;
+    edges.id = id * 2 + 1;
+    mesh.type = visualization_msgs::Marker::TRIANGLE_LIST;
+    edges.type = visualization_msgs::Marker::LINE_LIST;
+    mesh.action = edges.action = visualization_msgs::Marker::ADD;
+    mesh.pose.orientation.w = edges.pose.orientation.w = 1.0;
+
+    mesh.color.r = 0.18;
+    mesh.color.g = 0.72;
+    mesh.color.b = 0.92;
+    mesh.color.a = 0.16;
+    edges.color.r = 0.08;
+    edges.color.g = 0.52;
+    edges.color.b = 0.78;
+    edges.color.a = 0.85;
+    mesh.scale.x = mesh.scale.y = mesh.scale.z = 1.0;
+    edges.scale.x = 0.03;
+
+    geometry_msgs::Point pt;
+    for (const auto &vertex : triangle_vertices)
+    {
+      pt.x = vertex.x();
+      pt.y = vertex.y();
+      pt.z = vertex.z();
+      mesh.points.push_back(pt);
+    }
+    for (const auto &vertex : edge_vertices)
+    {
+      pt.x = vertex.x();
+      pt.y = vertex.y();
+      pt.z = vertex.z();
+      edges.points.push_back(pt);
+    }
+
+    array.markers.push_back(mesh);
+    array.markers.push_back(edges);
+    corridor_pub.publish(array);
   }
 
   void PlanningVisualization::displayIntermediatePt(std::string type, Eigen::MatrixXd &pts, int id, Eigen::Vector4d color)
