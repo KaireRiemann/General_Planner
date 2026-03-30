@@ -313,6 +313,48 @@ namespace ego_planner
     if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
       return false;
 
+    if (!pointInsideCorridor(guide_path.back(), corridor_hpolys, sfc_corridor_margin_))
+    {
+      Eigen::Vector3d adjusted_goal = guide_path.back();
+      bool found_inside = false;
+
+      for (int i = static_cast<int>(guide_path.size()) - 1; i >= 1 && !found_inside; --i)
+      {
+        const Eigen::Vector3d &a = guide_path[static_cast<std::size_t>(i - 1)];
+        const Eigen::Vector3d &b = guide_path[static_cast<std::size_t>(i)];
+        const int samples =
+            std::max(2, static_cast<int>(std::ceil((b - a).norm() / std::max(grid_map_->getResolution(), 1.0e-3))));
+
+        for (int j = samples; j >= 0; --j)
+        {
+          const double ratio = static_cast<double>(j) / static_cast<double>(samples);
+          const Eigen::Vector3d candidate = a + ratio * (b - a);
+          if (pointInsideCorridor(candidate, corridor_hpolys, sfc_corridor_margin_))
+          {
+            adjusted_goal = candidate;
+            found_inside = true;
+            break;
+          }
+        }
+      }
+
+      if (!found_inside && !corridor_hpolys.empty())
+      {
+        Eigen::Vector3d interior;
+        if (geo_utils::findInterior(corridor_hpolys.back(), interior))
+        {
+          adjusted_goal = interior;
+          found_inside = true;
+        }
+      }
+
+      if (found_inside && (adjusted_goal - guide_path.back()).norm() > 1.0e-3)
+      {
+        ROS_WARN("Corridor does not cover the requested local target, move target backward into corridor.");
+        guide_path.back() = adjusted_goal;
+      }
+    }
+
     corridor_seed_start_ = start_pt;
     corridor_seed_goal_ = goal_pt;
     visualization_->displayGlobalPathList(raw_guide_path, 0.08, 0);
@@ -452,8 +494,13 @@ namespace ego_planner
     Eigen::VectorXd durations;
     MINCOBoundaryState3D headState, tailState;
 
+    const Eigen::Vector3d corridor_target_pt =
+        guide_path.empty() ? local_target_pt : guide_path.back();
+    const Eigen::Vector3d corridor_target_vel =
+        ((corridor_target_pt - local_target_pt).norm() > 1.0e-3) ? Eigen::Vector3d::Zero() : local_target_vel;
+
     headState = makeBoundaryState(start_pt, start_vel, start_acc);
-    tailState = makeBoundaryState(local_target_pt, local_target_vel, Eigen::Vector3d::Zero());
+    tailState = makeBoundaryState(corridor_target_pt, corridor_target_vel, Eigen::Vector3d::Zero());
 
     bool use_warm_start = false;
     if (traj_.local_traj.duration > 1.0e-3 &&
@@ -461,13 +508,13 @@ namespace ego_planner
                                                    corridor_hpolys,
                                                    std::max(0.0, sfc_corridor_margin_)))
     {
-      use_warm_start = buildWarmStartFromCurrentTraj(start_pt, local_target_pt, innerPts, durations);
+      use_warm_start = buildWarmStartFromCurrentTraj(start_pt, corridor_target_pt, innerPts, durations);
     }
 
     if (!use_warm_start)
     {
       if (!buildGuideInitialGuess(guide_path, innerPts, durations) &&
-          !buildWarmStartFromCurrentTraj(start_pt, local_target_pt, innerPts, durations))
+          !buildWarmStartFromCurrentTraj(start_pt, corridor_target_pt, innerPts, durations))
       {
         return false;
       }

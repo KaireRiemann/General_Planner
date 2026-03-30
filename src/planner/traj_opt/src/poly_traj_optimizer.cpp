@@ -220,9 +220,52 @@ namespace ego_planner
       time_segs[i] = initT(i);
     }
 
+    spatial_map::PolyhedraH normalized_corridor = corridor_hpolys;
+    for (auto &poly : normalized_corridor)
+    {
+      for (int r = 0; r < poly.rows(); ++r)
+      {
+        const double norm = poly.row(r).head<3>().norm();
+        if (norm > 1.0e-9)
+        {
+          poly.row(r) /= norm;
+        }
+      }
+    }
+
+    Eigen::VectorXi segment_poly_idx(piece_num_);
+    int poly_cursor = 0;
+    for (int seg_idx = 0; seg_idx < piece_num_; ++seg_idx)
+    {
+      const Eigen::Vector3d p0 = waypoints.row(seg_idx).transpose();
+      const Eigen::Vector3d p1 = waypoints.row(seg_idx + 1).transpose();
+      const Eigen::Vector3d pm = 0.5 * (p0 + p1);
+
+      int best_poly = std::min(poly_cursor, static_cast<int>(normalized_corridor.size()) - 1);
+      int best_score = -1;
+      for (int poly_id = poly_cursor; poly_id < static_cast<int>(normalized_corridor.size()); ++poly_id)
+      {
+        int score = 0;
+        score += pointInsidePolytope(p0, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
+        score += pointInsidePolytope(pm, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
+        score += pointInsidePolytope(p1, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
+        if (score > best_score)
+        {
+          best_score = score;
+          best_poly = poly_id;
+        }
+        if (score == 3)
+        {
+          break;
+        }
+      }
+      segment_poly_idx(seg_idx) = best_poly;
+      poly_cursor = best_poly;
+    }
+
     mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
 
-    corridor_cost_manager_.setCorridor(&corridor_hpolys, nullptr);
+    corridor_cost_manager_.setCorridor(&normalized_corridor, &segment_poly_idx);
     corridor_cost_manager_.cps = &cps_;
     corridor_cost_manager_.swarm_traj = swarm_trajs_;
     corridor_cost_manager_.wei_corridor = wei_corridor_;
@@ -293,7 +336,7 @@ namespace ego_planner
 
         const bool flag_inside_corridor =
             isTrajectoryInsideCorridor(mincoOpt_.getTrajectory(),
-                                      corridor_hpolys,
+                                      normalized_corridor,
                                       corridor_clearance_);
 
         if (!flag_swarm_too_close && flag_collision_free && flag_inside_corridor)
@@ -316,8 +359,9 @@ namespace ego_planner
       else
       {
         ROS_WARN_COND(VERBOSE_OUTPUT, "Corridor solver error. Return = %d, %s.", result, lbfgs::lbfgs_strerror(result));
+        restart_nums++;
       }
-    } while (!flag_success && flag_swarm_too_close && restart_nums < 3);
+    } while (!flag_success && restart_nums < 3);
 
     return flag_success;
   }

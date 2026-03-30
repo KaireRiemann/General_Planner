@@ -38,6 +38,217 @@
 
 namespace sfc_gen
 {
+    inline std::vector<Eigen::Vector3d> prunePolyline(const std::vector<Eigen::Vector3d> &path,
+                                                      const double min_seg_len,
+                                                      const double cos_threshold = 0.999)
+    {
+        if (path.size() <= 2)
+        {
+            return path;
+        }
+
+        std::vector<Eigen::Vector3d> pruned;
+        pruned.reserve(path.size());
+        pruned.push_back(path.front());
+
+        for (std::size_t i = 1; i + 1 < path.size(); ++i)
+        {
+            const Eigen::Vector3d &prev = pruned.back();
+            const Eigen::Vector3d &curr = path[i];
+            const Eigen::Vector3d &next = path[i + 1];
+
+            const Eigen::Vector3d v0 = curr - prev;
+            const Eigen::Vector3d v1 = next - curr;
+            const double len0 = v0.norm();
+            const double len1 = v1.norm();
+
+            if (len0 < min_seg_len)
+            {
+                continue;
+            }
+            if (len0 < 1.0e-9 || len1 < 1.0e-9)
+            {
+                continue;
+            }
+
+            const double dir_similarity = v0.dot(v1) / (len0 * len1);
+            if (dir_similarity > cos_threshold && (next - prev).norm() >= min_seg_len)
+            {
+                continue;
+            }
+
+            pruned.push_back(curr);
+        }
+
+        if ((path.back() - pruned.back()).norm() < 1.0e-9)
+        {
+            return pruned;
+        }
+
+        if (pruned.size() >= 2 && (path.back() - pruned.back()).norm() < min_seg_len)
+        {
+            pruned.back() = path.back();
+        }
+        else
+        {
+            pruned.push_back(path.back());
+        }
+
+        return pruned;
+    }
+
+    template <typename Map>
+    inline bool lineOfSight(const Eigen::Vector3d &start,
+                            const Eigen::Vector3d &goal,
+                            const Map *mapPtr,
+                            const double sample_step = -1.0)
+    {
+        if (mapPtr == nullptr)
+        {
+            return false;
+        }
+
+        const double resolution = std::max(mapPtr->getResolution(), 1.0e-3);
+        const double step = sample_step > 0.0 ? sample_step : std::max(0.5 * resolution, 1.0e-3);
+        const Eigen::Vector3d delta = goal - start;
+        const double distance = delta.norm();
+        const int sample_num = std::max(1, static_cast<int>(std::ceil(distance / step)));
+
+        for (int i = 0; i <= sample_num; ++i)
+        {
+            const double ratio = static_cast<double>(i) / static_cast<double>(sample_num);
+            if (mapPtr->query(start + ratio * delta) != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    template <typename Map>
+    inline std::vector<Eigen::Vector3d> shortcutPath(const std::vector<Eigen::Vector3d> &path,
+                                                     const Map *mapPtr,
+                                                     const double sample_step = -1.0)
+    {
+        if (path.size() <= 2)
+        {
+            return path;
+        }
+
+        std::vector<Eigen::Vector3d> shortcut;
+        shortcut.reserve(path.size());
+        shortcut.push_back(path.front());
+
+        int anchor = 0;
+        const int last_idx = static_cast<int>(path.size()) - 1;
+        while (anchor < last_idx)
+        {
+            int next = last_idx;
+            while (next > anchor + 1 &&
+                   !lineOfSight(path[static_cast<std::size_t>(anchor)],
+                                path[static_cast<std::size_t>(next)],
+                                mapPtr,
+                                sample_step))
+            {
+                --next;
+            }
+
+            shortcut.push_back(path[static_cast<std::size_t>(next)]);
+            anchor = next;
+        }
+
+        return prunePolyline(shortcut, 1.0e-6);
+    }
+
+    inline std::vector<Eigen::Vector3d> resamplePath(const std::vector<Eigen::Vector3d> &path,
+                                                     const double spacing)
+    {
+        if (path.size() <= 2)
+        {
+            return path;
+        }
+
+        const double clamped_spacing = std::max(spacing, 1.0e-3);
+        std::vector<double> accum_len(path.size(), 0.0);
+        for (std::size_t i = 1; i < path.size(); ++i)
+        {
+            accum_len[i] = accum_len[i - 1] + (path[i] - path[i - 1]).norm();
+        }
+
+        const double total_len = accum_len.back();
+        if (total_len < clamped_spacing)
+        {
+            return {path.front(), path.back()};
+        }
+
+        const int segment_num = std::max(1, static_cast<int>(std::ceil(total_len / clamped_spacing)));
+        std::vector<Eigen::Vector3d> sampled;
+        sampled.reserve(static_cast<std::size_t>(segment_num) + 1U);
+
+        auto sampleAtArcLength = [&](const double arc_len) -> Eigen::Vector3d
+        {
+            if (arc_len <= 0.0)
+            {
+                return path.front();
+            }
+            if (arc_len >= total_len)
+            {
+                return path.back();
+            }
+
+            for (std::size_t i = 1; i < accum_len.size(); ++i)
+            {
+                if (arc_len <= accum_len[i])
+                {
+                    const double seg_len = std::max(accum_len[i] - accum_len[i - 1], 1.0e-9);
+                    const double ratio = (arc_len - accum_len[i - 1]) / seg_len;
+                    return path[i - 1] * (1.0 - ratio) + path[i] * ratio;
+                }
+            }
+            return path.back();
+        };
+
+        for (int i = 0; i <= segment_num; ++i)
+        {
+            const double arc_len = total_len * static_cast<double>(i) / static_cast<double>(segment_num);
+            sampled.push_back(sampleAtArcLength(arc_len));
+        }
+
+        return sampled;
+    }
+
+    template <typename Map>
+    inline void refineSeedPath(const std::vector<Eigen::Vector3d> &raw_path,
+                               const Map *mapPtr,
+                               const double progress,
+                               const double range,
+                               std::vector<Eigen::Vector3d> &refined_path)
+    {
+        refined_path = raw_path;
+        if (raw_path.size() <= 2 || mapPtr == nullptr)
+        {
+            return;
+        }
+
+        const double resolution = std::max(mapPtr->getResolution(), 1.0e-3);
+        const double min_seg_len = std::max(1.5 * resolution, std::min(0.35 * progress, 0.4 * range));
+        const double visibility_step = std::max(0.5 * resolution, 1.0e-3);
+        const double resample_spacing =
+            std::max(2.0 * resolution, std::min(0.8 * progress, std::max(3.0 * resolution, 0.6 * range)));
+
+        std::vector<Eigen::Vector3d> cleaned = prunePolyline(raw_path, min_seg_len);
+        cleaned = shortcutPath(cleaned, mapPtr, visibility_step);
+        cleaned = resamplePath(cleaned, resample_spacing);
+        cleaned = prunePolyline(cleaned, 0.8 * min_seg_len, 0.9995);
+
+        if (cleaned.size() >= 2)
+        {
+            cleaned.front() = raw_path.front();
+            cleaned.back() = raw_path.back();
+            refined_path.swap(cleaned);
+        }
+    }
 
     template <typename Map>
     inline double planPath(const Eigen::Vector3d &s,
