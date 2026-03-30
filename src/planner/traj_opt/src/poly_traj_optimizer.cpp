@@ -288,15 +288,29 @@ namespace ego_planner
                                     pow((swarm_clearance_ + swarm_trajs_->at(i).des_clearance) * 1.25, 2);
           }
         }
+        const bool flag_collision_free =
+            isTrajectoryCollisionFree(mincoOpt_.getTrajectory());
 
-        if (!flag_swarm_too_close && isTrajectoryCollisionFree(mincoOpt_.getTrajectory()))
+        const bool flag_inside_corridor =
+            isTrajectoryInsideCorridor(mincoOpt_.getTrajectory(),
+                                      corridor_hpolys,
+                                      corridor_clearance_);
+
+        if (!flag_swarm_too_close && flag_collision_free && flag_inside_corridor)
         {
           flag_success = true;
         }
-        else if (flag_swarm_too_close)
+        else
         {
-          wei_swarm_mod_ *= 2.0;
           restart_nums++;
+          if (!flag_inside_corridor)
+          {
+            corridor_cost_manager_.wei_corridor *= 2.0;
+          }
+          if (flag_swarm_too_close)
+          {
+            wei_swarm_mod_ *= 2.0;
+          }
         }
       }
       else
@@ -1125,6 +1139,46 @@ namespace ego_planner
       }
     }
 
+    return true;
+  }
+
+  bool PolyTrajOptimizer::pointInsidePolytope(const Eigen::Vector3d &pt,
+                                            const spatial_map::PolyhedronH &hpoly,
+                                            double margin) const
+  {
+    for (int i = 0; i < hpoly.rows(); ++i)
+    {
+      if (hpoly.row(i).head<3>().dot(pt) > hpoly(i, 3) - margin)
+        return false;
+    }
+    return true;
+  }
+
+  bool PolyTrajOptimizer::pointInsideCorridor(const Eigen::Vector3d &pt,
+                                              const spatial_map::PolyhedraH &corridor_hpolys,
+                                              double margin) const
+  {
+    for (const auto &poly : corridor_hpolys)
+    {
+      if (pointInsidePolytope(pt, poly, margin))
+        return true;
+    }
+    return false;
+  }
+
+  bool PolyTrajOptimizer::isTrajectoryInsideCorridor(const MINCOTraj &traj,
+                                                    const spatial_map::PolyhedraH &corridor_hpolys,
+                                                    double margin) const
+  {
+    const double total_duration = traj.getTotalDuration();
+    const double dt = std::min(0.05, 0.5 * corridor_smoothing_);
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
+      if (!pointInsideCorridor(pt, corridor_hpolys, margin))
+        return false;
+    }
     return true;
   }
 

@@ -39,7 +39,8 @@ namespace ego_planner
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit,
-        const bool flag_randomPolyTraj, const bool touch_goal);
+        const bool flag_randomPolyTraj, const bool touch_goal,
+        const bool force_plain = false);
 
     bool reboundReplan(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
@@ -48,9 +49,27 @@ namespace ego_planner
         const spatial_map::PolyhedraH &corridor_hpolys, const bool touch_goal);
 
     bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
+                                      const Eigen::Vector3d &start_vel,
                                       const Eigen::Vector3d &goal_pt,
                                       std::vector<Eigen::Vector3d> &guide_path,
-                                      spatial_map::PolyhedraH &corridor_hpolys);
+                                      spatial_map::PolyhedraH &corridor_hpolys,
+                                      bool force_refresh = false);
+
+    bool pointInsidePolytope(const Eigen::Vector3d& pt,
+                         const spatial_map::PolyhedronH& hpoly,
+                         double margin = 0.0) const;
+
+    bool pointInsideCorridor(const Eigen::Vector3d& pt,
+                            const spatial_map::PolyhedraH& corridor,
+                            double margin = 0.0) const;
+
+    Eigen::Vector3d computeLaunchPoint(const Eigen::Vector3d& start_pt,
+                                      const Eigen::Vector3d& start_vel) const;
+
+    bool buildWarmStartFromCurrentTraj(const Eigen::Vector3d& start_pt,
+                                      const Eigen::Vector3d& goal_pt,
+                                      Eigen::MatrixXd& inner_pts,
+                                      Eigen::VectorXd& durations) const;
         
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
@@ -89,10 +108,17 @@ namespace ego_planner
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
     AStar::Ptr local_astar_;
     Eigen::Vector3i local_astar_pool_size_{Eigen::Vector3i::Zero()};
+    Eigen::Vector3d corridor_seed_goal_;
+    Eigen::Vector3d corridor_seed_start_;
     bool use_sfc_corridor_{false};
     double sfc_path_timeout_{0.2};
     double sfc_progress_{0.75};
     double sfc_range_{0.8};
+    double sfc_launch_dist_{0.8};
+    double sfc_reuse_goal_tol_{0.6};
+    double sfc_corridor_margin_{0.05};
+    double sfc_near_goal_radius_{0.8};
+    int replan_seq_{0};
 
     int continous_failures_count_{0};
 

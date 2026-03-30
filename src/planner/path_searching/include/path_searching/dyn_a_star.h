@@ -52,6 +52,7 @@ class AStar
 {
 private:
 	GridMap::Ptr grid_map_;
+	double search_timeout_{0.2};
 
 	inline void coord2gridIndexFast(const double x, const double y, const double z, int &id_x, int &id_y, int &id_z);
 
@@ -94,7 +95,34 @@ public:
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 
 	std::vector<Eigen::Vector3d> getPath();
+
+	void setSearchTimeOut(double t);
+
+	bool lineCollisionFree(const Eigen::Vector3d& p0,
+                              const Eigen::Vector3d& p1,
+                              double step);
+
 };
+
+inline bool AStar::lineCollisionFree(const Eigen::Vector3d &p0, const Eigen::Vector3d &p1, double step) 
+{
+	const double len = (p1 - p0).norm();
+	if (len < 1e-6) return true;
+
+	const int n = std::max(2, static_cast<int>(std::ceil(len / step)));
+	for (int i = 0; i <= n; ++i)
+	{
+		double a = static_cast<double>(i) / static_cast<double>(n);
+		Eigen::Vector3d pt = (1.0 - a) * p0 + a * p1;
+		if (checkOccupancy(pt)) return false;
+	}
+	return true;
+}
+
+inline void AStar::setSearchTimeOut(double t)
+{
+	search_timeout_ = std::max(0.01,t);
+}
 
 inline double AStar::getHeu(GridNodePtr node1, GridNodePtr node2)
 {

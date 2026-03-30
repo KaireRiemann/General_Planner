@@ -124,8 +124,6 @@ namespace ego_planner
     // ====================================================================
     // --- Decision logic (implemented in poly_traj_optimizer.cpp) ---
     // ====================================================================
-
-    /** @brief 优化主循环 (包含 L-BFGS 调用及 Rebound 逻辑) */
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             double &final_cost);
@@ -135,7 +133,6 @@ namespace ego_planner
                             const spatial_map::PolyhedraH &corridor_hpolys,
                             double &final_cost);
 
-    /** @brief 细致碰撞检测及 A* 引导点生成 */
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
                                               const MINCOTraj &traj,
                                               const Eigen::MatrixXd &init_points,
@@ -145,6 +142,19 @@ namespace ego_planner
     bool allowRebound(void);
     std::vector<Types::ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);
     bool isTrajectoryCollisionFree(const MINCOTraj &traj) const;
+
+
+    bool isTrajectoryInsideCorridor(const MINCOTraj &traj,
+                                const spatial_map::PolyhedraH &corridor_hpolys,
+                                double margin) const;
+
+    bool pointInsidePolytope(const Eigen::Vector3d &pt,
+                            const spatial_map::PolyhedronH &hpoly,
+                            double margin) const;
+
+    bool pointInsideCorridor(const Eigen::Vector3d &pt,
+                            const spatial_map::PolyhedraH &corridor_hpolys,
+                            double margin) const;
 
   public:
     using Ptr = std::unique_ptr<PolyTrajOptimizer>;

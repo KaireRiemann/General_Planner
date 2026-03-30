@@ -68,6 +68,15 @@ namespace ego_planner
     int target_type_; // 1 mannual select, 2 hard code
     double no_replan_thresh_, replan_thresh_;
     double waypoints_[50][3];
+    double min_replan_interval_{0.15};
+    double corridor_fail_cooldown_{0.25};
+    double near_goal_replan_radius_{0.8};
+    double corridor_check_margin_{0.05};
+    int corridor_disable_fail_threshold_{3};
+
+    double last_replan_time_{-1.0};
+    double last_corridor_fail_time_{-1.0};
+    int corridor_fail_count_{0};
     int waypoint_num_, wpt_id_;
     double planning_horizen_;
     double emergency_time_;
@@ -91,6 +100,8 @@ namespace ego_planner
     Eigen::Vector3d corridor_seed_start_;
     Eigen::Vector3d corridor_seed_goal_;
     bool have_local_corridor_seed_{false};
+    bool corridor_disabled_for_goal_{false};
+    Eigen::Vector3d corridor_disabled_goal_{Eigen::Vector3d::Zero()};
 
     /* ROS utils */
     ros::NodeHandle node_;

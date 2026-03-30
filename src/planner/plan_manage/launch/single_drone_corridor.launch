@@ -49,7 +49,7 @@
         <arg name="map_size_z" value="$(arg map_size_z)"/>
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="launch_prefix" value="$(arg launch_prefix)"/>
-        <arg name="flight_type" value="2"/>
+        <arg name="flight_type" value="1"/>
         <arg name="point_num" value="1"/>
         <arg name="target0_x" value="$(arg target_x)"/>
         <arg name="target0_y" value="$(arg target_y)"/>
@@ -59,4 +59,8 @@
         <arg name="sfc_progress" value="$(arg sfc_progress)"/>
         <arg name="sfc_range" value="$(arg sfc_range)"/>
     </include>
+
+    <node name="rviz" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find ego_planner)/launch/include/default_sfc.rviz"> 
+    </node>
 </launch>

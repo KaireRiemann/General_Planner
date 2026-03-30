@@ -37,5 +37,9 @@
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="flight_type" value="1"/>
     </include>
+
+    <node pkg ="rviz" name ="rviz" type="rviz" output ="screen"
+            args="-d $(find ego_planner)/launch/include/default.rviz"> 
+    </node>
 </launch>
 

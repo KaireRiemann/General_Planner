@@ -127,7 +127,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
                 return false;
             }
 
-            occ = checkOccupancy(Index2Coord(start_idx));
+            occ = checkOccupancy(Index2Coord(end_idx));
             if (occ == -1)
             {
                 ROS_WARN("[Astar] End point outside the map region.");
@@ -147,6 +147,20 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
     step_size_ = step_size;
     inv_step_size_ = 1 / step_size;
     center_ = (start_pt + end_pt) / 2;
+
+    if (lineCollisionFree(start_pt, end_pt, step_size))
+    {
+        gridPath_.clear();
+        Vector3i sidx, eidx;
+        if (!Coord2Index(start_pt, sidx) || !Coord2Index(end_pt, eidx))
+            return ASTAR_RET::INIT_ERR;
+
+        GridNodeMap_[sidx(0)][sidx(1)][sidx(2)]->index = sidx;
+        GridNodeMap_[eidx(0)][eidx(1)][eidx(2)]->index = eidx;
+        gridPath_.push_back(GridNodeMap_[eidx(0)][eidx(1)][eidx(2)]);
+        gridPath_.push_back(GridNodeMap_[sidx(0)][sidx(1)][sidx(2)]);
+        return ASTAR_RET::SUCCESS;
+    }
 
     Vector3i start_idx, end_idx;
     if (!ConvertToIndexAndAdjustStartEndPoints(start_pt, end_pt, start_idx, end_idx))
@@ -254,7 +268,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                     }
                 }
         ros::Time time_2 = ros::Time::now();
-        if ((time_2 - time_1).toSec() > 0.2)
+        if ((time_2 - time_1).toSec() > search_timeout_)
         {
             ROS_WARN("Failed in A star path searching !!! 0.2 seconds time limit exceeded.");
             return ASTAR_RET::SEARCH_ERR;
