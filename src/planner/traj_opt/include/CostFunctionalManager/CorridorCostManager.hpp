@@ -10,6 +10,7 @@
 #include "SpatialMap/SFCCommonTypes.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace cost_functional
@@ -144,6 +145,38 @@ namespace cost_functional
         }
 
     private:
+        double accumulatePolyPenalty(const spatial_map::PolyhedronH &poly,
+                                     const Types::Vec3 &position,
+                                     Types::Vec3 &grad_position) const
+        {
+            const double smooth_eps = std::max(corridor_smoothing, 1.0e-6);
+
+            double cost = 0.0;
+            for (int i = 0; i < poly.rows(); ++i)
+            {
+                const Types::Vec3 outer_normal = poly.row(i).head<3>().transpose();
+                if (outer_normal.squaredNorm() <= 1.0e-12)
+                {
+                    continue;
+                }
+
+                const double violation =
+                    outer_normal.dot(position) + poly(i, 3) + corridor_clearance;
+
+                double penalty = 0.0;
+                double penalty_grad = 0.0;
+                if (!cost_functional::smoothedL1(violation, smooth_eps, penalty, penalty_grad))
+                {
+                    continue;
+                }
+
+                grad_position += wei_corridor * penalty_grad * outer_normal;
+                cost += wei_corridor * penalty;
+            }
+
+            return cost;
+        }
+
         int resolvePolyId(const int seg_idx) const
         {
             if (!h_polys || h_polys->empty())
@@ -177,35 +210,7 @@ namespace cost_functional
                 return 0.0;
             }
 
-            const auto &poly = (*h_polys)[poly_id];
-            const double smooth_eps = std::max(corridor_smoothing, 1.0e-6);
-
-            double cost = 0.0;
-            for (int i = 0; i < poly.rows(); ++i)
-            {
-                const Types::Vec3 normal = poly.row(i).head<3>().transpose();
-                const double normal_norm = normal.norm();
-                if (normal_norm <= 1.0e-9)
-                {
-                    continue;
-                }
-
-                const double signed_distance =
-                    (normal.dot(position) + poly(i, 3)) / normal_norm;
-                const double violation = signed_distance + corridor_clearance;
-
-                double penalty = 0.0;
-                double penalty_grad = 0.0;
-                if (!cost_functional::smoothedL1(violation, smooth_eps, penalty, penalty_grad))
-                {
-                    continue;
-                }
-
-                grad_position += wei_corridor * penalty_grad * (normal / normal_norm);
-                cost += wei_corridor * penalty;
-            }
-
-            return cost;
+            return accumulatePolyPenalty((*h_polys)[poly_id], position, grad_position);
         }
     };
 

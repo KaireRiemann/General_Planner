@@ -9,6 +9,8 @@
     <arg name="init_z"/>
     <arg name="flight_type" default="2"/>
     <arg name="use_sfc_corridor" default="false"/>
+    <arg name="use_esdf" default="false"/>
+    <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
     <arg name="sfc_range" default="0.8"/>
@@ -59,6 +61,8 @@
         <arg name="planning_horizon" value="7.5" />
         <arg name="use_multitopology_trajs" value="false" />
         <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)" />
+        <arg name="use_esdf" value="$(arg use_esdf)" />
+        <arg name="enable_esdf" value="$(arg enable_esdf)" />
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
         <arg name="sfc_progress" value="$(arg sfc_progress)" />
         <arg name="sfc_range" value="$(arg sfc_range)" />

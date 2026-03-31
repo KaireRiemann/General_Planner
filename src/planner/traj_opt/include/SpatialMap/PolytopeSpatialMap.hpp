@@ -67,16 +67,13 @@ struct PolytopeSpatialMap
         xi.setConstant(std::sqrt(1.0 / static_cast<double>(k)));
 
         lbfgs::lbfgs_parameter_t params;
-        lbfgs::lbfgs_load_default_parameters(&params); // 最好先加载一次默认参数防脏数据
-        params.past = 0;
+        lbfgs::lbfgs_load_default_parameters(&params); 
         params.delta = 1.0e-5;
         params.g_epsilon = FLT_EPSILON;
         params.max_iterations = 128;
 
         double min_cost = 0.0;
         
-        // --- 核心修复 1：适配 C-Style 调用签名 ---
-        // 参数依次为：维度(n), 数据指针(x), 成本指针(fx), 评估函数, 步长函数, 进度函数, 实例指针(instance), 优化参数
         lbfgs::lbfgs_optimize(
             xi.size(), 
             xi.data(), 
@@ -128,13 +125,11 @@ struct PolytopeSpatialMap
     }
 
 private:
-    // --- 核心修复 2：完全匹配 lbfgs_evaluate_t 的 C-Style 签名 ---
     static double costTinyNLS(void *ptr,
                               const double *x,
                               double *g,
                               const int n)
     {
-        // 使用 Eigen::Map 零开销包装 C 数组，完美复用后续的 Eigen 代码！
         Eigen::Map<const Eigen::VectorXd> xi(x, n);
         Eigen::Map<Eigen::VectorXd> gradXi(g, n);
 

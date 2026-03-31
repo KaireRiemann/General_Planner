@@ -67,7 +67,10 @@ struct MappingParameters
   double fading_time_;
 
   /* visualization and computation time display */
+  bool enable_esdf_;
   bool show_occ_time_;
+  bool show_esdf_time_;
+  double esdf_slice_height_;
 };
 
 // intermediate mapping data for fusion
@@ -96,6 +99,11 @@ struct MappingData
 
   std::vector<double> occupancy_buffer_;
   std::vector<uint16_t> occupancy_buffer_inflate_;
+  std::vector<double> distance_buffer_;
+  std::vector<double> distance_buffer_neg_;
+  std::vector<double> distance_buffer_all_;
+  std::vector<double> tmp_buffer1_;
+  std::vector<double> tmp_buffer2_;
 
   // camera position and pose data
 
@@ -109,7 +117,7 @@ struct MappingData
 
   // flags of map state
 
-  bool occ_need_update_, local_updated_;
+  bool occ_need_update_, local_updated_, esdf_need_update_;
   bool has_first_depth_;
   bool has_odom_;
 
@@ -132,6 +140,10 @@ struct MappingData
   vector<Eigen::Vector3i> cache_voxel_;
   int cache_voxel_cnt_;
 
+  double esdf_time_{0.0};
+  double max_esdf_time_{0.0};
+  int esdf_update_count_{0};
+
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
 
@@ -145,6 +157,10 @@ public:
   inline int getOccupancy(Eigen::Vector3d pos) const;
   inline int getInflateOccupancy(Eigen::Vector3d pos) const;
   inline double getResolution() const;
+  inline double getDistance(const Eigen::Vector3d &pos) const;
+  inline double getDistance(const Eigen::Vector3i &idx) const;
+  double getDistWithGradTrilinear(const Eigen::Vector3d &pos, Eigen::Vector3d &grad) const;
+  inline bool esdfEnabled() const;
   inline int query(const Eigen::Vector3d &pos) const;
   inline Eigen::Vector3d getUpdatedBoxLow() const;
   inline Eigen::Vector3d getUpdatedBoxHigh() const;
@@ -172,6 +188,7 @@ private:
   inline int globalIdx2InfBufIdx(const Eigen::Vector3i &id) const;        // 2.2ns
   inline Eigen::Vector3i BufIdx2GlobalIdx(size_t address) const;          // 10.18ns
   inline Eigen::Vector3i infBufIdx2GlobalIdx(size_t address) const;       // 10.18ns
+  inline void boundInfIndex(Eigen::Vector3i &idx) const;
   inline bool isInBuf(const Eigen::Vector3d &pos) const;
   inline bool isInBuf(const Eigen::Vector3i &idx) const;
   inline bool isInInfBuf(const Eigen::Vector3d &pos) const;
@@ -179,6 +196,7 @@ private:
 
   void publishMap();
   void publishMapInflate();
+  void publishESDF();
 
   // get depth image and camera pose
   void depthPoseCallback(const sensor_msgs::ImageConstPtr &img,
@@ -190,6 +208,7 @@ private:
 
   // update occupancy by raycasting
   void updateOccupancyCallback(const ros::TimerEvent & /*event*/);
+  void updateESDFCallback(const ros::TimerEvent & /*event*/);
   void visCallback(const ros::TimerEvent & /*event*/);
   void fadingCallback(const ros::TimerEvent & /*event*/);
 
@@ -200,6 +219,10 @@ private:
   void projectDepthImage();
   void raycastProcess();
   void clearAndInflateLocalMap();
+  void updateESDF3d();
+
+  template <typename F_get_val, typename F_set_val>
+  void fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end) const;
 
   inline void changeInfBuf(const bool dir, const int inf_buf_idx, const Eigen::Vector3i global_idx);
   inline int setCacheOccupancy(Eigen::Vector3d pos, int occ);
@@ -227,8 +250,8 @@ private:
   SynchronizerImageOdom sync_image_odom_;
 
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
-  ros::Publisher map_pub_, map_inf_pub_;
-  ros::Timer occ_timer_, vis_timer_, fading_timer_;
+  ros::Publisher map_pub_, map_inf_pub_, esdf_pub_;
+  ros::Timer occ_timer_, esdf_timer_, vis_timer_, fading_timer_;
 
   //
   uniform_real_distribution<double> rand_noise_;
@@ -413,6 +436,52 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos) const
     return -1;
 
   return int(md_.occupancy_buffer_inflate_[globalIdx2InfBufIdx(pos2GlobalIdx(pos))]);
+}
+
+inline void GridMap::boundInfIndex(Eigen::Vector3i &idx) const
+{
+  idx(0) = std::max(std::min(idx(0), md_.ringbuffer_inf_upbound3i_(0)), md_.ringbuffer_inf_lowbound3i_(0));
+  idx(1) = std::max(std::min(idx(1), md_.ringbuffer_inf_upbound3i_(1)), md_.ringbuffer_inf_lowbound3i_(1));
+  idx(2) = std::max(std::min(idx(2), md_.ringbuffer_inf_upbound3i_(2)), md_.ringbuffer_inf_lowbound3i_(2));
+}
+
+inline double GridMap::getDistance(const Eigen::Vector3d &pos) const
+{
+  if (!mp_.enable_esdf_)
+  {
+    return 0.0;
+  }
+
+  if (!isInInfBuf(pos))
+  {
+    return 0.0;
+  }
+
+  Eigen::Vector3i idx = pos2GlobalIdx(pos);
+  boundInfIndex(idx);
+  return md_.distance_buffer_all_[globalIdx2InfBufIdx(idx)];
+}
+
+inline double GridMap::getDistance(const Eigen::Vector3i &idx) const
+{
+  if (!mp_.enable_esdf_)
+  {
+    return 0.0;
+  }
+
+  if (!isInInfBuf(idx))
+  {
+    return 0.0;
+  }
+
+  Eigen::Vector3i clamped = idx;
+  boundInfIndex(clamped);
+  return md_.distance_buffer_all_[globalIdx2InfBufIdx(clamped)];
+}
+
+inline bool GridMap::esdfEnabled() const
+{
+  return mp_.enable_esdf_;
 }
 
 inline bool GridMap::isInBuf(const Eigen::Vector3d &pos) const

@@ -381,6 +381,11 @@ namespace ego_planner
       time_segs[i] = initT(i);
     }
 
+    const MINCOTraj init_traj = generateTrajectory(iniState, finState, initInnerPts, initT);
+    const Eigen::MatrixXd init_cps = init_traj.getInitConstraintPoints(cps_num_prePiece_);
+    cps_.resize_cp(init_cps.cols());
+    cps_.points = init_cps;
+
     distanceFieldMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
 
     distance_field_cost_manager_.grid_map = grid_map_;

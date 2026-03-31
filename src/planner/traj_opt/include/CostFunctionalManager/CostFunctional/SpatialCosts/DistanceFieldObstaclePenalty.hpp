@@ -1,7 +1,7 @@
 #ifndef DISTANCE_FIELD_OBSTACLE_PENALTY_HPP
 #define DISTANCE_FIELD_OBSTACLE_PENALTY_HPP
 
-#include "PlanningTypesAdapter.hpp"
+#include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include "CostFunctionalManager/CostFunctional/PenaltyUtils.hpp"
 
 namespace cost_functional
@@ -24,7 +24,7 @@ namespace cost_functional
             return 0.0;
         } 
 
-        p_grad += weight * penalty_grad * (-esdf_gradient);
+        p_grad += weight * penalty_grad * (-sdf_grad);
         return weight * penalty; 
     }
 

@@ -1,5 +1,7 @@
 #include "plan_env/grid_map.h"
 
+#include <limits>
+
 void GridMap::initMap(ros::NodeHandle &nh)
 {
   node_ = nh;
@@ -39,7 +41,10 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/fading_time", mp_.fading_time_, 1000.0);
   node_.param("grid_map/min_ray_length", mp_.min_ray_length_, 0.1);
 
+  node_.param("grid_map/enable_esdf", mp_.enable_esdf_, true);
   node_.param("grid_map/show_occ_time", mp_.show_occ_time_, false);
+  node_.param("grid_map/show_esdf_time", mp_.show_esdf_time_, false);
+  node_.param("grid_map/esdf_slice_height", mp_.esdf_slice_height_, 1.0);
 
   mp_.inf_grid_ = ceil((mp_.obstacles_inflation_ - 1e-5) / mp_.resolution_);
   if (mp_.inf_grid_ > 4)
@@ -76,6 +81,11 @@ void GridMap::initMap(ros::NodeHandle &nh)
 
   md_.occupancy_buffer_ = vector<double>(buffer_size, mp_.clamp_min_log_);
   md_.occupancy_buffer_inflate_ = vector<uint16_t>(buffer_inf_size, 0);
+  md_.distance_buffer_ = vector<double>(buffer_inf_size, 10000.0);
+  md_.distance_buffer_neg_ = vector<double>(buffer_inf_size, 10000.0);
+  md_.distance_buffer_all_ = vector<double>(buffer_inf_size, 10000.0);
+  md_.tmp_buffer1_ = vector<double>(buffer_inf_size, 0.0);
+  md_.tmp_buffer2_ = vector<double>(buffer_inf_size, 0.0);
 
   md_.count_hit_and_miss_ = vector<short>(buffer_size, 0);
   md_.count_hit_ = vector<short>(buffer_size, 0);
@@ -122,20 +132,279 @@ void GridMap::initMap(ros::NodeHandle &nh)
       node_.subscribe<sensor_msgs::PointCloud2>("grid_map/cloud", 10, &GridMap::cloudCallback, this);
 
   occ_timer_ = node_.createTimer(ros::Duration(0.032), &GridMap::updateOccupancyCallback, this);
+  esdf_timer_ = node_.createTimer(ros::Duration(0.05), &GridMap::updateESDFCallback, this);
   vis_timer_ = node_.createTimer(ros::Duration(0.125), &GridMap::visCallback, this);
   if (mp_.fading_time_ > 0)
     fading_timer_ = node_.createTimer(ros::Duration(0.5), &GridMap::fadingCallback, this);
 
   map_pub_ = node_.advertise<sensor_msgs::PointCloud2>("grid_map/occupancy", 10);
   map_inf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("grid_map/occupancy_inflate", 10);
+  esdf_pub_ = node_.advertise<sensor_msgs::PointCloud2>("grid_map/esdf", 10);
 
   md_.occ_need_update_ = false;
+  md_.esdf_need_update_ = mp_.enable_esdf_;
   md_.has_first_depth_ = false;
   md_.has_odom_ = false;
   md_.last_occ_update_time_.fromSec(0);
 
   md_.flag_have_ever_received_depth_ = false;
   md_.flag_depth_odom_timeout_ = false;
+}
+
+template <typename F_get_val, typename F_set_val>
+void GridMap::fillESDF(F_get_val f_get_val, F_set_val f_set_val, int start, int end) const
+{
+  if (end < start)
+  {
+    return;
+  }
+
+  std::vector<int> v(static_cast<std::size_t>(end - start + 1), start);
+  std::vector<double> z(static_cast<std::size_t>(end - start + 2), std::numeric_limits<double>::infinity());
+
+  int k = 0;
+  v[0] = start;
+  z[0] = -std::numeric_limits<double>::infinity();
+  z[1] = std::numeric_limits<double>::infinity();
+
+  for (int q = start + 1; q <= end; ++q)
+  {
+    double s = 0.0;
+    while (true)
+    {
+      const int vk = v[static_cast<std::size_t>(k)];
+      s = ((f_get_val(q) + static_cast<double>(q * q)) -
+           (f_get_val(vk) + static_cast<double>(vk * vk))) /
+          (2.0 * static_cast<double>(q - vk));
+      if (s > z[static_cast<std::size_t>(k)])
+      {
+        break;
+      }
+      --k;
+    }
+
+    ++k;
+    v[static_cast<std::size_t>(k)] = q;
+    z[static_cast<std::size_t>(k)] = s;
+    z[static_cast<std::size_t>(k + 1)] = std::numeric_limits<double>::infinity();
+  }
+
+  k = 0;
+  for (int q = start; q <= end; ++q)
+  {
+    while (z[static_cast<std::size_t>(k + 1)] < static_cast<double>(q))
+    {
+      ++k;
+    }
+    const double val = static_cast<double>((q - v[static_cast<std::size_t>(k)]) *
+                                           (q - v[static_cast<std::size_t>(k)])) +
+                       f_get_val(v[static_cast<std::size_t>(k)]);
+    f_set_val(q, val);
+  }
+}
+
+void GridMap::updateESDF3d()
+{
+  if (!mp_.have_initialized_)
+  {
+    return;
+  }
+
+  const Eigen::Vector3i min_esdf = md_.ringbuffer_inf_lowbound3i_;
+  const Eigen::Vector3i max_esdf = md_.ringbuffer_inf_upbound3i_;
+  const double inf = std::numeric_limits<double>::max();
+
+  const auto isOccupied = [&](const Eigen::Vector3i &idx) -> bool
+  {
+    if (!isInInfBuf(idx))
+    {
+      return true;
+    }
+
+    if (mp_.enable_virtual_walll_)
+    {
+      const Eigen::Vector3d pos = globalIdx2Pos(idx);
+      if (pos.z() >= mp_.virtual_ceil_ || pos.z() <= mp_.virtual_ground_)
+      {
+        return true;
+      }
+    }
+
+    return md_.occupancy_buffer_inflate_[globalIdx2InfBufIdx(idx)] != 0;
+  };
+
+  for (int x = min_esdf.x(); x <= max_esdf.x(); ++x)
+  {
+    for (int y = min_esdf.y(); y <= max_esdf.y(); ++y)
+    {
+      fillESDF(
+          [&](int z)
+          {
+            return isOccupied(Eigen::Vector3i(x, y, z)) ? 0.0 : inf;
+          },
+          [&](int z, double val)
+          {
+            md_.tmp_buffer1_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))] = val;
+          },
+          min_esdf.z(), max_esdf.z());
+    }
+  }
+
+  for (int x = min_esdf.x(); x <= max_esdf.x(); ++x)
+  {
+    for (int z = min_esdf.z(); z <= max_esdf.z(); ++z)
+    {
+      fillESDF(
+          [&](int y)
+          {
+            return md_.tmp_buffer1_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))];
+          },
+          [&](int y, double val)
+          {
+            md_.tmp_buffer2_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))] = val;
+          },
+          min_esdf.y(), max_esdf.y());
+    }
+  }
+
+  for (int y = min_esdf.y(); y <= max_esdf.y(); ++y)
+  {
+    for (int z = min_esdf.z(); z <= max_esdf.z(); ++z)
+    {
+      fillESDF(
+          [&](int x)
+          {
+            return md_.tmp_buffer2_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))];
+          },
+          [&](int x, double val)
+          {
+            md_.distance_buffer_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))] =
+                mp_.resolution_ * std::sqrt(val);
+          },
+          min_esdf.x(), max_esdf.x());
+    }
+  }
+
+  for (int x = min_esdf.x(); x <= max_esdf.x(); ++x)
+  {
+    for (int y = min_esdf.y(); y <= max_esdf.y(); ++y)
+    {
+      fillESDF(
+          [&](int z)
+          {
+            return isOccupied(Eigen::Vector3i(x, y, z)) ? inf : 0.0;
+          },
+          [&](int z, double val)
+          {
+            md_.tmp_buffer1_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))] = val;
+          },
+          min_esdf.z(), max_esdf.z());
+    }
+  }
+
+  for (int x = min_esdf.x(); x <= max_esdf.x(); ++x)
+  {
+    for (int z = min_esdf.z(); z <= max_esdf.z(); ++z)
+    {
+      fillESDF(
+          [&](int y)
+          {
+            return md_.tmp_buffer1_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))];
+          },
+          [&](int y, double val)
+          {
+            md_.tmp_buffer2_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))] = val;
+          },
+          min_esdf.y(), max_esdf.y());
+    }
+  }
+
+  for (int y = min_esdf.y(); y <= max_esdf.y(); ++y)
+  {
+    for (int z = min_esdf.z(); z <= max_esdf.z(); ++z)
+    {
+      fillESDF(
+          [&](int x)
+          {
+            return md_.tmp_buffer2_[globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z))];
+          },
+          [&](int x, double val)
+          {
+            const int idx = globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z));
+            md_.distance_buffer_neg_[idx] = mp_.resolution_ * std::sqrt(val);
+          },
+          min_esdf.x(), max_esdf.x());
+    }
+  }
+
+  for (int x = min_esdf.x(); x <= max_esdf.x(); ++x)
+  {
+    for (int y = min_esdf.y(); y <= max_esdf.y(); ++y)
+    {
+      for (int z = min_esdf.z(); z <= max_esdf.z(); ++z)
+      {
+        const int idx = globalIdx2InfBufIdx(Eigen::Vector3i(x, y, z));
+        md_.distance_buffer_all_[idx] = md_.distance_buffer_[idx];
+        if (md_.distance_buffer_neg_[idx] > 0.0)
+        {
+          md_.distance_buffer_all_[idx] += (-md_.distance_buffer_neg_[idx] + mp_.resolution_);
+        }
+      }
+    }
+  }
+}
+
+double GridMap::getDistWithGradTrilinear(const Eigen::Vector3d &pos, Eigen::Vector3d &grad) const
+{
+  if (!mp_.enable_esdf_)
+  {
+    grad.setZero();
+    return 0.0;
+  }
+
+  if (!isInInfBuf(pos))
+  {
+    grad.setZero();
+    return 0.0;
+  }
+
+  const Eigen::Vector3d pos_m = pos - 0.5 * mp_.resolution_ * Eigen::Vector3d::Ones();
+  Eigen::Vector3i idx = pos2GlobalIdx(pos_m);
+  boundInfIndex(idx);
+
+  const Eigen::Vector3d idx_pos = globalIdx2Pos(idx);
+  const Eigen::Vector3d diff = (pos - idx_pos) * mp_.resolution_inv_;
+
+  double values[2][2][2];
+  for (int x = 0; x < 2; ++x)
+  {
+    for (int y = 0; y < 2; ++y)
+    {
+      for (int z = 0; z < 2; ++z)
+      {
+        const Eigen::Vector3i current_idx = idx + Eigen::Vector3i(x, y, z);
+        values[x][y][z] = getDistance(current_idx);
+      }
+    }
+  }
+
+  const double v00 = (1.0 - diff.x()) * values[0][0][0] + diff.x() * values[1][0][0];
+  const double v01 = (1.0 - diff.x()) * values[0][0][1] + diff.x() * values[1][0][1];
+  const double v10 = (1.0 - diff.x()) * values[0][1][0] + diff.x() * values[1][1][0];
+  const double v11 = (1.0 - diff.x()) * values[0][1][1] + diff.x() * values[1][1][1];
+  const double v0 = (1.0 - diff.y()) * v00 + diff.y() * v10;
+  const double v1 = (1.0 - diff.y()) * v01 + diff.y() * v11;
+  const double dist = (1.0 - diff.z()) * v0 + diff.z() * v1;
+
+  grad.z() = (v1 - v0) * mp_.resolution_inv_;
+  grad.y() = ((1.0 - diff.z()) * (v10 - v00) + diff.z() * (v11 - v01)) * mp_.resolution_inv_;
+  grad.x() = (1.0 - diff.z()) * (1.0 - diff.y()) * (values[1][0][0] - values[0][0][0]);
+  grad.x() += (1.0 - diff.z()) * diff.y() * (values[1][1][0] - values[0][1][0]);
+  grad.x() += diff.z() * (1.0 - diff.y()) * (values[1][0][1] - values[0][0][1]);
+  grad.x() += diff.z() * diff.y() * (values[1][1][1] - values[0][1][1]);
+  grad.x() *= mp_.resolution_inv_;
+
+  return dist;
 }
 
 void GridMap::updateOccupancyCallback(const ros::TimerEvent & /*event*/)
@@ -183,6 +452,32 @@ void GridMap::updateOccupancyCallback(const ros::TimerEvent & /*event*/)
   }
 
   md_.occ_need_update_ = false;
+  md_.esdf_need_update_ = mp_.enable_esdf_;
+}
+
+void GridMap::updateESDFCallback(const ros::TimerEvent & /*event*/)
+{
+  if (!mp_.enable_esdf_ || !mp_.have_initialized_ || !md_.esdf_need_update_)
+    return;
+
+  const ros::Time t0 = ros::Time::now();
+  updateESDF3d();
+  const ros::Time t1 = ros::Time::now();
+
+  const double dt = (t1 - t0).toSec();
+  md_.esdf_time_ += dt;
+  md_.max_esdf_time_ = std::max(md_.max_esdf_time_, dt);
+  ++md_.esdf_update_count_;
+
+  if (mp_.show_esdf_time_)
+  {
+    printf("ESDF(ms): cur t = %lf, avg t = %lf, max t = %lf\n",
+           dt * 1000.0,
+           md_.esdf_time_ / std::max(md_.esdf_update_count_, 1) * 1000.0,
+           md_.max_esdf_time_ * 1000.0);
+  }
+
+  md_.esdf_need_update_ = false;
 }
 
 void GridMap::visCallback(const ros::TimerEvent & /*event*/)
@@ -193,6 +488,10 @@ void GridMap::visCallback(const ros::TimerEvent & /*event*/)
   ros::Time t0 = ros::Time::now();
   publishMapInflate();
   publishMap();
+  if (mp_.enable_esdf_)
+  {
+    publishESDF();
+  }
   ros::Time t1 = ros::Time::now();
 
   if (mp_.show_occ_time_)
@@ -227,6 +526,8 @@ void GridMap::fadingCallback(const ros::TimerEvent & /*event*/)
   {
     printf("Fading(ms):%f\n", (t1 - t0).toSec() * 1000);
   }
+
+  md_.esdf_need_update_ = mp_.enable_esdf_;
 }
 
 void GridMap::depthPoseCallback(const sensor_msgs::ImageConstPtr &img,
@@ -380,6 +681,8 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
       }
     }
   }
+
+  md_.esdf_need_update_ = mp_.enable_esdf_;
 }
 
 void GridMap::extrinsicCallback(const nav_msgs::OdometryConstPtr &odom)
@@ -900,6 +1203,49 @@ void GridMap::publishMapInflate()
 
   pcl::toROSMsg(cloud, cloud_msg);
   map_inf_pub_.publish(cloud_msg);
+}
+
+void GridMap::publishESDF()
+{
+  if (esdf_pub_.getNumSubscribers() <= 0 || !mp_.have_initialized_)
+    return;
+
+  pcl::PointCloud<pcl::PointXYZI> cloud;
+  const double slice_z = std::max(md_.ringbuffer_inf_lowbound3d_(2) + 0.5 * mp_.resolution_,
+                                  std::min(mp_.esdf_slice_height_,
+                                           md_.ringbuffer_inf_upbound3d_(2) - 0.5 * mp_.resolution_));
+
+  if (md_.ringbuffer_inf_upbound3d_(0) - md_.ringbuffer_inf_lowbound3d_(0) <= mp_.resolution_ ||
+      md_.ringbuffer_inf_upbound3d_(1) - md_.ringbuffer_inf_lowbound3d_(1) <= mp_.resolution_)
+  {
+    return;
+  }
+
+  for (double xd = md_.ringbuffer_inf_lowbound3d_(0) + mp_.resolution_ / 2;
+       xd < md_.ringbuffer_inf_upbound3d_(0);
+       xd += mp_.resolution_)
+  {
+    for (double yd = md_.ringbuffer_inf_lowbound3d_(1) + mp_.resolution_ / 2;
+         yd < md_.ringbuffer_inf_upbound3d_(1);
+         yd += mp_.resolution_)
+    {
+      pcl::PointXYZI pt;
+      pt.x = xd;
+      pt.y = yd;
+      pt.z = slice_z;
+      pt.intensity = static_cast<float>(getDistance(Eigen::Vector3d(xd, yd, slice_z)));
+      cloud.push_back(pt);
+    }
+  }
+
+  cloud.width = cloud.points.size();
+  cloud.height = 1;
+  cloud.is_dense = true;
+  cloud.header.frame_id = mp_.frame_id_;
+  sensor_msgs::PointCloud2 cloud_msg;
+
+  pcl::toROSMsg(cloud, cloud_msg);
+  esdf_pub_.publish(cloud_msg);
 }
 
 void GridMap::testIndexingCost()

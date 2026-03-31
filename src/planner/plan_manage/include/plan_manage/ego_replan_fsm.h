@@ -84,6 +84,7 @@ namespace ego_planner
     bool enable_fail_safe_;
     bool enable_ground_height_measurement_;
     bool use_sfc_corridor_;
+    bool use_esdf_;
     bool flag_escape_emergency_;
 
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
@@ -120,6 +121,7 @@ namespace ego_planner
     bool callEmergencyStop(Eigen::Vector3d stop_pos);
 
     /* local planning */
+    bool currentTrajStillUsable(double lookahead_time) const;
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
                                       const Eigen::Vector3d &start_vel,

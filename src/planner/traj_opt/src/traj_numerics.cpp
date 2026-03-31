@@ -161,6 +161,9 @@ namespace ego_planner
           grad_vec,
           time_cost_wrapper,
           opt->distance_field_cost_manager_);
+
+      opt->cps_.points = opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+      opt->cps_.cp_size = opt->cps_.points.cols();
     }
     else
     {
