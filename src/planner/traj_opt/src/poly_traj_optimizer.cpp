@@ -171,6 +171,15 @@ namespace
 
 namespace ego_planner
 {
+  void PolyTrajOptimizer::resetSpatialOptimizationContext()
+  {
+    corridor_vpolys_.clear();
+    corridor_vpoly_idx_.resize(0);
+    corridor_hpoly_idx_.resize(0);
+    corridorSpatialMap_.reset(nullptr, nullptr, 0);
+    corridor_cost_manager_.setCorridor(nullptr, nullptr);
+  }
+
   // =====================================================
   //  Main optimization loop (decision logic)
   // =====================================================
@@ -180,6 +189,7 @@ namespace ego_planner
       double &final_cost)
   {
     optimize_mode_ = MODE_PLAIN;
+    resetSpatialOptimizationContext();
 
     if (initInnerPts.cols() != (initT.size() - 1))
     {
@@ -345,6 +355,7 @@ namespace ego_planner
       double &final_cost)
   {
     optimize_mode_ = MODE_ESDF;
+    resetSpatialOptimizationContext();
 
     if (initInnerPts.cols() != (initT.size() - 1))
     {
@@ -512,6 +523,7 @@ namespace ego_planner
       double &final_cost)
   {
     optimize_mode_ = MODE_CORRIDOR;
+    resetSpatialOptimizationContext();
 
     if (initInnerPts.cols() != (initT.size() - 1))
     {

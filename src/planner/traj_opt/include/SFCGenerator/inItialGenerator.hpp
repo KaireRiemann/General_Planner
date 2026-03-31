@@ -1,0 +1,6 @@
+#ifndef INITIAL_GENERATOR_HPP
+#define INITIAL_GENERATOR_HPP
+
+
+
+#endif

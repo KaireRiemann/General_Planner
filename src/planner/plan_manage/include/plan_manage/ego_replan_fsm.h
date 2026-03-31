@@ -83,8 +83,6 @@ namespace ego_planner
     bool flag_realworld_experiment_;
     bool enable_fail_safe_;
     bool enable_ground_height_measurement_;
-    bool use_sfc_corridor_;
-    bool use_esdf_;
     bool flag_escape_emergency_;
 
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
@@ -96,13 +94,6 @@ namespace ego_planner
     Eigen::Vector3d local_target_pt_, local_target_vel_; // local target state
     Eigen::Vector3d odom_pos_, odom_vel_, odom_acc_;     // odometry state
     std::vector<Eigen::Vector3d> wps_;
-    std::vector<Eigen::Vector3d> local_guide_path_;
-    spatial_map::PolyhedraH local_corridor_hpolys_;
-    Eigen::Vector3d corridor_seed_start_;
-    Eigen::Vector3d corridor_seed_goal_;
-    bool have_local_corridor_seed_{false};
-    bool corridor_disabled_for_goal_{false};
-    Eigen::Vector3d corridor_disabled_goal_{Eigen::Vector3d::Zero()};
 
     /* ROS utils */
     ros::NodeHandle node_;
@@ -123,9 +114,6 @@ namespace ego_planner
     /* local planning */
     bool currentTrajStillUsable(double lookahead_time) const;
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
-    bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
-                                      const Eigen::Vector3d &start_vel,
-                                      const Eigen::Vector3d &start_acc);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);
 

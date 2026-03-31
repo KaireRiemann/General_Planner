@@ -11,6 +11,7 @@
 #include <plan_env/grid_map.h>
 #include <SpatialMap/SFCCommonTypes.hpp>
 #include <path_searching/dyn_a_star.h>
+#include <path_searching/simple_a_star.hpp>
 
 namespace ego_planner
 {
@@ -29,6 +30,7 @@ namespace ego_planner
     enum CorridorFailureType
     {
       FAIL_NONE = 0,
+      FAIL_LOCAL_TARGET_INVALID,
       FAIL_GUIDE_PATH_TOO_CLOSE,
       FAIL_CORRIDOR_GENERATION,
       FAIL_CORRIDOR_INIT,
@@ -50,12 +52,6 @@ namespace ego_planner
         const Eigen::Vector3d &end_vel, const bool flag_polyInit,
         const bool flag_randomPolyTraj, const bool touch_goal,
         const bool force_plain = false);
-
-    bool reboundReplan(
-        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
-        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
-        const Eigen::Vector3d &end_vel, const std::vector<Eigen::Vector3d> &guide_path,
-        const spatial_map::PolyhedraH &corridor_hpolys, const bool touch_goal);
 
     bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
                                       const Eigen::Vector3d &start_vel,
@@ -106,6 +102,8 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
+    bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
+                             Eigen::Vector3d &safe_target) const;
     bool searchLocalGuidePath(const Eigen::Vector3d &start_pt,
                               const Eigen::Vector3d &goal_pt,
                               std::vector<Eigen::Vector3d> &guide_path);
@@ -113,6 +111,19 @@ namespace ego_planner
                                const Eigen::Vector3d &start_vel,
                                const Eigen::Vector3d &goal_pt,
                                std::vector<Eigen::Vector3d> &guide_path);
+    bool sparsifyGuidePath(const std::vector<Eigen::Vector3d> &dense_path,
+                           std::vector<Eigen::Vector3d> &sparse_path) const;
+    bool buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
+                                     const Eigen::Vector3d &start_vel,
+                                     const Eigen::Vector3d &start_acc,
+                                     const Eigen::Vector3d &target_pt,
+                                     const Eigen::Vector3d &target_vel,
+                                     const std::vector<Eigen::Vector3d> &guide_path,
+                                     MINCOTraj3D &init_traj,
+                                     Eigen::MatrixXd &inner_pts,
+                                     Eigen::VectorXd &durations,
+                                     MINCOBoundaryState3D &head_state,
+                                     MINCOBoundaryState3D &tail_state) const;
     bool generateSafeFlightCorridor(const std::vector<Eigen::Vector3d> &guide_path,
                                     spatial_map::PolyhedraH &corridor_hpolys) const;
     bool buildGuideInitialGuess(const std::vector<Eigen::Vector3d> &guide_path,
@@ -153,13 +164,36 @@ namespace ego_planner
                                   double &min_clearance,
                                   double &avg_clearance,
                                   double &path_length) const;
+    double computeTrajectoryMinSdf(const MINCOTraj3D &traj) const;
     void reportCorridorFailure(CorridorFailureType type,
                                const std::string &detail);
+
+    bool prepareLocalAStarPath(const Eigen::Vector3d &start_pt,
+                             const Eigen::Vector3d &goal_pt,
+                             std::vector<Eigen::Vector3d> &dense_path,
+                             Eigen::Vector3d &safe_goal) const;
+
+    bool buildInitTrajectoryFromGuidePath(const Eigen::Vector3d &start_pt,
+                                        const Eigen::Vector3d &start_vel,
+                                        const Eigen::Vector3d &start_acc,
+                                        const Eigen::Vector3d &target_pt,
+                                        const Eigen::Vector3d &target_vel,
+                                        const std::vector<Eigen::Vector3d> &sparse_path,
+                                        MINCOTraj3D &init_traj,
+                                        Eigen::MatrixXd &innerPts,
+                                        Eigen::VectorXd &durations,
+                                        MINCOBoundaryState3D &headState,
+                                        MINCOBoundaryState3D &tailState);
+
+    bool generateCorridorFromInitTrajectory(const MINCOTraj3D &init_traj,
+                                          spatial_map::PolyhedraH &corridor_hpolys,
+                                          std::vector<Eigen::Vector3d> *seed_pts = nullptr) const;
 
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
     AStar::Ptr local_astar_;
     Eigen::Vector3i local_astar_pool_size_{Eigen::Vector3i::Zero()};
+    SimpleAStar::Ptr simple_astar_;
     Eigen::Vector3d corridor_seed_goal_;
     Eigen::Vector3d corridor_seed_start_;
     bool use_sfc_corridor_{false};
@@ -175,6 +209,9 @@ namespace ego_planner
     double guide_push_step_{0.08};
     int guide_push_max_iter_{4};
     double guide_smooth_weight_{0.25};
+    int guide_sparse_min_inner_{3};
+    int guide_sparse_max_inner_{5};
+    double guide_turn_angle_deg_{25.0};
     double warm_start_prefix_time_{0.5};
     int warm_start_prefix_max_points_{4};
     int replan_seq_{0};

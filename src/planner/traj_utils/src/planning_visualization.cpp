@@ -14,6 +14,7 @@ namespace ego_planner
     optimal_list_pub = nh.advertise<visualization_msgs::Marker>("optimal_list", 2);
     failed_list_pub = nh.advertise<visualization_msgs::Marker>("failed_list", 2);
     a_star_list_pub = nh.advertise<visualization_msgs::Marker>("a_star_list", 20);
+    front_path_list_pub = nh.advertise<visualization_msgs::Marker>("front_path_list",20);
     corridor_pub = nh.advertise<visualization_msgs::MarkerArray>("sfc_corridor", 2);
 
     // intermediate_pt0_pub = nh.advertise<visualization_msgs::Marker>("pt0_dur_opt", 10);
@@ -214,6 +215,16 @@ namespace ego_planner
 
     Eigen::Vector4d color(0, 0, 1, 1);
     displayMarkerList(init_list_pub, init_pts, scale, color, id);
+  }
+
+  void PlanningVisualization::displayFrontendList(vector<Eigen::Vector3d> guide_path, const double scale, int id)
+  {
+    if (front_path_list_pub.getNumSubscribers() == 0)
+    {
+      return;
+    }
+    Eigen::Vector4d color(0, 1, 0, 1);
+    displayMarkerList(front_path_list_pub, guide_path, scale, color, id);
   }
 
   void PlanningVisualization::displayMultiOptimalPathList(vector<vector<Eigen::Vector3d>> optimal_trajs, const double scale) // zxzxzx

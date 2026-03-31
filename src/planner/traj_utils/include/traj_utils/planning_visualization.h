@@ -24,6 +24,7 @@ namespace ego_planner
     ros::Publisher optimal_list_pub;
     ros::Publisher failed_list_pub;
     ros::Publisher a_star_list_pub;
+    ros::Publisher front_path_list_pub;
     ros::Publisher guide_vector_pub;
     ros::Publisher corridor_pub;
 
@@ -57,6 +58,7 @@ namespace ego_planner
     void displayOptimalList(Eigen::MatrixXd optimal_pts, int id);
     void displayFailedList(Eigen::MatrixXd failed_pts, int id);
     void displayAStarList(std::vector<std::vector<Eigen::Vector3d>> a_star_paths, int id);
+    void displayFrontendList(std::vector<Eigen::Vector3d> guide_path, const double scale, int id);
     void displayDebugPathList(const vector<Eigen::Vector3d> &pts, double scale,
                               const Eigen::Vector4d &color, int id, bool show_sphere = true);
     void displayArrowList(ros::Publisher &pub, const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id);

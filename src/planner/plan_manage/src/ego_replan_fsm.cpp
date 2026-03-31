@@ -20,8 +20,6 @@ namespace ego_planner
     nh.param("fsm/realworld_experiment", flag_realworld_experiment_, false);
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
-    nh.param("manager/use_sfc_corridor", use_sfc_corridor_, false);
-    nh.param("manager/use_esdf", use_esdf_, false);
     nh.param("fsm/min_replan_interval", min_replan_interval_, 0.15);
     nh.param("fsm/corridor_fail_cooldown", corridor_fail_cooldown_, 0.25);
     nh.param("fsm/near_goal_replan_radius", near_goal_replan_radius_, 0.8);
@@ -118,27 +116,13 @@ namespace ego_planner
     {
       if (planner_manager_->pp_.drone_id <= 0 || (planner_manager_->pp_.drone_id >= 1 && have_recv_pre_agent_))
       {
-        const double now = ros::Time::now().toSec();
-        const bool in_cooldown =
-            (use_sfc_corridor_ || use_esdf_) &&
-            (last_corridor_fail_time_ > 0.0) &&
-            (now - last_corridor_fail_time_ < corridor_fail_cooldown_);
-
-        if (in_cooldown)
-        {
-          goto force_return;
-        }
-
-        bool success = planFromGlobalTraj((use_sfc_corridor_ || use_esdf_) ? 1 : 10);
+        bool success = planFromGlobalTraj(1);
         if (success)
         {
-          corridor_fail_count_ = 0;
           changeFSMExecState(EXEC_TRAJ, "FSM");
         }
         else
         {
-          last_corridor_fail_time_ = now;
-          corridor_fail_count_++;
           ROS_WARN("Failed to generate the first trajectory, keep trying");
           changeFSMExecState(SEQUENTIAL_START, "FSM"); 
         }
@@ -148,7 +132,7 @@ namespace ego_planner
 
     case GEN_NEW_TRAJ:
     {
-      bool success = planFromGlobalTraj((use_sfc_corridor_ || use_esdf_) ? 1 : 10); 
+      bool success = planFromGlobalTraj(10); 
       if (success)
       {
         changeFSMExecState(EXEC_TRAJ, "FSM");
@@ -160,42 +144,15 @@ namespace ego_planner
 
     case REPLAN_TRAJ:
     {
-        const bool arrived_goal =
-            touch_goal_ &&
-            (final_goal_ - odom_pos_).norm() < std::max(0.25, 0.5 * near_goal_replan_radius_) &&
-            odom_vel_.norm() < 0.3;
+      if (planFromLocalTraj(1))
+      {
+        changeFSMExecState(EXEC_TRAJ, "FSM");
+      }
+      else
+      {
+        changeFSMExecState(REPLAN_TRAJ, "FSM");
+      }
 
-        if (arrived_goal)
-        {
-          have_target_ = false;
-          have_trigger_ = false;
-          have_local_corridor_seed_ = false;
-          changeFSMExecState(WAIT_TARGET, "FSM");
-          break;
-        }
-
-        const double now = ros::Time::now().toSec();
-        const bool in_cooldown =
-            (last_corridor_fail_time_ > 0.0) &&
-            (now - last_corridor_fail_time_ < corridor_fail_cooldown_);
-
-        if (in_cooldown)
-        {
-          goto force_return;
-        }
-
-        if (planFromLocalTraj(1))
-        {
-          last_replan_time_ = now;
-          corridor_fail_count_ = 0;
-          changeFSMExecState(EXEC_TRAJ, "FSM");
-        }
-        else
-        {
-          last_corridor_fail_time_ = now;
-          corridor_fail_count_++;
-          changeFSMExecState(REPLAN_TRAJ, "FSM");
-        }
       break;
     }
 
@@ -229,9 +186,6 @@ namespace ego_planner
       {
         have_target_ = false;
         have_trigger_ = false;
-        have_local_corridor_seed_ = false;
-        corridor_fail_count_ = 0;
-        corridor_disabled_for_goal_ = false;
 
         if (target_type_ == TARGET_TYPE::PRESET_TARGET)
         {
@@ -382,27 +336,6 @@ namespace ego_planner
         }
       }
 
-      if (!dangerous &&
-          use_sfc_corridor_ &&
-          !near_goal &&
-          !local_corridor_hpolys_.empty())
-      {
-        if (!planner_manager_->pointInsideCorridor(pt,
-                                                  local_corridor_hpolys_,
-                                                  corridor_check_margin_))
-        {
-          outside_cnt++;
-          if (outside_cnt >= 3)
-          {
-            trajectory_leaves_corridor = true;
-            break;
-          }
-        }
-        else
-        {
-          outside_cnt = 0;
-        }
-      }
 
       if (dangerous)
       {
@@ -479,13 +412,6 @@ namespace ego_planner
       {
         return false;
       }
-
-      if (use_sfc_corridor_ &&
-          !local_corridor_hpolys_.empty() &&
-          !planner_manager_->pointInsideCorridor(pt, local_corridor_hpolys_, corridor_check_margin_))
-      {
-        return false;
-      }
     }
 
     return true;
@@ -498,46 +424,12 @@ namespace ego_planner
         local_target_pt_, local_target_vel_,
         touch_goal_);
 
-    if (use_sfc_corridor_)
-    {
-      if (!prepareLocalGuideAndCorridor(start_pt_, start_vel_, start_acc_))
-      {
-        last_corridor_fail_time_ = ros::Time::now().toSec();
-        corridor_fail_count_++;
-        if (currentTrajStillUsable(std::max(replan_thresh_, 0.8)))
-        {
-          return true;
-        }
-        return false;
-      }
-
-      bool plan_success = planner_manager_->reboundReplan(
-          start_pt_, start_vel_, start_acc_,
-          local_target_pt_, local_target_vel_,
-          local_guide_path_, local_corridor_hpolys_, touch_goal_);
-
-      if (!plan_success && currentTrajStillUsable(std::max(replan_thresh_, 0.8)))
-      {
-        return true;
-      }
-
-      if (plan_success)
-      {
-        corridor_fail_count_ = 0;
-        traj_utils::PolyTraj poly_msg;
-        polyTraj2ROSMsg(poly_msg);
-        poly_traj_pub_.publish(poly_msg);
-        broadcast_ploytraj_pub_.publish(poly_msg);
-      }
-      return plan_success;
-    }
-
     bool plan_success = planner_manager_->reboundReplan(
         start_pt_, start_vel_, start_acc_,
         local_target_pt_, local_target_vel_,
         flag_use_poly_init, flag_randomPolyTraj, touch_goal_);
 
-    if (!plan_success && use_esdf_ && currentTrajStillUsable(std::max(replan_thresh_, 0.8)))
+    if (!plan_success  && currentTrajStillUsable(std::max(replan_thresh_, 0.8)))
     {
       return true;
     }
@@ -552,48 +444,15 @@ namespace ego_planner
     return plan_success;
   }
 
-  bool EGOReplanFSM::prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
-                                                  const Eigen::Vector3d &start_vel,
-                                                  const Eigen::Vector3d &start_acc)
-  {
-    (void)start_vel;
-    (void)start_acc;
-
-    planner_manager_->getLocalTarget(
-        planning_horizen_, start_pt, final_goal_,
-        local_target_pt_, local_target_vel_,
-        touch_goal_);
-
-    const double pos_tol = std::max(planner_manager_->grid_map_->getResolution() * 2.0, 0.2);
-    if (have_local_corridor_seed_ &&
-        !local_corridor_hpolys_.empty() &&
-        planner_manager_->pointInsideCorridor(start_pt, local_corridor_hpolys_, corridor_check_margin_) &&
-        (corridor_seed_start_ - start_pt).norm() < pos_tol &&
-        (corridor_seed_goal_ - local_target_pt_).norm() < std::max(pos_tol, near_goal_replan_radius_))
-    {
-      return true;
-    }
-
-    if (!planner_manager_->prepareLocalGuideAndCorridor(start_pt, start_vel_, local_target_pt_,
-                                                        local_guide_path_, local_corridor_hpolys_))
-    {
-      have_local_corridor_seed_ = false;
-      return false;
-    }
-
-    corridor_seed_start_ = start_pt;
-    corridor_seed_goal_ = local_guide_path_.empty() ? local_target_pt_ : local_guide_path_.back();
-    have_local_corridor_seed_ = true;
-    return true;
-  }
-
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times) 
   {
     start_pt_ = odom_pos_;
     start_vel_ = odom_vel_;
     start_acc_.setZero();
 
-    bool flag_random_poly_init = (!(use_sfc_corridor_ || use_esdf_)) && (timesOfConsecutiveStateCalls().first != 1);
+    bool flag_random_poly_init;
+    if (timesOfConsecutiveStateCalls().first == 1)
+      flag_random_poly_init = false;
 
     for (int i = 0; i < trial_times; i++)
     {
@@ -613,18 +472,6 @@ namespace ego_planner
     start_pt_ = info->traj.evaluate(t_abs, 0);
     start_vel_ = info->traj.evaluate(t_abs, 1);
     start_acc_ = info->traj.evaluate(t_abs, 2);
-
-    if (use_sfc_corridor_ || use_esdf_)
-    {
-      for (int i = 0; i < trial_times; ++i)
-      {
-        if (callReboundReplan(true, false))
-        {
-          return true;
-        }
-      }
-      return false;
-    }
 
     bool success = callReboundReplan(false, false);
 
@@ -657,8 +504,7 @@ namespace ego_planner
     {
       final_goal_ = next_wp;
       corridor_fail_count_ = 0;
-      corridor_disabled_for_goal_ = false;
-      corridor_disabled_goal_ = next_wp;
+
 
       constexpr double step_size_t = 0.1;
       int i_end = floor(planner_manager_->traj_.global_traj.duration / step_size_t);
@@ -671,14 +517,12 @@ namespace ego_planner
 
       have_target_ = true;
       have_new_target_ = true;
-      have_local_corridor_seed_ = false;
-
-      if (use_sfc_corridor_ && have_odom_)
+     
+      if ( have_odom_)
       {
         start_pt_ = odom_pos_;
         start_vel_ = odom_vel_;
         start_acc_.setZero();
-        prepareLocalGuideAndCorridor(start_pt_, start_vel_, start_acc_);
       }
 
       if (exec_state_ != WAIT_TARGET)

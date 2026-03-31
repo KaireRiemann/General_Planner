@@ -85,6 +85,7 @@ namespace ego_planner
     double t_now_;
 
     using PtsChk_t = std::vector<std::vector<std::pair<double,Eigen::Vector3d>>>;
+    void resetSpatialOptimizationContext();
 
     //typedef std::vector<std::vector<std::pair<double, Eigen::Vector3d>>> PtsChk_t;
 
