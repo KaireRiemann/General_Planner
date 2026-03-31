@@ -1,4 +1,7 @@
 #include "optimizer/poly_traj_optimizer.h"
+#include "SFCGenerator/geo_utils.hpp"
+
+#include <limits>
 
 using namespace std;
 
@@ -6,6 +9,165 @@ using namespace std;
 #define PRINTF_COND(STR, ...) \
   if (VERBOSE_OUTPUT)         \
   printf(STR, __VA_ARGS__)
+
+namespace
+{
+  spatial_map::PolyhedronV makeSpatialVertexPoly(const Eigen::Matrix3Xd &vertices)
+  {
+    spatial_map::PolyhedronV mapped;
+    if (vertices.cols() <= 0)
+    {
+      return mapped;
+    }
+
+    mapped.resize(3, vertices.cols());
+    mapped.col(0) = vertices.col(0);
+    for (int i = 1; i < vertices.cols(); ++i)
+    {
+      mapped.col(i) = vertices.col(i) - vertices.col(0);
+    }
+    return mapped;
+  }
+
+  bool processCorridor(const spatial_map::PolyhedraH &hpolys,
+                       spatial_map::PolyhedraV &vpolys)
+  {
+    vpolys.clear();
+    if (hpolys.empty())
+    {
+      return false;
+    }
+
+    vpolys.reserve(hpolys.size() * 2);
+    for (std::size_t i = 0; i < hpolys.size(); ++i)
+    {
+      Eigen::Matrix3Xd vertices;
+      if (!geo_utils::enumerateVs(hpolys[i], vertices) || vertices.cols() <= 0)
+      {
+        Eigen::Vector3d inner;
+        if (geo_utils::findInterior(hpolys[i], inner))
+        {
+          vertices.resize(3, 1);
+          vertices.col(0) = inner;
+        }
+        else if (!vpolys.empty())
+        {
+          vpolys.push_back(vpolys.back());
+          if (i + 1 < hpolys.size())
+          {
+            vpolys.push_back(vpolys.back());
+          }
+          continue;
+        }
+        else
+        {
+          return false;
+        }
+      }
+
+      const spatial_map::PolyhedronV base_poly = makeSpatialVertexPoly(vertices);
+      vpolys.push_back(base_poly);
+
+      if (i + 1 < hpolys.size())
+      {
+        Eigen::MatrixX4d overlap_h(hpolys[i].rows() + hpolys[i + 1].rows(), 4);
+        overlap_h.topRows(hpolys[i].rows()) = hpolys[i];
+        overlap_h.bottomRows(hpolys[i + 1].rows()) = hpolys[i + 1];
+
+        Eigen::Matrix3Xd overlap_vertices;
+        if (geo_utils::enumerateVs(overlap_h, overlap_vertices) && overlap_vertices.cols() > 0)
+        {
+          vpolys.push_back(makeSpatialVertexPoly(overlap_vertices));
+        }
+        else
+        {
+          vpolys.push_back(base_poly);
+        }
+      }
+    }
+
+    return !vpolys.empty();
+  }
+
+  struct TrajectoryCheckDebug
+  {
+    bool collision_detected{false};
+    double first_collision_t{-1.0};
+    Eigen::Vector3d first_collision_pt{Eigen::Vector3d::Zero()};
+    double max_corridor_violation{0.0};
+    double worst_corridor_t{-1.0};
+    Eigen::Vector3d worst_corridor_pt{Eigen::Vector3d::Zero()};
+  };
+
+  double computePolyViolation(const spatial_map::PolyhedronH &poly,
+                              const Eigen::Vector3d &pt,
+                              const double margin)
+  {
+    double worst_plane = -std::numeric_limits<double>::infinity();
+    for (int i = 0; i < poly.rows(); ++i)
+    {
+      worst_plane = std::max(worst_plane,
+                             poly.row(i).head<3>().dot(pt) + poly(i, 3) + margin);
+    }
+    return worst_plane;
+  }
+
+  double computeCorridorViolation(const spatial_map::PolyhedraH &corridor_hpolys,
+                                  const Eigen::Vector3d &pt,
+                                  const double margin)
+  {
+    if (corridor_hpolys.empty())
+    {
+      return 0.0;
+    }
+
+    double best_poly_violation = std::numeric_limits<double>::infinity();
+    for (const auto &poly : corridor_hpolys)
+    {
+      best_poly_violation = std::min(best_poly_violation,
+                                     computePolyViolation(poly, pt, margin));
+    }
+    return best_poly_violation;
+  }
+
+  TrajectoryCheckDebug analyzeTrajectoryCheck(const ego_planner::MINCOTraj &traj,
+                                             const GridMap::Ptr &grid_map,
+                                             const spatial_map::PolyhedraH &corridor_hpolys,
+                                             const double corridor_margin,
+                                             const double max_vel)
+  {
+    TrajectoryCheckDebug debug;
+    const double total_duration = traj.getTotalDuration();
+    const double map_dt =
+        grid_map ? std::min(0.02, grid_map->getResolution() / std::max(max_vel, 0.1) * 0.5) : 0.02;
+    const double dt = std::max(0.005, map_dt);
+
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
+
+      if (grid_map && !debug.collision_detected &&
+          grid_map->getInflateOccupancy(pt) != 0)
+      {
+        debug.collision_detected = true;
+        debug.first_collision_t = sample_t;
+        debug.first_collision_pt = pt;
+      }
+
+      const double violation =
+          computeCorridorViolation(corridor_hpolys, pt, corridor_margin);
+      if (violation > debug.max_corridor_violation)
+      {
+        debug.max_corridor_violation = violation;
+        debug.worst_corridor_t = sample_t;
+        debug.worst_corridor_pt = pt;
+      }
+    }
+
+    return debug;
+  }
+} // namespace
 
 namespace ego_planner
 {
@@ -17,7 +179,7 @@ namespace ego_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       double &final_cost)
   {
-    corridor_mode_ = false;
+    optimize_mode_ = MODE_PLAIN;
 
     if (initInnerPts.cols() != (initT.size() - 1))
     {
@@ -177,13 +339,174 @@ namespace ego_planner
     return flag_success;
   }
 
+  bool PolyTrajOptimizer::optimizeTrajectoryWithDistanceField(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      double &final_cost)
+  {
+    optimize_mode_ = MODE_ESDF;
+
+    if (initInnerPts.cols() != (initT.size() - 1))
+    {
+      ROS_ERROR("initInnerPts.cols() != (initT.size()-1)");
+      return false;
+    }
+    if (!grid_map_ || !grid_map_->esdfEnabled())
+    {
+      ROS_ERROR("ESDF optimization requested but ESDF map is disabled.");
+      return false;
+    }
+
+    int restart_nums = 0;
+    bool flag_success = false, flag_swarm_too_close = false;
+    wei_swarm_mod_ = wei_swarm_;
+
+    t_now_ = ros::Time::now().toSec();
+    piece_num_ = initT.size();
+
+    distanceFieldMincoOpt_.setEnergyWeight(rho_energy_);
+    distanceFieldMincoOpt_.setSamplesPerPiece(std::max(cps_num_prePiece_ * 3, 12));
+
+    Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
+    waypoints.row(0) = iniState.col(0).transpose();
+    for (int i = 0; i < initInnerPts.cols(); ++i)
+    {
+      waypoints.row(i + 1) = initInnerPts.col(i).transpose();
+    }
+    waypoints.row(piece_num_) = finState.col(0).transpose();
+
+    std::vector<double> time_segs(piece_num_);
+    for (int i = 0; i < piece_num_; ++i)
+    {
+      time_segs[i] = initT(i);
+    }
+
+    distanceFieldMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+
+    distance_field_cost_manager_.grid_map = grid_map_;
+    distance_field_cost_manager_.cps = &cps_;
+    distance_field_cost_manager_.swarm_traj = swarm_trajs_;
+    distance_field_cost_manager_.wei_dist = wei_dist_;
+    distance_field_cost_manager_.wei_swarm = wei_swarm_mod_;
+    distance_field_cost_manager_.wei_feas = wei_feas_;
+    distance_field_cost_manager_.wei_sqrvar = wei_sqrvar_;
+    distance_field_cost_manager_.safe_margin = obs_clearance_;
+    distance_field_cost_manager_.swarm_clearance = swarm_clearance_;
+    distance_field_cost_manager_.max_vel = max_vel_;
+    distance_field_cost_manager_.max_acc = max_acc_;
+    distance_field_cost_manager_.max_jer = max_jer_;
+    distance_field_cost_manager_.drone_id = drone_id_;
+    distance_field_cost_manager_.t_now = t_now_;
+    distance_field_cost_manager_.touch_goal = touch_goal_;
+    distance_field_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
+    Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess();
+    variable_num_ = x0.size();
+
+    double x_init[variable_num_];
+    memcpy(x_init, x0.data(), variable_num_ * sizeof(double));
+
+    min_ellip_dist2_.resize(swarm_trajs_ ? swarm_trajs_->size() : 0);
+
+    lbfgs::lbfgs_parameter_t lbfgs_params;
+    lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
+    lbfgs_params.mem_size = 16;
+    lbfgs_params.max_iterations = 200;
+    lbfgs_params.min_step = 1e-32;
+    lbfgs_params.past = 3;
+    lbfgs_params.delta = 1.0e-2;
+
+    const auto computeMinSdf = [&](const MINCOTraj &traj) -> double
+    {
+      const double total_duration = traj.getTotalDuration();
+      const double dt = std::max(0.01, std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1)));
+      double min_sdf = std::numeric_limits<double>::infinity();
+      for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+      {
+        const double sample_t = std::min(t, total_duration);
+        min_sdf = std::min(min_sdf, grid_map_->getDistance(traj.evaluate(sample_t, 0)));
+      }
+      return std::isfinite(min_sdf) ? min_sdf : 0.0;
+    };
+
+    do
+    {
+      iter_num_ = 0;
+      force_stop_type_ = DONT_STOP;
+      flag_success = false;
+      flag_swarm_too_close = false;
+      distance_field_cost_manager_.wei_swarm = wei_swarm_mod_;
+
+      const int result = lbfgs::lbfgs_optimize(
+          variable_num_,
+          x_init,
+          &final_cost,
+          PolyTrajOptimizer::costFunctionCallback,
+          NULL,
+          PolyTrajOptimizer::earlyExitCallback,
+          this,
+          &lbfgs_params);
+
+      if (result == lbfgs::LBFGS_CONVERGENCE ||
+          result == lbfgs::LBFGSERR_MAXIMUMITERATION ||
+          result == lbfgs::LBFGS_ALREADY_MINIMIZED ||
+          result == lbfgs::LBFGS_STOP ||
+          result == lbfgs::LBFGSERR_ROUNDING_ERROR)
+      {
+        if (swarm_trajs_ != nullptr)
+        {
+          for (size_t i = 0; i < swarm_trajs_->size(); ++i)
+          {
+            flag_swarm_too_close |= min_ellip_dist2_[i] <
+                                    pow((swarm_clearance_ + swarm_trajs_->at(i).des_clearance) * 1.25, 2);
+          }
+        }
+
+        const MINCOTraj &traj = distanceFieldMincoOpt_.getTrajectory();
+        const bool flag_collision_free = isTrajectoryCollisionFree(traj);
+        const double min_sdf = computeMinSdf(traj);
+        const bool flag_margin_safe = min_sdf >= std::max(0.0, 0.5 * obs_clearance_);
+
+        if (!flag_swarm_too_close && flag_collision_free && flag_margin_safe)
+        {
+          flag_success = true;
+        }
+        else
+        {
+          ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f cost=%.3f",
+                   flag_collision_free ? "yes" : "no",
+                   flag_swarm_too_close ? "no" : "yes",
+                   min_sdf,
+                   obs_clearance_,
+                   final_cost);
+          restart_nums++;
+          if (!flag_margin_safe)
+          {
+            distance_field_cost_manager_.wei_dist *= 2.0;
+          }
+          if (flag_swarm_too_close)
+          {
+            wei_swarm_mod_ *= 2.0;
+          }
+        }
+      }
+      else
+      {
+        ROS_WARN("ESDF solver error. Return = %d, %s.", result, lbfgs::lbfgs_strerror(result));
+        restart_nums++;
+      }
+    } while (!flag_success && restart_nums < 3);
+
+    return flag_success;
+  }
+
   bool PolyTrajOptimizer::optimizeTrajectory(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       const spatial_map::PolyhedraH &corridor_hpolys,
       double &final_cost)
   {
-    corridor_mode_ = true;
+    optimize_mode_ = MODE_CORRIDOR;
 
     if (initInnerPts.cols() != (initT.size() - 1))
     {
@@ -203,8 +526,8 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    mincoOpt_.setEnergyWeight(rho_energy_);
-    mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    corridorMincoOpt_.setEnergyWeight(rho_energy_);
+    corridorMincoOpt_.setSamplesPerPiece(std::max(cps_num_prePiece_ * 4, 16));
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose();
@@ -233,6 +556,7 @@ namespace ego_planner
       }
     }
 
+    const double mapping_margin = 0.0;
     Eigen::VectorXi segment_poly_idx(piece_num_);
     int poly_cursor = 0;
     for (int seg_idx = 0; seg_idx < piece_num_; ++seg_idx)
@@ -246,9 +570,9 @@ namespace ego_planner
       for (int poly_id = poly_cursor; poly_id < static_cast<int>(normalized_corridor.size()); ++poly_id)
       {
         int score = 0;
-        score += pointInsidePolytope(p0, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
-        score += pointInsidePolytope(pm, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
-        score += pointInsidePolytope(p1, normalized_corridor[poly_id], corridor_clearance_) ? 1 : 0;
+        score += pointInsidePolytope(p0, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
+        score += pointInsidePolytope(pm, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
+        score += pointInsidePolytope(p1, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
         if (score > best_score)
         {
           best_score = score;
@@ -263,9 +587,33 @@ namespace ego_planner
       poly_cursor = best_poly;
     }
 
-    mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    if (!processCorridor(normalized_corridor, corridor_vpolys_))
+    {
+      ROS_ERROR("Failed to preprocess corridor into vertex polytopes.");
+      return false;
+    }
 
-    corridor_cost_manager_.setCorridor(&normalized_corridor, &segment_poly_idx);
+    corridor_hpoly_idx_ = segment_poly_idx;
+    corridor_vpoly_idx_.resize(std::max(0, piece_num_ - 1));
+    for (int i = 0; i < piece_num_ - 1; ++i)
+    {
+      const int left_poly = corridor_hpoly_idx_(i);
+      const int right_poly = corridor_hpoly_idx_(i + 1);
+      int v_poly_id = std::min(2 * std::max(left_poly, 0),
+                               static_cast<int>(corridor_vpolys_.size()) - 1);
+      if (right_poly == left_poly + 1 &&
+          2 * left_poly + 1 < static_cast<int>(corridor_vpolys_.size()))
+      {
+        v_poly_id = 2 * left_poly + 1;
+      }
+      corridor_vpoly_idx_(i) = v_poly_id;
+    }
+
+    corridorSpatialMap_.reset(&corridor_vpolys_, &corridor_vpoly_idx_, piece_num_);
+    corridorMincoOpt_.setSpatialMap(&corridorSpatialMap_);
+    corridorMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+
+    corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
     corridor_cost_manager_.cps = &cps_;
     corridor_cost_manager_.swarm_traj = swarm_trajs_;
     corridor_cost_manager_.wei_corridor = wei_corridor_;
@@ -283,7 +631,7 @@ namespace ego_planner
     corridor_cost_manager_.touch_goal = touch_goal_;
     corridor_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
+    Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
     double x_init[variable_num_];
@@ -332,10 +680,10 @@ namespace ego_planner
           }
         }
         const bool flag_collision_free =
-            isTrajectoryCollisionFree(mincoOpt_.getTrajectory());
+            isTrajectoryCollisionFree(corridorMincoOpt_.getTrajectory());
 
         const bool flag_inside_corridor =
-            isTrajectoryInsideCorridor(mincoOpt_.getTrajectory(),
+            isTrajectoryInsideCorridor(corridorMincoOpt_.getTrajectory(),
                                       normalized_corridor,
                                       corridor_clearance_);
 
@@ -345,6 +693,29 @@ namespace ego_planner
         }
         else
         {
+          const TrajectoryCheckDebug debug =
+              analyzeTrajectoryCheck(corridorMincoOpt_.getTrajectory(),
+                                     grid_map_,
+                                     normalized_corridor,
+                                     corridor_clearance_,
+                                     max_vel_);
+
+          ROS_WARN("Corridor optimize rejected: inside_corridor=%s collision_free=%s swarm_safe=%s cost=%.3f "
+                   "first_collision_t=%.3f first_collision_pt=[%.2f %.2f %.2f] "
+                   "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f]",
+                   flag_inside_corridor ? "yes" : "no",
+                   flag_collision_free ? "yes" : "no",
+                   flag_swarm_too_close ? "no" : "yes",
+                   final_cost,
+                   debug.first_collision_t,
+                   debug.first_collision_pt.x(),
+                   debug.first_collision_pt.y(),
+                   debug.first_collision_pt.z(),
+                   debug.max_corridor_violation,
+                   debug.worst_corridor_t,
+                   debug.worst_corridor_pt.x(),
+                   debug.worst_corridor_pt.y(),
+                   debug.worst_corridor_pt.z());
           restart_nums++;
           if (!flag_inside_corridor)
           {
@@ -358,6 +729,7 @@ namespace ego_planner
       }
       else
       {
+        ROS_WARN("Corridor solver error. Return = %d, %s.", result, lbfgs::lbfgs_strerror(result));
         ROS_WARN_COND(VERBOSE_OUTPUT, "Corridor solver error. Return = %d, %s.", result, lbfgs::lbfgs_strerror(result));
         restart_nums++;
       }
@@ -1192,7 +1564,7 @@ namespace ego_planner
   {
     for (int i = 0; i < hpoly.rows(); ++i)
     {
-      if (hpoly.row(i).head<3>().dot(pt) > hpoly(i, 3) - margin)
+      if (hpoly.row(i).head<3>().dot(pt) + hpoly(i, 3) > -margin)
         return false;
     }
     return true;
@@ -1235,6 +1607,7 @@ namespace ego_planner
     nh.param("optimization/weight_obstacle", wei_obs_, -1.0);
     nh.param("optimization/weight_obstacle_soft", wei_obs_soft_, -1.0);
     nh.param("optimization/weight_corridor", wei_corridor_, 1000.0);
+    nh.param("optimization/weight_distance_field", wei_dist_, -1.0);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);
@@ -1248,6 +1621,11 @@ namespace ego_planner
     nh.param("optimization/max_vel", max_vel_, -1.0);
     nh.param("optimization/max_acc", max_acc_, -1.0);
     nh.param("optimization/max_jer", max_jer_, -1.0);
+
+    if (wei_dist_ < 0.0)
+    {
+      wei_dist_ = wei_obs_;
+    }
   }
 
   void PolyTrajOptimizer::setEnvironment(const GridMap::Ptr &map)

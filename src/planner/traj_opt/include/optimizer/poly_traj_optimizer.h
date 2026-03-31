@@ -5,6 +5,7 @@
 #include "optimizer/traj_types.h"
 #include "CostFunctionalManager/EgoCostManager.hpp"
 #include "CostFunctionalManager/CorridorCostManager.hpp"
+#include "CostFunctionalManager/DistanceFieldCostManager.hpp"
 #include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include "SpatialMap/SFCCommonTypes.hpp"
@@ -29,9 +30,15 @@ namespace ego_planner
     cost_functional::LinearTimeCost time_cost_;
     cost_functional::EgoCostFunctionalManager cost_manager_;
     cost_functional::CorridorCostFunctionalManager corridor_cost_manager_;
+    cost_functional::DistanceFieldCostFunctionalManager distance_field_cost_manager_;
 
     MINCOOpt mincoOpt_;
-    MINCOOpt::Workspace minco_workspace_;
+    ESDFMINCOOpt distanceFieldMincoOpt_;
+    CorridorMINCOOpt corridorMincoOpt_;
+    spatial_map::PolytopeSpatialMap corridorSpatialMap_;
+    spatial_map::PolyhedraV corridor_vpolys_;
+    Eigen::VectorXi corridor_vpoly_idx_;
+    Eigen::VectorXi corridor_hpoly_idx_;
 
     Types::SwarmTrajData *swarm_trajs_{NULL};
     Types::ConstraintPoints cps_;
@@ -63,11 +70,17 @@ namespace ego_planner
     double wei_sqrvar_;
     double wei_time_;
     double wei_corridor_;
+    double wei_dist_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
     double max_vel_, max_acc_, max_jer_;
     double rho_energy_{1.0};
-    bool corridor_mode_{false};
+    enum OptimizeMode
+    {
+      MODE_PLAIN = 0,
+      MODE_ESDF,
+      MODE_CORRIDOR
+    } optimize_mode_{MODE_PLAIN};
 
     double t_now_;
 
@@ -99,7 +112,7 @@ namespace ego_planner
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }
     inline const MINCOOpt &getMINCOOpt(void) const { return mincoOpt_; }
-    inline const MINCOTraj &getTrajectory(void) const { return mincoOpt_.getTrajectory(); }
+    const MINCOTraj &getTrajectory(void) const;
     inline int get_cps_num_prePiece_(void) { return cps_num_prePiece_; }
     inline double get_swarm_clearance_(void) { return swarm_clearance_; }
 
@@ -127,6 +140,10 @@ namespace ego_planner
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             double &final_cost);
+
+    bool optimizeTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                             double &final_cost);
 
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,

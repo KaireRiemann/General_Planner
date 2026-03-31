@@ -20,6 +20,7 @@ namespace ego_planner
   constexpr int MINCO_S = MINCO_TRAJ_S;
   constexpr int MINCO_ORDER = MINCO_TRAJ_ORDER;
   using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using ESDFMINCOOpt = MINCOOpt;
   using CorridorMINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
   using MINCOTraj = MINCOTraj3D;
   using Vec3 = Eigen::Vector3d;

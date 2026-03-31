@@ -219,6 +219,11 @@ public:
     grad_out.setZero();
     double total_cost = 0.0;
 
+    // Constraint elimination path:
+    //   x = [tau, xi] -> (T, P_inner) through active time/spatial maps
+    //   -> build MINCO trajectory in physical space
+    //   -> accumulate costs/partials in physical variables
+    //   -> backpropagate to the unconstrained decision vector x
     decodeDecisionVariables(x, grad_out, total_cost);
     traj_.generate(workspace_->cache_P_inner,
                    workspace_->head_state,
