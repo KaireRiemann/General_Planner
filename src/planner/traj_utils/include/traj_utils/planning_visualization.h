@@ -57,6 +57,8 @@ namespace ego_planner
     void displayOptimalList(Eigen::MatrixXd optimal_pts, int id);
     void displayFailedList(Eigen::MatrixXd failed_pts, int id);
     void displayAStarList(std::vector<std::vector<Eigen::Vector3d>> a_star_paths, int id);
+    void displayDebugPathList(const vector<Eigen::Vector3d> &pts, double scale,
+                              const Eigen::Vector4d &color, int id, bool show_sphere = true);
     void displayArrowList(ros::Publisher &pub, const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id);
     void displayCorridor(const vector<Eigen::Vector3d> &triangle_vertices,
                          const vector<Eigen::Vector3d> &edge_vertices,

@@ -308,6 +308,17 @@ namespace ego_planner
     }
   }
 
+  void PlanningVisualization::displayDebugPathList(const vector<Eigen::Vector3d> &pts, double scale,
+                                                   const Eigen::Vector4d &color, int id, bool show_sphere)
+  {
+    if (a_star_list_pub.getNumSubscribers() == 0)
+    {
+      return;
+    }
+
+    displayMarkerList(a_star_list_pub, pts, scale, color, id, show_sphere);
+  }
+
   void PlanningVisualization::displayArrowList(ros::Publisher &pub, const vector<Eigen::Vector3d> &list, double scale, Eigen::Vector4d color, int id)
   {
     visualization_msgs::MarkerArray array;

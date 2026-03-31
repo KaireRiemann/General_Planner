@@ -17,7 +17,21 @@ namespace ego_planner
 
   Eigen::MatrixXd PolyTrajOptimizer::getInitConstraintPoints() const
   {
-    return mincoOpt_.getTrajectory().getInitConstraintPoints(cps_num_prePiece_);
+    return getTrajectory().getInitConstraintPoints(cps_num_prePiece_);
+  }
+
+  const MINCOTraj &PolyTrajOptimizer::getTrajectory() const
+  {
+    switch (optimize_mode_)
+    {
+    case MODE_CORRIDOR:
+      return corridorMincoOpt_.getTrajectory();
+    case MODE_ESDF:
+      return distanceFieldMincoOpt_.getTrajectory();
+    case MODE_PLAIN:
+    default:
+      return mincoOpt_.getTrajectory();
+    }
   }
 
   bool PolyTrajOptimizer::computePointsToCheck(
@@ -106,8 +120,10 @@ namespace ego_planner
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
 
     fill(opt->min_ellip_dist2_.begin(), opt->min_ellip_dist2_.end(), std::numeric_limits<double>::max());
-    if (opt->corridor_mode_)
+    if (opt->optimize_mode_ == MODE_CORRIDOR)
       opt->corridor_cost_manager_.resetAccumulation();
+    else if (opt->optimize_mode_ == MODE_ESDF)
+      opt->distance_field_cost_manager_.resetAccumulation();
     else
       opt->cost_manager_.resetAccumulation();
 
@@ -118,7 +134,7 @@ namespace ego_planner
     opt->time_cost_.weight = opt->wei_time_;
 
     double total_cost = 0.0;
-    if (opt->corridor_mode_)
+    if (opt->optimize_mode_ == MODE_CORRIDOR)
     {
       auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
       {
@@ -126,11 +142,25 @@ namespace ego_planner
         return opt->time_cost_(T_vec, gdT);
       };
 
-      total_cost = opt->mincoOpt_.evaluate(
+      total_cost = opt->corridorMincoOpt_.evaluate(
           x_vec,
           grad_vec,
           time_cost_wrapper,
           opt->corridor_cost_manager_);
+    }
+    else if (opt->optimize_mode_ == MODE_ESDF)
+    {
+      auto time_cost_wrapper = [&](const std::vector<double> &T_vec, Eigen::VectorXd &gdT) -> double
+      {
+        gdT.setZero(T_vec.size());
+        return opt->time_cost_(T_vec, gdT);
+      };
+
+      total_cost = opt->distanceFieldMincoOpt_.evaluate(
+          x_vec,
+          grad_vec,
+          time_cost_wrapper,
+          opt->distance_field_cost_manager_);
     }
     else
     {
