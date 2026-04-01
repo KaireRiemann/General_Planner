@@ -118,6 +118,7 @@ namespace ego_planner
                                         const spatial_map::PolyhedraH &corridor_hpolys,
                                         Eigen::MatrixXd &inner_pts,
                                         Eigen::VectorXd &durations,
+                                        Eigen::VectorXi &corridor_piece_idx,
                                         std::vector<Eigen::Vector3d> &transition_points,
                                         std::vector<double> &inner_clearances) const;
     bool assembleInitialGuessFromAnchors(const std::vector<Eigen::Vector3d> &anchors,
@@ -125,24 +126,8 @@ namespace ego_planner
                                          Eigen::VectorXd &durations,
                                          std::vector<double> *inner_clearances = nullptr) const;
 
-    int findFirstCorridorPolyContainingPoint(const Eigen::Vector3d &pt,
-                                             const spatial_map::PolyhedraH &corridor_hpolys,
-                                             double margin = 0.0) const;
-
-    bool sampleWarmStartPrefixFromCurrentTraj(
-        const Eigen::Vector3d &start_pt,
-        const spatial_map::PolyhedraH &corridor_hpolys,
-        std::vector<Eigen::Vector3d> &prefix_nodes,
-        std::vector<double> &prefix_durations) const;
-
-    bool mergePrefixAndTailInitialGuess(
-        const std::vector<Eigen::Vector3d> &prefix_nodes,
-        const std::vector<double> &prefix_durations,
-        const Eigen::MatrixXd &tail_inner_pts,
-        const Eigen::VectorXd &tail_durations,
-        Eigen::MatrixXd &inner_pts,
-        Eigen::VectorXd &durations,
-        std::vector<double> *inner_clearances = nullptr) const;
+    bool applyWarmStartTimingProfile(const Eigen::VectorXd &warm_durations,
+                                     Eigen::VectorXd &durations) const;
 
     double estimateObstacleClearance(const Eigen::Vector3d &pt,
                                      double search_radius,
@@ -169,8 +154,6 @@ namespace ego_planner
     int guide_sparse_min_inner_{2};
     int guide_sparse_max_inner_{5};
     double guide_turn_angle_deg_{25.0};
-    double warm_start_prefix_time_{0.45};
-    int warm_start_prefix_max_points_{4};
 
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};

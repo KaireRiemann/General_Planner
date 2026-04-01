@@ -37,56 +37,36 @@ namespace
     {
       return false;
     }
+    const int size_corridor = static_cast<int>(hpolys.size()) - 1;
+    vpolys.reserve(static_cast<std::size_t>(2 * std::max(size_corridor, 0) + 1));
 
-    vpolys.reserve(hpolys.size() * 2);
-    for (std::size_t i = 0; i < hpolys.size(); ++i)
+    Eigen::Matrix3Xd vertices;
+    for (int i = 0; i < size_corridor; ++i)
     {
-      Eigen::Matrix3Xd vertices;
-      if (!geo_utils::enumerateVs(hpolys[i], vertices) || vertices.cols() <= 0)
+      if (!geo_utils::enumerateVs(hpolys[static_cast<std::size_t>(i)], vertices) || vertices.cols() <= 0)
       {
-        Eigen::Vector3d inner;
-        if (geo_utils::findInterior(hpolys[i], inner))
-        {
-          vertices.resize(3, 1);
-          vertices.col(0) = inner;
-        }
-        else if (!vpolys.empty())
-        {
-          vpolys.push_back(vpolys.back());
-          if (i + 1 < hpolys.size())
-          {
-            vpolys.push_back(vpolys.back());
-          }
-          continue;
-        }
-        else
-        {
-          return false;
-        }
+        return false;
       }
+      vpolys.push_back(makeSpatialVertexPoly(vertices));
 
-      const spatial_map::PolyhedronV base_poly = makeSpatialVertexPoly(vertices);
-      vpolys.push_back(base_poly);
-
-      if (i + 1 < hpolys.size())
+      Eigen::MatrixX4d overlap_h(hpolys[static_cast<std::size_t>(i)].rows() +
+                                     hpolys[static_cast<std::size_t>(i + 1)].rows(),
+                                 4);
+      overlap_h.topRows(hpolys[static_cast<std::size_t>(i)].rows()) = hpolys[static_cast<std::size_t>(i)];
+      overlap_h.bottomRows(hpolys[static_cast<std::size_t>(i + 1)].rows()) = hpolys[static_cast<std::size_t>(i + 1)];
+      if (!geo_utils::enumerateVs(overlap_h, vertices) || vertices.cols() <= 0)
       {
-        Eigen::MatrixX4d overlap_h(hpolys[i].rows() + hpolys[i + 1].rows(), 4);
-        overlap_h.topRows(hpolys[i].rows()) = hpolys[i];
-        overlap_h.bottomRows(hpolys[i + 1].rows()) = hpolys[i + 1];
-
-        Eigen::Matrix3Xd overlap_vertices;
-        if (geo_utils::enumerateVs(overlap_h, overlap_vertices) && overlap_vertices.cols() > 0)
-        {
-          vpolys.push_back(makeSpatialVertexPoly(overlap_vertices));
-        }
-        else
-        {
-          vpolys.push_back(base_poly);
-        }
+        return false;
       }
+      vpolys.push_back(makeSpatialVertexPoly(vertices));
     }
 
-    return !vpolys.empty();
+    if (!geo_utils::enumerateVs(hpolys.back(), vertices) || vertices.cols() <= 0)
+    {
+      return false;
+    }
+    vpolys.push_back(makeSpatialVertexPoly(vertices));
+    return true;
   }
 
   struct TrajectoryCheckDebug
@@ -541,6 +521,7 @@ namespace ego_planner
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       const spatial_map::PolyhedraH &corridor_hpolys,
+      const Eigen::VectorXi *corridor_piece_idx,
       double &final_cost)
   {
     optimize_mode_ = MODE_CORRIDOR;
@@ -594,36 +575,8 @@ namespace ego_planner
       }
     }
 
-    const double mapping_margin = 0.0;
     Eigen::VectorXi segment_poly_idx(piece_num_);
-    int poly_cursor = 0;
-    for (int seg_idx = 0; seg_idx < piece_num_; ++seg_idx)
-    {
-      const Eigen::Vector3d p0 = waypoints.row(seg_idx).transpose();
-      const Eigen::Vector3d p1 = waypoints.row(seg_idx + 1).transpose();
-      const Eigen::Vector3d pm = 0.5 * (p0 + p1);
-
-      int best_poly = std::min(poly_cursor, static_cast<int>(normalized_corridor.size()) - 1);
-      int best_score = -1;
-      for (int poly_id = poly_cursor; poly_id < static_cast<int>(normalized_corridor.size()); ++poly_id)
-      {
-        int score = 0;
-        score += pointInsidePolytope(p0, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
-        score += pointInsidePolytope(pm, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
-        score += pointInsidePolytope(p1, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
-        if (score > best_score)
-        {
-          best_score = score;
-          best_poly = poly_id;
-        }
-        if (score == 3)
-        {
-          break;
-        }
-      }
-      segment_poly_idx(seg_idx) = best_poly;
-      poly_cursor = best_poly;
-    }
+    segment_poly_idx.setZero();
 
     if (!processCorridor(normalized_corridor, corridor_vpolys_))
     {
@@ -631,20 +584,90 @@ namespace ego_planner
       return false;
     }
 
-    corridor_hpoly_idx_ = segment_poly_idx;
-    corridor_vpoly_idx_.resize(std::max(0, piece_num_ - 1));
-    for (int i = 0; i < piece_num_ - 1; ++i)
+    bool use_gcopter_piece_idx = false;
+    if (corridor_piece_idx != nullptr &&
+        corridor_piece_idx->size() == static_cast<int>(normalized_corridor.size()) &&
+        corridor_piece_idx->sum() == piece_num_ &&
+        static_cast<int>(corridor_vpolys_.size()) == 2 * static_cast<int>(normalized_corridor.size()) - 1)
     {
-      const int left_poly = corridor_hpoly_idx_(i);
-      const int right_poly = corridor_hpoly_idx_(i + 1);
-      int v_poly_id = std::min(2 * std::max(left_poly, 0),
-                               static_cast<int>(corridor_vpolys_.size()) - 1);
-      if (right_poly == left_poly + 1 &&
-          2 * left_poly + 1 < static_cast<int>(corridor_vpolys_.size()))
+      corridor_vpoly_idx_.resize(std::max(0, piece_num_ - 1));
+      corridor_hpoly_idx_.resize(piece_num_);
+
+      int j = 0;
+      for (int i = 0; i < corridor_piece_idx->size(); ++i)
       {
-        v_poly_id = 2 * left_poly + 1;
+        const int k = std::max(1, (*corridor_piece_idx)(i));
+        for (int l = 0; l < k && j < piece_num_; ++l, ++j)
+        {
+          if (j < piece_num_ - 1)
+          {
+            if (l < k - 1)
+            {
+              corridor_vpoly_idx_(j) = 2 * i;
+            }
+            else if (i < corridor_piece_idx->size() - 1)
+            {
+              corridor_vpoly_idx_(j) = 2 * i + 1;
+            }
+            else
+            {
+              corridor_vpoly_idx_(j) = 2 * i;
+            }
+          }
+          corridor_hpoly_idx_(j) = i;
+        }
       }
-      corridor_vpoly_idx_(i) = v_poly_id;
+      use_gcopter_piece_idx = (j == piece_num_);
+    }
+
+    if (!use_gcopter_piece_idx)
+    {
+      const double mapping_margin = 0.0;
+      int poly_cursor = 0;
+      for (int seg_idx = 0; seg_idx < piece_num_; ++seg_idx)
+      {
+        const Eigen::Vector3d p0 = waypoints.row(seg_idx).transpose();
+        const Eigen::Vector3d p1 = waypoints.row(seg_idx + 1).transpose();
+        const Eigen::Vector3d pm = 0.5 * (p0 + p1);
+
+        int best_poly = std::min(poly_cursor, static_cast<int>(normalized_corridor.size()) - 1);
+        int best_score = -1;
+        for (int poly_id = poly_cursor; poly_id < static_cast<int>(normalized_corridor.size()); ++poly_id)
+        {
+          int score = 0;
+          score += pointInsidePolytope(p0, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
+          score += pointInsidePolytope(pm, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
+          score += pointInsidePolytope(p1, normalized_corridor[poly_id], mapping_margin) ? 1 : 0;
+          if (score > best_score)
+          {
+            best_score = score;
+            best_poly = poly_id;
+          }
+          if (score == 3)
+          {
+            break;
+          }
+        }
+        segment_poly_idx(seg_idx) = best_poly;
+        poly_cursor = best_poly;
+      }
+
+      corridor_hpoly_idx_ = segment_poly_idx;
+      corridor_vpoly_idx_.resize(std::max(0, piece_num_ - 1));
+      for (int i = 0; i < piece_num_ - 1; ++i)
+      {
+        const int left_poly = corridor_hpoly_idx_(i);
+        const int right_poly = corridor_hpoly_idx_(i + 1);
+        int v_poly_id = std::min(2 * std::max(left_poly, 0),
+                                 static_cast<int>(corridor_vpolys_.size()) - 1);
+        if (right_poly == left_poly + 1 &&
+            2 * left_poly + 1 < static_cast<int>(corridor_vpolys_.size()))
+        {
+          v_poly_id = 2 * left_poly + 1;
+        }
+        corridor_vpoly_idx_(i) = v_poly_id;
+      }
+      ROS_WARN("Corridor mapping fallback: use geometric midpoint assignment instead of GCOPTER piece indexing.");
     }
 
     corridorSpatialMap_.reset(&corridor_vpolys_, &corridor_vpoly_idx_, piece_num_);
@@ -720,10 +743,12 @@ namespace ego_planner
         const bool flag_collision_free =
             isTrajectoryCollisionFree(corridorMincoOpt_.getTrajectory());
 
+        const double hard_corridor_margin =
+            grid_map_ ? -0.5 * grid_map_->getResolution() : -1.0e-3;
         const bool flag_inside_corridor =
             isTrajectoryInsideCorridor(corridorMincoOpt_.getTrajectory(),
                                       normalized_corridor,
-                                      corridor_clearance_);
+                                      hard_corridor_margin);
 
         if (!flag_swarm_too_close && flag_collision_free && flag_inside_corridor)
         {

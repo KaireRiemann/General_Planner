@@ -51,20 +51,10 @@ inline bool buildOverlapVertexPolys(const PolyhedraH &corridor_hpolys,
     overlap_h.bottomRows(corridor_hpolys[i + 1].rows()) = corridor_hpolys[i + 1];
 
     Eigen::Matrix3Xd overlap_vertices;
-    if (geo_utils::enumerateVs(overlap_h, overlap_vertices) && overlap_vertices.cols() > 0)
-    {
-      overlap_vpolys.emplace_back(makeVertexPoly(overlap_vertices));
-      continue;
-    }
-
-    Eigen::Vector3d interior = Eigen::Vector3d::Zero();
-    if (!geo_utils::findInterior(overlap_h, interior))
+    if (!geo_utils::enumerateVs(overlap_h, overlap_vertices) || overlap_vertices.cols() <= 0)
     {
       return false;
     }
-
-    overlap_vertices.resize(3, 1);
-    overlap_vertices.col(0) = interior;
     overlap_vpolys.emplace_back(makeVertexPoly(overlap_vertices));
   }
 
@@ -341,7 +331,8 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
                                     const double piece_length,
                                     const double alloc_speed,
                                     Eigen::MatrixXd &inner_pts,
-                                    Eigen::VectorXd &durations)
+                                    Eigen::VectorXd &durations,
+                                    Eigen::VectorXi *piece_idx_out = nullptr)
 {
   if (short_path.size() < 2)
   {
@@ -363,6 +354,7 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
   inner_pts.resize(3, std::max(0, piece_num - 1));
 
   int k = 0;
+  int inner_col = 0;
   for (int i = 0; i < seg_num; ++i)
   {
     const Eigen::Vector3d a = short_path[i];
@@ -373,12 +365,29 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
     for (int j = 0; j < piece_idx[i]; ++j)
     {
       durations(k) = dt;
-      const Eigen::Vector3d q = a + static_cast<double>(j + 1) * step;
-      if (k < piece_num - 1)
+
+      // Keep the same layout as GCOPTER::setInitial:
+      // for each corridor segment, insert sample "a + j * step",
+      // except the global start point (segment 0, j = 0).
+      if (!(i == 0 && j == 0) && inner_col < piece_num - 1)
       {
-        inner_pts.col(k) = q;
+        inner_pts.col(inner_col++) = a + static_cast<double>(j) * step;
       }
       ++k;
+    }
+  }
+
+  if (inner_col != piece_num - 1)
+  {
+    return false;
+  }
+
+  if (piece_idx_out != nullptr)
+  {
+    piece_idx_out->resize(seg_num);
+    for (int i = 0; i < seg_num; ++i)
+    {
+      (*piece_idx_out)(i) = piece_idx[static_cast<std::size_t>(i)];
     }
   }
 
@@ -393,7 +402,8 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
                                           Eigen::MatrixXd &inner_pts,
                                           Eigen::VectorXd &durations,
                                           std::vector<Eigen::Vector3d> *transition_points = nullptr,
-                                          std::vector<Eigen::Vector3d> *short_path_out = nullptr)
+                                          std::vector<Eigen::Vector3d> *short_path_out = nullptr,
+                                          Eigen::VectorXi *piece_idx_out = nullptr)
 {
   inner_pts.resize(3, 0);
   durations.resize(0);
@@ -404,6 +414,10 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
   if (short_path_out != nullptr)
   {
     short_path_out->clear();
+  }
+  if (piece_idx_out != nullptr)
+  {
+    piece_idx_out->resize(0);
   }
 
   if (corridor_hpolys.empty())
@@ -418,7 +432,7 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
     {
       *short_path_out = short_path;
     }
-    return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations);
+    return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
   }
 
   PolyhedraV overlap_vpolys;
@@ -448,7 +462,7 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
     *short_path_out = short_path;
   }
 
-  return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations);
+  return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
 }
 
 // inline double shortestPathDistanceEval(void *instance,

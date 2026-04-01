@@ -150,6 +150,7 @@ namespace ego_planner
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             const spatial_map::PolyhedraH &corridor_hpolys,
+                            const Eigen::VectorXi *corridor_piece_idx,
                             double &final_cost);
 
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
