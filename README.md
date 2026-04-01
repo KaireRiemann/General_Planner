@@ -1,1 +1,1 @@
-Task Level General Planner for Robots
+Task Level General-Purpose Planner for Robots
