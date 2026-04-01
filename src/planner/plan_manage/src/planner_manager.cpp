@@ -1601,6 +1601,12 @@ namespace ego_planner
         fillReferenceVelocities(planning_reference.t_view_ref,
                                 planning_reference.p_view_ref,
                                 planning_reference.v_view_ref);
+        planning_reference.use_view_terminal = true;
+        planning_reference.has_terminal_ref = true;
+        planning_reference.p_term_ref = viewpoint_series.back();
+        planning_reference.v_term_ref =
+            planning_reference.v_view_ref.empty() ? Eigen::Vector3d::Zero()
+                                                  : planning_reference.v_view_ref.back();
 
         if (visualization_)
         {
@@ -1620,11 +1626,16 @@ namespace ego_planner
         }
 
         const Eigen::Vector3d &tracking_anchor = viewpoint_series.back();
-        const Eigen::Vector3d target_vel =
-            viewpoint_target_vels.empty() ? cost_functional::terminalTrackingVelocity(reference)
-                                          : viewpoint_target_vels.back();
         const double anchor_t =
             viewpoint_times.empty() ? reference.t_ref.back() : viewpoint_times.back();
+        Eigen::Vector3d target_vel =
+            viewpoint_target_vels.empty() ? Eigen::Vector3d::Zero()
+                                          : viewpoint_target_vels.back();
+        if (viewpoint_target_vels.empty())
+        {
+          Eigen::Vector3d dummy_pos = Eigen::Vector3d::Zero();
+          cost_functional::sampleTrackingReference(reference, anchor_t, dummy_pos, target_vel);
+        }
 
         ROS_INFO("planTrackingTask: ref_size=%zu viewpoint_count=%zu guide_pts=%zu view_ref=%s horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
                  reference.t_ref.size(),
@@ -1660,6 +1671,14 @@ namespace ego_planner
             last_tracking_anchor_dir_ = success_dir.normalized();
             have_tracking_anchor_dir_ = true;
           }
+
+          const double yaw_dt = 0.05;
+          const double max_yaw_rate = 1.2;
+          const double yaw0 = 0.0;        
+
+          auto yaw_plan = TrackingYawPlanner::planFacingTarget(
+              traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
+          traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
           return true;
         }
 
@@ -1695,6 +1714,11 @@ namespace ego_planner
       const Eigen::Vector3d target_vel =
           (i < anchor_target_vels.size()) ? anchor_target_vels[i] : Eigen::Vector3d::Zero();
       const double anchor_t = (i < anchor_times.size()) ? anchor_times[i] : 0.0;
+      cost_functional::TrackingReference planning_reference = reference;
+      planning_reference.use_view_terminal = false;
+      planning_reference.has_terminal_ref = true;
+      planning_reference.p_term_ref = tracking_anchor;
+      planning_reference.v_term_ref = target_vel;
 
       ROS_INFO("planTrackingTask: ref_size=%zu anchor_trial=%zu horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
                reference.t_ref.size(),
@@ -1718,7 +1742,7 @@ namespace ego_planner
                         flag_randomPolyTraj,
                         touch_goal,
                         force_plain,
-                        &reference,
+                        &planning_reference,
                         nullptr))
       {
         Eigen::Vector3d success_dir = tracking_anchor - tracking_target;
@@ -1728,6 +1752,12 @@ namespace ego_planner
           last_tracking_anchor_dir_ = success_dir.normalized();
           have_tracking_anchor_dir_ = true;
         }
+        const double yaw_dt = 0.05;
+        const double max_yaw_rate = 1.2;
+        const double yaw0 = 0.0;
+        auto yaw_plan = TrackingYawPlanner::planFacingTarget(
+            traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
+        traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
         return true;
       }
     }

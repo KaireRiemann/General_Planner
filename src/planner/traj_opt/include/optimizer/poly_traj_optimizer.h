@@ -84,6 +84,8 @@ namespace ego_planner
     double wei_tracking_view_z_;
     double wei_tracking_terminal_pos_;
     double wei_tracking_terminal_vel_;
+    double wei_tracking_los_;
+    double tracking_los_clearance_;
     double tracking_distance_min_;
     double tracking_distance_max_;
     double tracking_height_tolerance_;

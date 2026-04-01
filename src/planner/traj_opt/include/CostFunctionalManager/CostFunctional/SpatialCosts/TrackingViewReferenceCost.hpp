@@ -1,5 +1,5 @@
-#ifndef TRACKING_VISIBILITY_COST_HPP
-#define TRACKING_VISIBILITY_COST_HPP
+#ifndef TRACKING_VIEW_REFERENCE_COST_HPP
+#define TRACKING_VIEW_REFERENCE_COST_HPP
 
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 
@@ -7,11 +7,11 @@ namespace cost_functional
 {
     using Types = PlanningTypesAdapter;
 
-    inline double accumulateTrackingVisibilityCost(const Types::Vec3 &position,
-                                                   const Types::Vec3 &viewpoint_position,
-                                                   const double weight_xy,
-                                                   const double weight_z,
-                                                   Types::Vec3 &grad_position)
+    inline double accumulateTrackingViewReferenceCost(const Types::Vec3 &position,
+                                                      const Types::Vec3 &viewpoint_position,
+                                                      const double weight_xy,
+                                                      const double weight_z,
+                                                      Types::Vec3 &grad_position)
     {
         if (weight_xy <= 0.0 && weight_z <= 0.0)
         {
@@ -36,6 +36,6 @@ namespace cost_functional
 
         return cost;
     }
-} // namespace cost_functional
+}
 
 #endif

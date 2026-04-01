@@ -15,13 +15,13 @@
     <arg name="init_z" default="1.0"/>
 
     <arg name="use_esdf" default="true"/>
-    <arg name="use_sfc_corridor" default="true"/>
-    <arg name="enable_esdf" default="false"/>
+    <arg name="use_sfc_corridor" default="false"/>
+    <arg name="enable_esdf" default="true"/>
 
     <!-- map -->
     <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
-        <param name="map/x_size" value="50"/>
-        <param name="map/y_size" value="30"/>
+        <param name="map/x_size" value="20"/>
+        <param name="map/y_size" value="15"/>
         <param name="map/z_size" value="3"/>
         <param name="map/resolution" value="0.1"/>
         <param name="ObstacleShape/seed" value="1"/>

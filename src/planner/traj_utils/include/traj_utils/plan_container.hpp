@@ -39,6 +39,9 @@ namespace ego_planner
     double end_time;   // world time
     Eigen::Vector3d start_pos;
     double des_clearance;
+    std::vector<double> yaw_t;
+    std::vector<double> yaw_ref;
+    bool has_tracking_yaw{false};
   };
 
   typedef std::vector<LocalTrajData> SwarmTrajData;
@@ -78,6 +81,19 @@ namespace ego_planner
       
       local_traj.start_time = world_time;
       local_traj.traj = trajectory;
+      local_traj.yaw_t.clear();
+      local_traj.yaw_ref.clear();
+      local_traj.has_tracking_yaw = false;
+    }
+
+    void setLocalYawRef(const std::vector<double> &t_ref,
+                        const std::vector<double> &yaw_ref)
+    {
+      local_traj.yaw_t = t_ref;
+      local_traj.yaw_ref = yaw_ref;
+      local_traj.has_tracking_yaw =
+          !local_traj.yaw_t.empty() &&
+          local_traj.yaw_t.size() == local_traj.yaw_ref.size();
     }
   };
 

@@ -323,6 +323,8 @@ namespace ego_planner
       tracking_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
       tracking_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
       tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
+      tracking_cost_manager_.wei_track_los = wei_tracking_los_;
+      tracking_cost_manager_.track_los_clearance = tracking_los_clearance_;
     }
 
     Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
@@ -558,6 +560,10 @@ namespace ego_planner
       tracking_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
       tracking_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
       tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
+      tracking_cost_manager_.wei_track_los = wei_tracking_los_;
+      tracking_cost_manager_.track_los_clearance = tracking_los_clearance_;
+      tracking_corridor_cost_manager_.wei_track_los = wei_tracking_los_;
+      tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
     }
 
     Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess();
@@ -907,6 +913,7 @@ namespace ego_planner
 
     if (tracking_task_enabled_)
     {
+      tracking_corridor_cost_manager_.grid_map = grid_map_;
       tracking_corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
       tracking_corridor_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
       tracking_corridor_cost_manager_.setTrackingReference(&tracking_reference_);
@@ -937,6 +944,8 @@ namespace ego_planner
       tracking_corridor_cost_manager_.wei_track_vertical = wei_tracking_vertical_;
       tracking_corridor_cost_manager_.wei_track_view_xy = wei_tracking_view_xy_;
       tracking_corridor_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
+      tracking_corridor_cost_manager_.wei_track_los = wei_tracking_los_;
+      tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
       tracking_corridor_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
       tracking_corridor_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
     }
@@ -2002,6 +2011,8 @@ namespace ego_planner
     nh.param("optimization/tracking_distance_max", tracking_distance_max_, 4.0);
     nh.param("optimization/tracking_height_tolerance", tracking_height_tolerance_, 0.4);
     nh.param("optimization/tracking_smooth_eps", tracking_smooth_eps_, 0.1);
+    nh.param("optimization/weight_tracking_los", wei_tracking_los_, 80.0);
+    nh.param("optimization/tracking_los_clearance", tracking_los_clearance_, 0.20);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);

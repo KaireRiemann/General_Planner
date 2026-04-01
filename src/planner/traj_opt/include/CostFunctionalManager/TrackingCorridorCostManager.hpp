@@ -5,7 +5,8 @@
 #include "CostFunctionalManager/TrackingTypes.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/DistanceKeepingCost.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/SoftTerminalReferenceCost.hpp"
-#include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingVisibilityCost.hpp"
+#include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingViewReferenceCost.hpp"
+#include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingLosCost.hpp"
 
 namespace cost_functional
 {
@@ -16,41 +17,27 @@ namespace cost_functional
         using RefType = TrackingReference;
         using Types = Base::Types;
 
-        const RefType *tracking_ref;
+        Types::GridMapPtr grid_map{nullptr};
+        const RefType *tracking_ref{nullptr};
 
-        double track_d_min, track_d_max, track_z_tol, track_smooth_eps;
-        double wei_track_near, wei_track_far, wei_track_vertical;
-        double wei_terminal_pos, wei_terminal_vel;
-        double wei_track_view_xy, wei_track_view_z;
+        double track_d_min{0.0}, track_d_max{0.0}, track_z_tol{0.4}, track_smooth_eps{0.1};
+        double wei_track_near{0.0}, wei_track_far{0.0}, wei_track_vertical{0.0};
+
+        double wei_track_view_xy{0.0}, wei_track_view_z{0.0};
+
+        double wei_track_los{0.0};
+        double track_los_clearance{0.2};
+
+        double wei_terminal_pos{0.0}, wei_terminal_vel{0.0};
 
         TrackingCorridorCostFunctionalManager()
-            : Base(),
-              tracking_ref(nullptr),
-              track_d_min(0.0),
-              track_d_max(0.0),
-              track_z_tol(0.4),
-              track_smooth_eps(0.1),
-              wei_track_near(0.0),
-              wei_track_far(0.0),
-              wei_track_vertical(0.0),
-              wei_terminal_pos(0.0),
-              wei_terminal_vel(0.0),
-              wei_track_view_xy(0.0),
-              wei_track_view_z(0.0)
         {
-            accumulated_costs.resize(8);
+            accumulated_costs.resize(9);
             accumulated_costs.setZero();
         }
 
-        void setTrackingReference(const RefType *ref)
-        {
-            tracking_ref = ref;
-        }
-
-        void resetAccumulation() const
-        {
-            accumulated_costs.setZero();
-        }
+        void setTrackingReference(const RefType *ref) { tracking_ref = ref; }
+        void resetAccumulation() const { accumulated_costs.setZero(); }
 
         double evaluateIntegral(const int cp_idx,
                                 const double t_local,
@@ -67,72 +54,59 @@ namespace cost_functional
                                 Types::Vec3 &grad_jerk,
                                 double &grad_time) const
         {
-            const double base_cost = Base::evaluateIntegral(cp_idx,
-                                                            t_local,
-                                                            t_global,
-                                                            seg_idx,
-                                                            step_in_seg,
-                                                            position,
-                                                            velocity,
-                                                            acceleration,
-                                                            jerk,
-                                                            grad_position,
-                                                            grad_velocity,
-                                                            grad_acceleration,
-                                                            grad_jerk,
-                                                            grad_time);
+            const double base_cost =
+                Base::evaluateIntegral(cp_idx, t_local, t_global, seg_idx, step_in_seg,
+                                       position, velocity, acceleration, jerk,
+                                       grad_position, grad_velocity, grad_acceleration, grad_jerk, grad_time);
 
-            double cost_distance_keeping = 0.0;
-            if (tracking_ref != nullptr &&
-                (wei_track_near > 0.0 || wei_track_far > 0.0))
+            double cost_distance = 0.0;
+            double cost_view_ref = 0.0;
+            double cost_los = 0.0;
+
+            if (tracking_ref != nullptr)
             {
                 Types::Vec3 ref_pos = Types::Vec3::Zero();
                 Types::Vec3 ref_vel = Types::Vec3::Zero();
+
                 if (sampleTrackingReference(*tracking_ref, t_global, ref_pos, ref_vel))
                 {
-                    Types::Vec3 grad_track_pos = Types::Vec3::Zero();
-                    cost_distance_keeping =
-                        cost_functional::accumulateDistanceKeepingCost(
-                            position,
-                            ref_pos,
-                            track_d_min,
-                            track_d_max,
-                            track_z_tol,
-                            track_smooth_eps,
-                            wei_track_near,
-                            wei_track_far,
-                            wei_track_vertical,
-                            grad_track_pos);
-                    grad_position += grad_track_pos;
-                    grad_time += -grad_track_pos.dot(ref_vel);
-                }
-            }
+                    Types::Vec3 grad_track = Types::Vec3::Zero();
+                    cost_distance =
+                        accumulateDistanceKeepingCost(position, ref_pos,
+                                                      track_d_min, track_d_max,
+                                                      track_z_tol, track_smooth_eps,
+                                                      wei_track_near, wei_track_far, wei_track_vertical,
+                                                      grad_track);
+                    grad_position += grad_track;
+                    grad_time += -grad_track.dot(ref_vel);
 
-            double cost_tracking_view = 0.0;
-            if (tracking_ref != nullptr &&
-                tracking_ref->viewValid() &&
-                (wei_track_view_xy > 0.0 || wei_track_view_z > 0.0))
-            {
-                Types::Vec3 ref_view_pos = Types::Vec3::Zero();
-                Types::Vec3 ref_view_vel = Types::Vec3::Zero();
-                if (sampleTrackingViewReference(*tracking_ref, t_global, ref_view_pos, ref_view_vel))
+                    Types::Vec3 grad_los = Types::Vec3::Zero();
+                    cost_los =
+                        accumulateTrackingLoSCost(position, ref_pos, grid_map,
+                                                  track_los_clearance, wei_track_los, grad_los);
+                    grad_position += grad_los;
+                    grad_time += -grad_los.dot(ref_vel);
+                }
+
+                Types::Vec3 view_pos = Types::Vec3::Zero();
+                Types::Vec3 view_vel = Types::Vec3::Zero();
+                if (tracking_ref->viewValid() &&
+                    sampleTrackingViewReference(*tracking_ref, t_global, view_pos, view_vel))
                 {
-                    Types::Vec3 grad_view_pos = Types::Vec3::Zero();
-                    cost_tracking_view =
-                        cost_functional::accumulateTrackingVisibilityCost(
-                            position,
-                            ref_view_pos,
-                            wei_track_view_xy,
-                            wei_track_view_z,
-                            grad_view_pos);
-                    grad_position += grad_view_pos;
-                    grad_time += -grad_view_pos.dot(ref_view_vel);
+                    Types::Vec3 grad_view = Types::Vec3::Zero();
+                    cost_view_ref =
+                        accumulateTrackingViewReferenceCost(position, view_pos,
+                                                            wei_track_view_xy, wei_track_view_z,
+                                                            grad_view);
+                    grad_position += grad_view;
+                    grad_time += -grad_view.dot(view_vel);
                 }
             }
 
-            accumulated_costs(5) += cost_distance_keeping;
-            accumulated_costs(6) += cost_tracking_view;
-            return base_cost + cost_distance_keeping + cost_tracking_view;
+            accumulated_costs(5) += cost_distance;
+            accumulated_costs(6) += cost_view_ref;
+            accumulated_costs(7) += cost_los;
+            return base_cost + cost_distance + cost_view_ref + cost_los;
         }
 
         template <typename SamplesType>
@@ -144,57 +118,56 @@ namespace cost_functional
 
             double cost_terminal = 0.0;
             if (tracking_ref != nullptr &&
-                tracking_ref->valid() &&
                 (wei_terminal_pos > 0.0 || wei_terminal_vel > 0.0) &&
                 !samples.empty())
             {
-                const int terminal_idx = static_cast<int>(samples.size()) - 1;
-                const Types::Vec3 ref_terminal_pos = terminalTrackingPosition(*tracking_ref);
-                const Types::Vec3 ref_terminal_vel = terminalTrackingVelocity(*tracking_ref);
-
-                Types::Vec3 terminal_vel_est = Types::Vec3::Zero();
-                int prev_idx = -1;
-                double terminal_dt = 0.0;
-                if (samples.size() >= 2)
+                Types::Vec3 ref_terminal_pos = Types::Vec3::Zero();
+                Types::Vec3 ref_terminal_vel = Types::Vec3::Zero();
+                if (sampleTrackingTerminalReference(*tracking_ref, ref_terminal_pos, ref_terminal_vel))
                 {
-                    prev_idx = terminal_idx - 1;
-                    terminal_dt = samples[terminal_idx].t_global - samples[prev_idx].t_global;
-                    terminal_dt = std::max(terminal_dt, 1.0e-3);
-                    terminal_vel_est =
-                        (samples[terminal_idx].p - samples[prev_idx].p) / terminal_dt;
-                }
+                    const int terminal_idx = static_cast<int>(samples.size()) - 1;
 
-                Types::Vec3 grad_terminal_pos = Types::Vec3::Zero();
-                Types::Vec3 grad_terminal_vel = Types::Vec3::Zero();
-                cost_terminal =
-                    cost_functional::accumulateSoftTerminalReferenceCost(
-                        samples[terminal_idx].p,
-                        terminal_vel_est,
-                        ref_terminal_pos,
-                        ref_terminal_vel,
-                        wei_terminal_pos,
-                        wei_terminal_vel,
-                        grad_terminal_pos,
-                        grad_terminal_vel);
+                    Types::Vec3 terminal_vel_est = Types::Vec3::Zero();
+                    int prev_idx = -1;
+                    double terminal_dt = 0.0;
+                    if (samples.size() >= 2)
+                    {
+                        prev_idx = terminal_idx - 1;
+                        terminal_dt = std::max(samples[terminal_idx].t_global - samples[prev_idx].t_global, 1.0e-3);
+                        terminal_vel_est = (samples[terminal_idx].p - samples[prev_idx].p) / terminal_dt;
+                    }
 
-                grad_p.col(terminal_idx) += grad_terminal_pos;
+                    Types::Vec3 grad_terminal_pos = Types::Vec3::Zero();
+                    Types::Vec3 grad_terminal_vel = Types::Vec3::Zero();
+                    cost_terminal =
+                        accumulateSoftTerminalReferenceCost(samples[terminal_idx].p,
+                                                            terminal_vel_est,
+                                                            ref_terminal_pos,
+                                                            ref_terminal_vel,
+                                                            wei_terminal_pos,
+                                                            wei_terminal_vel,
+                                                            grad_terminal_pos,
+                                                            grad_terminal_vel);
 
-                if (prev_idx >= 0)
-                {
-                    const Types::Vec3 grad_terminal_diff = grad_terminal_vel / terminal_dt;
-                    grad_p.col(terminal_idx) += grad_terminal_diff;
-                    grad_p.col(prev_idx) -= grad_terminal_diff;
+                    grad_p.col(terminal_idx) += grad_terminal_pos;
 
-                    const double grad_dt_term = grad_terminal_vel.dot(terminal_vel_est) / terminal_dt;
-                    grad_t_global(terminal_idx) -= grad_dt_term;
-                    grad_t_global(prev_idx) += grad_dt_term;
+                    if (prev_idx >= 0)
+                    {
+                        const Types::Vec3 grad_terminal_diff = grad_terminal_vel / terminal_dt;
+                        grad_p.col(terminal_idx) += grad_terminal_diff;
+                        grad_p.col(prev_idx) -= grad_terminal_diff;
+
+                        const double grad_dt_term = grad_terminal_vel.dot(terminal_vel_est) / terminal_dt;
+                        grad_t_global(terminal_idx) -= grad_dt_term;
+                        grad_t_global(prev_idx) += grad_dt_term;
+                    }
                 }
             }
 
-            accumulated_costs(7) += cost_terminal;
+            accumulated_costs(8) += cost_terminal;
             return cost + cost_terminal;
         }
     };
-} // namespace cost_functional
+}
 
 #endif

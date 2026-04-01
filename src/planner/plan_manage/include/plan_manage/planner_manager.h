@@ -13,6 +13,7 @@
 #include <SpatialMap/CorridorInit.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
 #include <path_searching/jps_a_star.hpp>
+#include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
 {
