@@ -5,8 +5,10 @@
 #include "visualization_msgs/Marker.h"
 
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <set>
 
 namespace ego_planner
@@ -166,6 +168,58 @@ namespace ego_planner
 
       return found_feasible;
     }
+
+    bool resamplePolylineByCount(const std::vector<Eigen::Vector3d> &path,
+                                 const int sample_count,
+                                 std::vector<Eigen::Vector3d> &samples)
+    {
+      samples.clear();
+      if (path.size() < 2 || sample_count < 2)
+      {
+        return false;
+      }
+
+      std::vector<double> accum(path.size(), 0.0);
+      for (std::size_t i = 1; i < path.size(); ++i)
+      {
+        accum[i] = accum[i - 1] + (path[i] - path[i - 1]).norm();
+      }
+
+      const double total_len = accum.back();
+      if (total_len < 1.0e-6)
+      {
+        samples.assign(static_cast<std::size_t>(sample_count), path.front());
+        return true;
+      }
+
+      samples.reserve(static_cast<std::size_t>(sample_count));
+      for (int k = 0; k < sample_count; ++k)
+      {
+        const double target_s = (sample_count == 1)
+                                    ? 0.0
+                                    : total_len * static_cast<double>(k) / static_cast<double>(sample_count - 1);
+        auto upper = std::lower_bound(accum.begin(), accum.end(), target_s);
+        const int idx = static_cast<int>(std::distance(accum.begin(), upper));
+        if (idx <= 0)
+        {
+          samples.push_back(path.front());
+          continue;
+        }
+        if (idx >= static_cast<int>(path.size()))
+        {
+          samples.push_back(path.back());
+          continue;
+        }
+
+        const double s0 = accum[static_cast<std::size_t>(idx - 1)];
+        const double s1 = accum[static_cast<std::size_t>(idx)];
+        const double denom = std::max(1.0e-9, s1 - s0);
+        const double alpha = (target_s - s0) / denom;
+        samples.push_back(path[static_cast<std::size_t>(idx - 1)] +
+                          alpha * (path[static_cast<std::size_t>(idx)] - path[static_cast<std::size_t>(idx - 1)]));
+      }
+      return samples.size() == static_cast<std::size_t>(sample_count);
+    }
   } // namespace
 
 
@@ -188,6 +242,11 @@ namespace ego_planner
     nh.param("manager/sfc_range", sfc_range_, 0.8);
     nh.param("manager/sfc_corridor_margin", sfc_corridor_margin_, 0.05);
     nh.param("manager/guide_min_clearance", guide_min_clearance_, 0.35);
+    nh.param("manager/guide_sparse_min_inner", guide_sparse_min_inner_, 2);
+    nh.param("manager/guide_sparse_max_inner", guide_sparse_max_inner_, 5);
+    nh.param("manager/guide_turn_angle_deg", guide_turn_angle_deg_, 25.0);
+    nh.param("manager/warm_start_prefix_time", warm_start_prefix_time_, 0.45);
+    nh.param("manager/warm_start_prefix_max_points", warm_start_prefix_max_points_, 4);
     const char *mode_name = use_sfc_corridor_ ? "sfc_corridor" : (use_esdf_ ? "esdf" : "guide_points");
     ROS_INFO("Local planner obstacle mode: %s", mode_name);
 
@@ -205,6 +264,11 @@ namespace ego_planner
 
     ploy_traj_opt_->setSwarmTrajs(&traj_.swarm_traj);
     ploy_traj_opt_->setDroneId(pp_.drone_id);
+  }
+
+  bool EGOPlannerManager::corridorModeEnabled()
+  {
+    return use_sfc_corridor_;
   }
 
   void EGOPlannerManager::reportCorridorFailure(CorridorFailureType type,
@@ -317,6 +381,87 @@ namespace ego_planner
 
     ROS_WARN("FAIL_LOCAL_TARGET_INVALID");
     return false;
+  }
+
+  bool EGOPlannerManager::sparsifyGuidePath(const std::vector<Eigen::Vector3d> &dense_path,
+                                            std::vector<Eigen::Vector3d> &sparse_path) const
+  {
+    sparse_path.clear();
+    if (dense_path.size() < 2)
+    {
+      return false;
+    }
+
+    std::vector<double> accum_len(dense_path.size(), 0.0);
+    for (std::size_t i = 1; i < dense_path.size(); ++i)
+    {
+      accum_len[i] = accum_len[i - 1] + (dense_path[i] - dense_path[i - 1]).norm();
+    }
+
+    const double total_len = accum_len.back();
+    const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
+    int desired_inner = std::max(0, static_cast<int>(std::round(total_len / piece_length)) - 1);
+    desired_inner = std::max(desired_inner, guide_sparse_min_inner_);
+    desired_inner = std::min(desired_inner, guide_sparse_max_inner_);
+    desired_inner = std::min(desired_inner, static_cast<int>(dense_path.size()) - 2);
+
+    std::vector<std::pair<double, int>> turn_candidates;
+    const double turn_thresh_rad = guide_turn_angle_deg_ * M_PI / 180.0;
+    for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+    {
+      const Eigen::Vector3d vin = dense_path[static_cast<std::size_t>(i)] - dense_path[static_cast<std::size_t>(i - 1)];
+      const Eigen::Vector3d vout = dense_path[static_cast<std::size_t>(i + 1)] - dense_path[static_cast<std::size_t>(i)];
+      if (vin.norm() < 1.0e-4 || vout.norm() < 1.0e-4)
+      {
+        continue;
+      }
+      const double angle = std::acos(std::max(-1.0, std::min(1.0, vin.normalized().dot(vout.normalized()))));
+      if (angle >= turn_thresh_rad)
+      {
+        turn_candidates.emplace_back(angle, i);
+      }
+    }
+    std::sort(turn_candidates.begin(), turn_candidates.end(),
+              [](const auto &a, const auto &b)
+              { return a.first > b.first; });
+
+    std::set<int> selected;
+    for (const auto &cand : turn_candidates)
+    {
+      if (static_cast<int>(selected.size()) >= desired_inner)
+      {
+        break;
+      }
+      selected.insert(cand.second);
+    }
+
+    for (int k = 1; static_cast<int>(selected.size()) < desired_inner && k <= desired_inner; ++k)
+    {
+      const double target_s = total_len * static_cast<double>(k) / static_cast<double>(desired_inner + 1);
+      int best_idx = 1;
+      double best_err = std::numeric_limits<double>::infinity();
+      for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+      {
+        const double err = std::abs(accum_len[static_cast<std::size_t>(i)] - target_s);
+        if (err < best_err)
+        {
+          best_err = err;
+          best_idx = i;
+        }
+      }
+      selected.insert(best_idx);
+    }
+
+    sparse_path.push_back(dense_path.front());
+    for (int idx : selected)
+    {
+      sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
+    }
+    sparse_path.push_back(dense_path.back());
+
+    ROS_INFO("Guide path sparsification: dense=%zu sparse=%zu",
+             dense_path.size(), sparse_path.size());
+    return sparse_path.size() >= 2;
   }
 
   double EGOPlannerManager::estimateObstacleClearance(const Eigen::Vector3d &pt,
@@ -542,14 +687,184 @@ namespace ego_planner
     return init_traj.getTotalDuration() > 1.0e-6;
   }
 
-  bool EGOPlannerManager::buildCorridorAwareInitialGuess(
-      const Eigen::Vector3d &start_pt,
-      const Eigen::Vector3d &goal_pt,
-      const spatial_map::PolyhedraH &corridor_hpolys,
+  int EGOPlannerManager::findFirstCorridorPolyContainingPoint(
+    const Eigen::Vector3d &pt,
+    const spatial_map::PolyhedraH &corridor_hpolys,
+    double margin) const
+  {
+    for (std::size_t i = 0; i < corridor_hpolys.size(); ++i)
+    {
+      if (pointInsidePolytope(pt, corridor_hpolys[i], margin))
+      {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  }
+
+  bool EGOPlannerManager::sampleWarmStartPrefixFromCurrentTraj(
+        const Eigen::Vector3d &start_pt,
+        const spatial_map::PolyhedraH &corridor_hpolys,
+        std::vector<Eigen::Vector3d> &prefix_nodes,
+        std::vector<double> &prefix_durations) const
+  {
+    prefix_nodes.clear();
+    prefix_durations.clear();
+    prefix_nodes.push_back(start_pt);
+
+    const auto &lc = traj_.local_traj;
+    if (lc.traj_id <= 0 || lc.duration <= 0.10)
+    {
+      return false;
+    }
+
+    const double rel_now = ros::Time::now().toSec() - lc.start_time;
+    if (rel_now < 0.0 || rel_now >= lc.duration - 0.05)
+    {
+      return false;
+    }
+
+    const int max_samples = std::max(1, warm_start_prefix_max_points_);
+    const double sample_dt =
+        std::max(0.05, warm_start_prefix_time_ / static_cast<double>(max_samples));
+
+    double last_t = rel_now;
+    Eigen::Vector3d last_pt = start_pt;
+
+    for (int k = 0; k < max_samples; ++k)
+    {
+      const double sample_t = std::min(lc.duration, rel_now + (k + 1) * sample_dt);
+      if (sample_t <= last_t + 1.0e-4)
+      {
+        break;
+      }
+
+      const Eigen::Vector3d pt = lc.traj.evaluate(sample_t, 0);
+
+      if (grid_map_ && grid_map_->getInflateOccupancy(pt) != 0)
+      {
+        break;
+      }
+
+      if (!pointInsideCorridor(pt, corridor_hpolys, sfc_corridor_margin_))
+      {
+        break;
+      }
+
+      if ((pt - last_pt).norm() < 0.05)
+      {
+        continue;
+      }
+
+      prefix_nodes.push_back(pt);
+      prefix_durations.push_back(sample_t - last_t);
+      last_pt = pt;
+      last_t = sample_t;
+
+      if (sample_t - rel_now >= warm_start_prefix_time_ - 1.0e-3)
+      {
+        break;
+      }
+    }
+
+    return prefix_durations.size() > 0;
+  }
+
+  bool EGOPlannerManager::mergePrefixAndTailInitialGuess(
+      const std::vector<Eigen::Vector3d> &prefix_nodes,
+      const std::vector<double> &prefix_durations,
+      const Eigen::MatrixXd &tail_inner_pts,
+      const Eigen::VectorXd &tail_durations,
       Eigen::MatrixXd &inner_pts,
       Eigen::VectorXd &durations,
-      std::vector<Eigen::Vector3d> &transition_points,
-      std::vector<double> &inner_clearances) const
+      std::vector<double> *inner_clearances) const
+  {
+    const int prefix_piece_num = static_cast<int>(prefix_durations.size());
+    const int tail_piece_num = static_cast<int>(tail_durations.size());
+    const int piece_num = prefix_piece_num + tail_piece_num;
+
+    if (piece_num <= 0)
+    {
+      return false;
+    }
+    if (static_cast<int>(prefix_nodes.size()) != prefix_piece_num + 1)
+    {
+      ROS_ERROR("mergePrefixAndTailInitialGuess: invalid prefix node / duration size.");
+      return false;
+    }
+
+    durations.resize(piece_num);
+    for (int i = 0; i < prefix_piece_num; ++i)
+    {
+      durations(i) = std::max(prefix_durations[static_cast<std::size_t>(i)], 0.03);
+    }
+    for (int i = 0; i < tail_piece_num; ++i)
+    {
+      durations(prefix_piece_num + i) = std::max(tail_durations(i), 0.03);
+    }
+
+    const int inner_num = piece_num - 1;
+    inner_pts.resize(3, std::max(0, inner_num));
+
+    if (inner_clearances != nullptr)
+    {
+      inner_clearances->clear();
+      inner_clearances->reserve(std::max(0, inner_num));
+    }
+
+    int col = 0;
+    const bool has_tail = (tail_piece_num > 0);
+
+    const std::size_t prefix_inner_end = has_tail ? prefix_nodes.size() : (prefix_nodes.size() - 1);
+
+    for (std::size_t i = 1; i < prefix_inner_end; ++i)
+    {
+      if (col >= inner_num)
+      {
+        break;
+      }
+      inner_pts.col(col) = prefix_nodes[i];
+      if (inner_clearances != nullptr)
+      {
+        inner_clearances->push_back(
+            estimateObstacleClearance(prefix_nodes[i],
+                                      std::max(guide_min_clearance_, 2.0 * grid_map_->getResolution()),
+                                      nullptr));
+      }
+      ++col;
+    }
+
+    for (int i = 0; i < tail_inner_pts.cols(); ++i)
+    {
+      if (col >= inner_num)
+      {
+        break;
+      }
+      inner_pts.col(col) = tail_inner_pts.col(i);
+      if (inner_clearances != nullptr)
+      {
+        inner_clearances->push_back(
+            estimateObstacleClearance(tail_inner_pts.col(i),
+                                      std::max(guide_min_clearance_, 2.0 * grid_map_->getResolution()),
+                                      nullptr));
+      }
+      ++col;
+    }
+
+    if (col != inner_num)
+    {
+      ROS_ERROR("mergePrefixAndTailInitialGuess: inner point count mismatch, got=%d expect=%d",
+                col, inner_num);
+      return false;
+    }
+
+    return true;
+  }
+
+  bool EGOPlannerManager::buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,const Eigen::Vector3d &goal_pt,
+                                                        const spatial_map::PolyhedraH &corridor_hpolys,Eigen::MatrixXd &inner_pts,
+                                                        Eigen::VectorXd &durations,std::vector<Eigen::Vector3d> &transition_points,
+                                                        std::vector<double> &inner_clearances) const
   {
     transition_points.clear();
     inner_clearances.clear();
@@ -561,40 +876,137 @@ namespace ego_planner
       return false;
     }
 
-    std::vector<Eigen::Vector3d> short_path;
     const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
-    const double alloc_speed  = std::max(3.0 * pp_.max_vel_, 0.3); // GCOPTER 风格
+    const double alloc_speed = 0.3 * pp_.max_vel_;
 
-    if (!spatial_map::buildGCopterStyleCorridorInit(
-            start_pt,
+    auto build_fresh_init = [&]() -> bool
+    {
+      std::vector<Eigen::Vector3d> short_path;
+      if (!spatial_map::buildCorridorInit(
+              start_pt,
+              goal_pt,
+              corridor_hpolys,
+              piece_length,
+              alloc_speed,
+              inner_pts,
+              durations,
+              &transition_points,
+              &short_path))
+      {
+        ROS_WARN("buildCorridorAwareInitialGuess: fresh GCOPTER-style init failed");
+        return false;
+      }
+
+      inner_clearances.resize(std::max(0, static_cast<int>(inner_pts.cols())));
+      for (int i = 0; i < inner_pts.cols(); ++i)
+      {
+        inner_clearances[i] = estimateObstacleClearance(
+            inner_pts.col(i),
+            std::max(guide_min_clearance_, 2.0 * grid_map_->getResolution()),
+            nullptr);
+      }
+
+      ROS_INFO("buildCorridorAwareInitialGuess[fresh]: pieces=%ld inner=%ld totalT=%.3f transitions=%ld",
+              static_cast<long>(durations.size()),
+              static_cast<long>(inner_pts.cols()),
+              durations.sum(),
+              static_cast<long>(transition_points.size()));
+      return true;
+    };
+
+    // 1) 先尝试从当前 local traj 截一段 prefix warm-start
+    std::vector<Eigen::Vector3d> prefix_nodes;
+    std::vector<double> prefix_durations;
+    if (!sampleWarmStartPrefixFromCurrentTraj(start_pt, corridor_hpolys,
+                                              prefix_nodes, prefix_durations))
+    {
+      return build_fresh_init();
+    }
+
+    const Eigen::Vector3d prefix_end = prefix_nodes.back();
+
+    // prefix 已经非常接近当前目标，则直接用 prefix 本身做初值
+    if ((goal_pt - prefix_end).norm() < 0.05)
+    {
+      transition_points.assign(prefix_nodes.begin() + 1, prefix_nodes.end());
+      if (!mergePrefixAndTailInitialGuess(prefix_nodes,
+                                          prefix_durations,
+                                          Eigen::MatrixXd(3, 0),
+                                          Eigen::VectorXd(0),
+                                          inner_pts,
+                                          durations,
+                                          &inner_clearances))
+      {
+        return build_fresh_init();
+      }
+
+      ROS_INFO("buildCorridorAwareInitialGuess[prefix-only]: pieces=%ld inner=%ld totalT=%.3f",
+              static_cast<long>(durations.size()),
+              static_cast<long>(inner_pts.cols()),
+              durations.sum());
+      return true;
+    }
+
+    const int start_poly_idx =
+        findFirstCorridorPolyContainingPoint(prefix_end, corridor_hpolys, sfc_corridor_margin_);
+
+    if (start_poly_idx < 0)
+    {
+      ROS_WARN("buildCorridorAwareInitialGuess: prefix_end is not inside current corridor, fallback to fresh init.");
+      return build_fresh_init();
+    }
+
+    spatial_map::PolyhedraH trimmed_corridor(
+        corridor_hpolys.begin() + start_poly_idx,
+        corridor_hpolys.end());
+
+    Eigen::MatrixXd tail_inner_pts;
+    Eigen::VectorXd tail_durations;
+    std::vector<Eigen::Vector3d> tail_transition_points;
+    std::vector<Eigen::Vector3d> tail_short_path;
+
+    if (!spatial_map::buildCorridorInit(
+            prefix_end,
             goal_pt,
-            corridor_hpolys,
+            trimmed_corridor,
             piece_length,
             alloc_speed,
-            inner_pts,
-            durations,
-            &transition_points,
-            &short_path))
+            tail_inner_pts,
+            tail_durations,
+            &tail_transition_points,
+            &tail_short_path))
     {
-      ROS_WARN("buildCorridorAwareInitialGuess: GCOPTER-style init failed");
-      return false;
+      ROS_WARN("buildCorridorAwareInitialGuess: tail init from prefix_end failed, fallback to fresh init.");
+      return build_fresh_init();
     }
 
-    // 仅用于可视化/调试：记录 inner pts clearance
-    inner_clearances.resize(std::max(static_cast<Eigen::Index>(0), inner_pts.cols()));
-    for (int i = 0; i < inner_pts.cols(); ++i)
+    // 3) merge: old prefix + new corridor tail
+    if (!mergePrefixAndTailInitialGuess(prefix_nodes,
+                                        prefix_durations,
+                                        tail_inner_pts,
+                                        tail_durations,
+                                        inner_pts,
+                                        durations,
+                                        &inner_clearances))
     {
-      inner_clearances[i] = estimateObstacleClearance(
-          inner_pts.col(i),
-          std::max(guide_min_clearance_, 2.0 * grid_map_->getResolution()),
-          nullptr);
+      ROS_WARN("buildCorridorAwareInitialGuess: merge prefix/tail failed, fallback to fresh init.");
+      return build_fresh_init();
     }
 
-    ROS_INFO("buildCorridorAwareInitialGuess: piece_num=%ld inner=%ld totalT=%.3f transitions=%ld",
+    transition_points.clear();
+    for (std::size_t i = 1; i < prefix_nodes.size(); ++i)
+    {
+      transition_points.push_back(prefix_nodes[i]);
+    }
+    transition_points.insert(transition_points.end(),
+                            tail_transition_points.begin(),
+                            tail_transition_points.end());
+
+    ROS_INFO("buildCorridorAwareInitialGuess[warm]: prefix_pieces=%ld tail_pieces=%ld total=%ld totalT=%.3f",
+            static_cast<long>(prefix_durations.size()),
+            static_cast<long>(tail_durations.size()),
             static_cast<long>(durations.size()),
-            static_cast<long>(inner_pts.cols()),
-            durations.sum(),
-            static_cast<long>(transition_points.size()));
+            durations.sum());
 
     return true;
   }
@@ -760,13 +1172,6 @@ namespace ego_planner
       return true;
     }
 
-    const double step = std::max(grid_map_->getResolution() * 0.5, 0.05);
-    if (sfc_gen::lineOfSight(start_pt, safe_goal, grid_map_.get(), step))
-    {
-      dense_path = {start_pt, safe_goal};
-      return true;
-    }
-
     if (!simple_astar_)
     {
       ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: simple_astar_ is null");
@@ -872,46 +1277,103 @@ namespace ego_planner
     }
     else if (use_esdf)
     {
-      std::vector<Eigen::Vector3d> guide_path;
-      Eigen::Vector3d safe_goal = local_target_pt;
-      if (!sanitizeLocalTarget(local_target_pt, safe_goal))
+      std::vector<Eigen::Vector3d> dense_path, guide_path;
+      Eigen::Vector3d safe_goal = safe_target_pt;
+      if (!prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
       {
-        ROS_WARN("FAIL_LOCAL_TARGET_INVALID: cannot sanitize local target");
+        ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot prepare local A* path for ESDF");
         return false;
       }
-      if(!simple_astar_->search(start_pt,safe_goal,guide_path))
+
+      if (!sparsifyGuidePath(dense_path, guide_path))
       {
-        ROS_WARN("Retry Path Planning!");
-        if(!simple_astar_->search(start_pt,safe_goal,guide_path))
-        {
-          ROS_WARN("Path Searching Failed !");
-        }
-        else
-        {
-          ROS_WARN("Retry Success !");
-        }
+        ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot sparsify ESDF guide path");
+        return false;
       }
-      else
+
+      if (visualization_)
       {
-        visualization_->displayFrontendList(guide_path, 0.05,1);
-        if (!buildInitStateFromGuidePath(start_pt,
+        visualization_->displayGlobalPathList(dense_path, 0.08, 1);
+        visualization_->displayFrontendList(guide_path, 0.10, 1);
+      }
+
+      Eigen::MatrixXd guide_inner_pts;
+      Eigen::VectorXd guide_durations;
+      MINCOTraj3D guide_init_traj;
+      if (!buildInitStateFromGuidePath(start_pt,
                                        start_vel,
                                        start_acc,
-                                       safe_target_pt,
+                                       safe_goal,
                                        local_target_vel,
                                        guide_path,
-                                       initTraj,
-                                       innerPts,
-                                       durations,
+                                       guide_init_traj,
+                                       guide_inner_pts,
+                                       guide_durations,
                                        headState,
                                        tailState))
-        {
-          return false;
-        }
-        ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-                ploy_traj_opt_->isTrajectoryCollisionFree(initTraj) ? "yes" : "no",
-                computeTrajectoryMinSdf(initTraj));
+      {
+        ROS_WARN("FAIL_ESDF_INIT: failed to build guide-based initial trajectory.");
+        return false;
       }
+
+      innerPts = guide_inner_pts;
+      durations = guide_durations;
+      initTraj = guide_init_traj;
+
+      bool warm_start_used = false;
+      if (!flag_polyInit)
+      {
+        MINCOTraj3D warm_traj;
+        Eigen::MatrixXd warm_inner_pts;
+        Eigen::VectorXd warm_durations;
+        MINCOBoundaryState3D warm_head, warm_tail;
+        const bool warm_ok = computeInitState(start_pt,
+                                              start_vel,
+                                              start_acc,
+                                              safe_goal,
+                                              local_target_vel,
+                                              false,
+                                              false,
+                                              ts,
+                                              warm_traj,
+                                              warm_inner_pts,
+                                              warm_durations,
+                                              warm_head,
+                                              warm_tail);
+
+        if (warm_ok && warm_durations.size() > 0)
+        {
+          std::vector<Eigen::Vector3d> warm_anchors;
+          if (resamplePolylineByCount(guide_path, warm_durations.size() + 1, warm_anchors))
+          {
+            Eigen::MatrixXd warm_inner_from_guide(3, std::max(0, static_cast<int>(warm_anchors.size()) - 2));
+            for (int i = 1; i + 1 < static_cast<int>(warm_anchors.size()); ++i)
+            {
+              warm_inner_from_guide.col(i - 1) = warm_anchors[static_cast<std::size_t>(i)];
+            }
+
+            MINCOTraj3D mixed_init_traj;
+            if (mixed_init_traj.generate(warm_inner_from_guide, headState, tailState, warm_durations))
+            {
+              innerPts = warm_inner_from_guide;
+              durations = warm_durations;
+              initTraj = mixed_init_traj;
+              warm_start_used = true;
+            }
+          }
+        }
+      }
+
+      ROS_INFO("ESDF init strategy: %s (guide_points=%zu pieces=%ld)",
+               warm_start_used ? "warm_duration+guide_inner" : "guide_only",
+               guide_path.size(),
+               static_cast<long>(durations.size()));
+      const double init_min_sdf = computeTrajectoryMinSdf(initTraj);
+      const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+      const bool init_esdf_free = init_min_sdf >= esdf_tol;
+      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+               init_esdf_free ? "yes" : "no",
+               init_min_sdf);
     }
     else
     {
@@ -985,8 +1447,13 @@ namespace ego_planner
       if (flag_success)
       {
         MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+        const bool esdf_free = min_sdf >= esdf_tol;
         ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f",
-                 computeTrajectoryMinSdf(opt_traj));
+                 min_sdf);
+        ROS_DEBUG("OPT_TRAJ_CHECK_DETAIL: esdf_free=%s tol=%.3f",
+                  esdf_free ? "yes" : "no", esdf_tol);
         setLocalTrajFromOpt(opt_traj, touch_goal);
         cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
         visualization_->displayOptimalList(cstr_pts, 0);
@@ -994,9 +1461,11 @@ namespace ego_planner
       else
       {
         const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
+        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
         ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-                 ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
-                 computeTrajectoryMinSdf(opt_traj));
+                 (min_sdf >= esdf_tol) ? "yes" : "no",
+                 min_sdf);
       }
     }
     else if (pp_.use_multitopology_trajs)

@@ -25,6 +25,7 @@ namespace ego_planner
     nh.param("fsm/near_goal_replan_radius", near_goal_replan_radius_, 0.8);
     nh.param("fsm/corridor_check_margin", corridor_check_margin_, 0.05);
     nh.param("fsm/corridor_disable_fail_threshold", corridor_disable_fail_threshold_, 3);
+    nh.param("fsm/corridor_disable_duration", corridor_disable_duration_, 1.0);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -417,6 +418,61 @@ namespace ego_planner
     return true;
   }
 
+  bool EGOReplanFSM::shouldForcePlainReplan() const
+  {
+    if (!planner_manager_ || !planner_manager_->corridorModeEnabled())
+    {
+      return false;
+    }
+
+    const double now = ros::Time::now().toSec();
+
+    if (corridor_disabled_until_ > now)
+    {
+      return true;
+    }
+
+    if (last_corridor_fail_time_ > 0.0 &&
+        (now - last_corridor_fail_time_) < corridor_fail_cooldown_)
+    {
+      return true;
+    }
+
+    return false;
+  }
+
+  void EGOReplanFSM::markCorridorFailure(EGOPlannerManager::CorridorFailureType failure_type)
+  {
+    if (failure_type != EGOPlannerManager::FAIL_CORRIDOR_GENERATION &&
+        failure_type != EGOPlannerManager::FAIL_CORRIDOR_INIT &&
+        failure_type != EGOPlannerManager::FAIL_CORRIDOR_OPT)
+    {
+      return;
+    }
+
+    const double now = ros::Time::now().toSec();
+    last_corridor_fail_time_ = now;
+    corridor_fail_count_++;
+
+    if (corridor_fail_count_ >= corridor_disable_fail_threshold_)
+    {
+      corridor_disabled_until_ = std::max(corridor_disabled_until_,
+                                          now + corridor_disable_duration_);
+      ROS_WARN("Corridor planning temporarily disabled until %.3f after %d consecutive failures.",
+              corridor_disabled_until_, corridor_fail_count_);
+    }
+  }
+
+  void EGOReplanFSM::resetCorridorFailureState(bool clear_disable)
+  {
+    corridor_fail_count_ = 0;
+    last_corridor_fail_time_ = -1.0;
+    if (clear_disable)
+    {
+      corridor_disabled_until_ = -1.0;
+    }
+  }
+
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
     planner_manager_->getLocalTarget(
@@ -424,15 +480,13 @@ namespace ego_planner
         local_target_pt_, local_target_vel_,
         touch_goal_);
 
-    bool plan_success = planner_manager_->reboundReplan(
+    const bool force_plain = shouldForcePlainReplan();
+
+    const bool plan_success = planner_manager_->reboundReplan(
         start_pt_, start_vel_, start_acc_,
         local_target_pt_, local_target_vel_,
-        flag_use_poly_init, flag_randomPolyTraj, touch_goal_);
-
-    if (!plan_success  && currentTrajStillUsable(std::max(replan_thresh_, 0.8)))
-    {
-      return true;
-    }
+        flag_use_poly_init, flag_randomPolyTraj, touch_goal_,
+        force_plain);
 
     if (plan_success)
     {
@@ -440,8 +494,23 @@ namespace ego_planner
       polyTraj2ROSMsg(poly_msg);
       poly_traj_pub_.publish(poly_msg);
       broadcast_ploytraj_pub_.publish(poly_msg);
+
+      last_replan_time_ = ros::Time::now().toSec();
+
+      if (!force_plain)
+      {
+        resetCorridorFailureState(true);
+      }
+
+      return true;
     }
-    return plan_success;
+
+    if (!force_plain)
+    {
+      markCorridorFailure(planner_manager_->getLastCorridorFailureType());
+    }
+
+    return false;
   }
 
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times) 

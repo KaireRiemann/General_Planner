@@ -146,6 +146,34 @@ struct ShortestPathProblem
   double smooth_eps{1.0e-3};
 };
 
+inline void buildDefaultOverlapCenters(const PolyhedraV &overlap_vpolys,
+                                       std::vector<Eigen::Vector3d> &points)
+{
+  points.clear();
+  points.reserve(overlap_vpolys.size());
+
+  for (const auto &poly : overlap_vpolys)
+  {
+    if (poly.cols() <= 0)
+    {
+      points.emplace_back(Eigen::Vector3d::Zero());
+      continue;
+    }
+
+    if (poly.cols() == 1)
+    {
+      points.emplace_back(poly.col(0));
+      continue;
+    }
+
+    Eigen::VectorXd xi = Eigen::VectorXd::Constant(
+        poly.cols(),
+        std::sqrt(1.0 / static_cast<double>(poly.cols())));
+
+    points.emplace_back(overlapPointFromXi(poly, xi));
+  }
+}
+
 inline double shortestPathDistanceEval(void *instance,
                                        const double *x,
                                        double *g,
@@ -189,7 +217,9 @@ inline double shortestPathDistanceEval(void *instance,
     const Eigen::Vector3d a = (i == 0) ? prob->start : points.col(i - 1);
     const Eigen::Vector3d b = (i < overlap_num) ? points.col(i) : prob->goal;
     const Eigen::Vector3d d = b - a;
-    const double smoothed_distance = std::sqrt(d.squaredNorm() + prob->smooth_eps);
+
+    const double smoothed_distance =
+        std::sqrt(d.squaredNorm() + prob->smooth_eps * prob->smooth_eps);
     cost += smoothed_distance;
 
     const Eigen::Vector3d grad_segment = d / smoothed_distance;
@@ -283,6 +313,11 @@ inline bool solveShortestPathInCorridor(const Eigen::Vector3d &start_pt,
 
   (void)fx;
 
+  if (ret < 0)
+  {
+    return false;
+  }
+
   opt_points.resize(overlap_num);
   offset = 0;
   for (int i = 0; i < overlap_num; ++i)
@@ -292,9 +327,14 @@ inline bool solveShortestPathInCorridor(const Eigen::Vector3d &start_pt,
     const Eigen::Map<const Eigen::VectorXd> xi(x.data() + offset, dof);
     opt_points[i] = overlapPointFromXi(poly, xi);
     offset += dof;
+
+    if (!opt_points[i].allFinite())
+    {
+      return false;
+    }
   }
 
-  return ret >= 0;
+  return true;
 }
 
 inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_path,
@@ -345,7 +385,7 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
   return true;
 }
 
-inline bool buildGCopterStyleCorridorInit(const Eigen::Vector3d &start_pt,
+inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
                                           const Eigen::Vector3d &goal_pt,
                                           const PolyhedraH &corridor_hpolys,
                                           const double piece_length,
@@ -388,7 +428,10 @@ inline bool buildGCopterStyleCorridorInit(const Eigen::Vector3d &start_pt,
   }
 
   std::vector<Eigen::Vector3d> opt_points;
-  solveShortestPathInCorridor(start_pt, goal_pt, overlap_vpolys, opt_points);
+  if (!solveShortestPathInCorridor(start_pt, goal_pt, overlap_vpolys, opt_points))
+  {
+    buildDefaultOverlapCenters(overlap_vpolys, opt_points);
+  }
 
   std::vector<Eigen::Vector3d> short_path;
   short_path.reserve(opt_points.size() + 2);
@@ -407,6 +450,222 @@ inline bool buildGCopterStyleCorridorInit(const Eigen::Vector3d &start_pt,
 
   return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations);
 }
+
+// inline double shortestPathDistanceEval(void *instance,
+//                                        const double *x,
+//                                        double *g,
+//                                        const int n)
+// {
+//   auto *prob = reinterpret_cast<ShortestPathProblem *>(instance);
+//   std::fill(g, g + n, 0.0);
+
+//   if (prob == nullptr || prob->overlap_vpolys == nullptr)
+//   {
+//     return 0.0;
+//   }
+
+//   const int overlap_num = static_cast<int>(prob->overlap_vpolys->size());
+//   if (overlap_num <= 0)
+//   {
+//     return 0.0;
+//   }
+
+//   Eigen::Matrix3Xd points(3, overlap_num);
+//   Eigen::Matrix3Xd grad_points = Eigen::Matrix3Xd::Zero(3, overlap_num);
+
+//   int offset = 0;
+//   for (int i = 0; i < overlap_num; ++i)
+//   {
+//     const PolyhedronV &poly = (*prob->overlap_vpolys)[i];
+//     const int dof = poly.cols();
+//     if (offset + dof > n)
+//     {
+//       return 0.0;
+//     }
+
+//     const Eigen::Map<const Eigen::VectorXd> xi(x + offset, dof);
+//     points.col(i) = overlapPointFromXi(poly, xi);
+//     offset += dof;
+//   }
+
+//   double cost = 0.0;
+//   for (int i = 0; i <= overlap_num; ++i)
+//   {
+//     const Eigen::Vector3d a = (i == 0) ? prob->start : points.col(i - 1);
+//     const Eigen::Vector3d b = (i < overlap_num) ? points.col(i) : prob->goal;
+//     const Eigen::Vector3d d = b - a;
+//     const double smoothed_distance = std::sqrt(d.squaredNorm() + prob->smooth_eps);
+//     cost += smoothed_distance;
+
+//     const Eigen::Vector3d grad_segment = d / smoothed_distance;
+//     if (i < overlap_num)
+//     {
+//       grad_points.col(i) += grad_segment;
+//     }
+//     if (i > 0)
+//     {
+//       grad_points.col(i - 1) -= grad_segment;
+//     }
+//   }
+
+//   offset = 0;
+//   for (int i = 0; i < overlap_num; ++i)
+//   {
+//     const PolyhedronV &poly = (*prob->overlap_vpolys)[i];
+//     const int dof = poly.cols();
+//     const Eigen::Map<const Eigen::VectorXd> xi(x + offset, dof);
+//     Eigen::Map<Eigen::VectorXd> grad_xi(g + offset, dof);
+
+//     grad_xi = backwardGradByOverlapPoint(poly, xi, grad_points.col(i));
+//     addNormPenalty(xi, cost, grad_xi);
+//     offset += dof;
+//   }
+
+//   return cost;
+// }
+
+// inline bool solveShortestPathInCorridor(const Eigen::Vector3d &start_pt,
+//                                         const Eigen::Vector3d &goal_pt,
+//                                         const PolyhedraV &overlap_vpolys,
+//                                         std::vector<Eigen::Vector3d> &opt_points,
+//                                         const double smooth_eps = 1.0e-3)
+// {
+//   opt_points.clear();
+
+//   const int overlap_num = static_cast<int>(overlap_vpolys.size());
+//   if (overlap_num == 0)
+//   {
+//     return true;
+//   }
+
+//   int total_dim = 0;
+//   for (const auto &poly : overlap_vpolys)
+//   {
+//     total_dim += poly.cols();
+//   }
+//   if (total_dim <= 0)
+//   {
+//     return false;
+//   }
+
+//   std::vector<double> x(total_dim, 0.0);
+//   int offset = 0;
+//   for (const auto &poly : overlap_vpolys)
+//   {
+//     const int dof = poly.cols();
+//     const double init_value = std::sqrt(1.0 / static_cast<double>(std::max(dof, 1)));
+//     std::fill(x.begin() + offset, x.begin() + offset + dof, init_value);
+//     offset += dof;
+//   }
+
+//   ShortestPathProblem prob;
+//   prob.overlap_vpolys = &overlap_vpolys;
+//   prob.start = start_pt;
+//   prob.goal = goal_pt;
+//   prob.smooth_eps = smooth_eps;
+
+//   lbfgs::lbfgs_parameter_t param;
+//   lbfgs::lbfgs_load_default_parameters(&param);
+//   param.mem_size = 16;
+//   param.max_iterations = 64;
+//   param.max_linesearch = 40;
+//   param.g_epsilon = 1.0e-5;
+//   param.min_step = 1.0e-20;
+//   param.max_step = 1.0;
+//   param.past = 3;
+//   param.delta = 1.0e-3;
+
+//   double fx = 0.0;
+//   const int ret = lbfgs::lbfgs_optimize(
+//       total_dim,
+//       x.data(),
+//       &fx,
+//       shortestPathDistanceEval,
+//       nullptr,
+//       nullptr,
+//       &prob,
+//       &param);
+
+//   (void)fx;
+
+//   opt_points.resize(overlap_num);
+//   offset = 0;
+//   for (int i = 0; i < overlap_num; ++i)
+//   {
+//     const PolyhedronV &poly = overlap_vpolys[i];
+//     const int dof = poly.cols();
+//     const Eigen::Map<const Eigen::VectorXd> xi(x.data() + offset, dof);
+//     opt_points[i] = overlapPointFromXi(poly, xi);
+//     offset += dof;
+//   }
+
+//   return ret >= 0;
+// }
+
+
+
+// inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
+//                                           const Eigen::Vector3d &goal_pt,
+//                                           const PolyhedraH &corridor_hpolys,
+//                                           const double piece_length,
+//                                           const double alloc_speed,
+//                                           Eigen::MatrixXd &inner_pts,
+//                                           Eigen::VectorXd &durations,
+//                                           std::vector<Eigen::Vector3d> *transition_points = nullptr,
+//                                           std::vector<Eigen::Vector3d> *short_path_out = nullptr)
+// {
+//   inner_pts.resize(3, 0);
+//   durations.resize(0);
+//   if (transition_points != nullptr)
+//   {
+//     transition_points->clear();
+//   }
+//   if (short_path_out != nullptr)
+//   {
+//     short_path_out->clear();
+//   }
+
+//   if (corridor_hpolys.empty())
+//   {
+//     return false;
+//   }
+
+//   if (corridor_hpolys.size() == 1)
+//   {
+//     const std::vector<Eigen::Vector3d> short_path{start_pt, goal_pt};
+//     if (short_path_out != nullptr)
+//     {
+//       *short_path_out = short_path;
+//     }
+//     return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations);
+//   }
+
+//   PolyhedraV overlap_vpolys;
+//   if (!buildOverlapVertexPolys(corridor_hpolys, overlap_vpolys))
+//   {
+//     return false;
+//   }
+
+//   std::vector<Eigen::Vector3d> opt_points;
+//   solveShortestPathInCorridor(start_pt, goal_pt, overlap_vpolys, opt_points);
+
+//   std::vector<Eigen::Vector3d> short_path;
+//   short_path.reserve(opt_points.size() + 2);
+//   short_path.push_back(start_pt);
+//   short_path.insert(short_path.end(), opt_points.begin(), opt_points.end());
+//   short_path.push_back(goal_pt);
+
+//   if (transition_points != nullptr)
+//   {
+//     *transition_points = opt_points;
+//   }
+//   if (short_path_out != nullptr)
+//   {
+//     *short_path_out = short_path;
+//   }
+
+//   return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations);
+// }
 
 } // namespace spatial_map
 

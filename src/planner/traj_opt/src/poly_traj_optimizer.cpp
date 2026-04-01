@@ -376,7 +376,7 @@ namespace ego_planner
     piece_num_ = initT.size();
 
     distanceFieldMincoOpt_.setEnergyWeight(rho_energy_);
-    distanceFieldMincoOpt_.setSamplesPerPiece(std::max(cps_num_prePiece_ * 3, 12));
+    distanceFieldMincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose();
@@ -406,7 +406,7 @@ namespace ego_planner
     distance_field_cost_manager_.wei_swarm = wei_swarm_mod_;
     distance_field_cost_manager_.wei_feas = wei_feas_;
     distance_field_cost_manager_.wei_sqrvar = wei_sqrvar_;
-    distance_field_cost_manager_.safe_margin = obs_clearance_;
+    distance_field_cost_manager_.safe_margin = safety_margin_;
     distance_field_cost_manager_.swarm_clearance = swarm_clearance_;
     distance_field_cost_manager_.max_vel = max_vel_;
     distance_field_cost_manager_.max_acc = max_acc_;
@@ -445,6 +445,11 @@ namespace ego_planner
       return std::isfinite(min_sdf) ? min_sdf : 0.0;
     };
 
+    const double sdf_collision_tol = -std::max(0.10, 0.5 * grid_map_->getResolution());
+    const double sdf_soft_margin = std::max(0.0, 0.5 * obs_clearance_);
+    const double init_min_sdf = computeMinSdf(init_traj);
+    const bool init_esdf_free = init_min_sdf >= sdf_collision_tol;
+
     do
     {
       iter_num_ = 0;
@@ -479,24 +484,30 @@ namespace ego_planner
         }
 
         const MINCOTraj &traj = distanceFieldMincoOpt_.getTrajectory();
-        const bool flag_collision_free = isTrajectoryCollisionFree(traj);
         const double min_sdf = computeMinSdf(traj);
-        const bool flag_margin_safe = min_sdf >= std::max(0.0, 0.5 * obs_clearance_);
+        const bool flag_collision_free = min_sdf >= sdf_collision_tol;
+        const bool flag_margin_safe = min_sdf >= sdf_soft_margin;
 
-        if (!flag_swarm_too_close && flag_collision_free && flag_margin_safe)
+        if (!flag_swarm_too_close && flag_collision_free)
         {
           flag_success = true;
+          if (!flag_margin_safe)
+          {
+            ROS_WARN("ESDF optimize accepted with small clearance: min_sdf=%.3f soft_margin=%.3f tol=%.3f",
+                     min_sdf, sdf_soft_margin, sdf_collision_tol);
+          }
         }
         else
         {
-          ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f cost=%.3f",
+          ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f cost=%.3f",
                    flag_collision_free ? "yes" : "no",
                    flag_swarm_too_close ? "no" : "yes",
                    min_sdf,
-                   obs_clearance_,
+                   sdf_soft_margin,
+                   sdf_collision_tol,
                    final_cost);
           restart_nums++;
-          if (!flag_margin_safe)
+          if (!flag_margin_safe || !flag_collision_free)
           {
             distance_field_cost_manager_.wei_dist *= 2.0;
           }
@@ -512,6 +523,16 @@ namespace ego_planner
         restart_nums++;
       }
     } while (!flag_success && restart_nums < 3);
+
+    if (!flag_success && init_esdf_free)
+    {
+      Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
+      final_cost = distanceFieldMincoOpt_.evaluate(x0, grad_dummy, time_cost_, distance_field_cost_manager_);
+      ROS_WARN("ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f).",
+               init_min_sdf,
+               sdf_collision_tol);
+      return true;
+    }
 
     return flag_success;
   }
@@ -752,6 +773,11 @@ namespace ego_planner
       }
     } while (!flag_success && restart_nums < 3);
 
+    if (flag_success)
+    {
+      Eigen::Map<const Eigen::VectorXd> x_final(x_init, variable_num_);
+      corridorMincoOpt_.setWarmStartGuess(x_final);
+    }
     return flag_success;
   }
 
@@ -1630,6 +1656,7 @@ namespace ego_planner
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);
     nh.param("optimization/weight_time", wei_time_, -1.0);
     nh.param("optimization/weight_energy", rho_energy_, 1.0);
+    nh.param("optimization/safety_margin", safety_margin_, -1.0);
     nh.param("optimization/obstacle_clearance", obs_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, -1.0);
     nh.param("optimization/corridor_clearance", corridor_clearance_, 0.0);

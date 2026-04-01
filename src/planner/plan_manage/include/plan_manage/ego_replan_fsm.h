@@ -73,10 +73,12 @@ namespace ego_planner
     double near_goal_replan_radius_{0.8};
     double corridor_check_margin_{0.05};
     int corridor_disable_fail_threshold_{3};
+    double corridor_disable_duration_{1.0};
 
     double last_replan_time_{-1.0};
     double last_corridor_fail_time_{-1.0};
     int corridor_fail_count_{0};
+    double corridor_disabled_until_{-1.0};
     int waypoint_num_, wpt_id_;
     double planning_horizen_;
     double emergency_time_;
@@ -116,6 +118,11 @@ namespace ego_planner
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);
+
+    /*corridor failure manager*/
+    bool shouldForcePlainReplan() const;
+    void markCorridorFailure(EGOPlannerManager::CorridorFailureType failure_type);
+    void resetCorridorFailureState(bool clear_disable = true);
 
     /* global trajectory */
     void waypointCallback(const quadrotor_msgs::GoalSetPtr &msg);

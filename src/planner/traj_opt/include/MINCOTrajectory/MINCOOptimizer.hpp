@@ -181,6 +181,23 @@ public:
     return piece_num_ > 0;
   }
 
+  void setWarmStartGuess(const Eigen::Ref<const Eigen::VectorXd> &x)
+  {
+    warm_start_guess_ = x;
+    has_warm_start_guess_ = (x.size() > 0);
+  }
+
+  void clearWarmStartGuess()
+  {
+    warm_start_guess_.resize(0);
+    has_warm_start_guess_ = false;
+  }
+
+  bool hasWarmStartGuess() const
+  {
+    return has_warm_start_guess_;
+  }
+
   Eigen::VectorXd generateInitialGuess() const
   {
     int dim_T = piece_num_;
@@ -190,7 +207,16 @@ public:
       dim_P += active_spatial_map_->getUnconstrainedDim(i);
     }
 
-    Eigen::VectorXd x(dim_T + dim_P);
+    const int total_dim = dim_T + dim_P;
+
+    if (has_warm_start_guess_ &&
+        warm_start_guess_.size() == total_dim &&
+        warm_start_guess_.allFinite())
+    {
+      return warm_start_guess_;
+    }
+
+    Eigen::VectorXd x(total_dim);
     for (int i = 0; i < piece_num_; ++i)
     {
       x(i) = active_time_map_->toTau(ref_times_[i]);
@@ -200,7 +226,8 @@ public:
     for (int i = 1; i < piece_num_; ++i)
     {
       const int dof = active_spatial_map_->getUnconstrainedDim(i);
-      x.segment(offset, dof) = active_spatial_map_->toUnconstrained(ref_waypoints_.row(i).transpose(), i);
+      x.segment(offset, dof) =
+          active_spatial_map_->toUnconstrained(ref_waypoints_.row(i).transpose(), i);
       offset += dof;
     }
 
@@ -459,6 +486,8 @@ private:
 
   std::vector<double> ref_times_;
   WaypointsType ref_waypoints_;
+  bool has_warm_start_guess_{false};
+  Eigen::VectorXd warm_start_guess_;
 
   TimeMap default_time_map_;
   SpatialMap default_spatial_map_;

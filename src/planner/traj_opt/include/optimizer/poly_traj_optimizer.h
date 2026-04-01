@@ -71,6 +71,7 @@ namespace ego_planner
     double wei_time_;
     double wei_corridor_;
     double wei_dist_;
+    double safety_margin_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
     double max_vel_, max_acc_, max_jer_;
