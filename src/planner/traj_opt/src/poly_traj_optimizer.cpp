@@ -216,6 +216,9 @@ namespace ego_planner
     corridorSpatialMap_.reset(nullptr, nullptr, 0);
     corridor_cost_manager_.setCorridor(nullptr, nullptr);
     corridor_cost_manager_.setReferencePoints(nullptr, 0.0);
+    tracking_corridor_cost_manager_.setCorridor(nullptr, nullptr);
+    tracking_corridor_cost_manager_.setReferencePoints(nullptr, 0.0);
+    tracking_corridor_cost_manager_.setTrackingReference(nullptr);
   }
 
   // =====================================================
@@ -283,6 +286,45 @@ namespace ego_planner
     cost_manager_.cps_per_piece = cps_num_prePiece_;
     cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
+    if (tracking_task_enabled_)
+    {
+      tracking_cost_manager_.grid_map = grid_map_;
+      tracking_cost_manager_.cps = &cps_;
+      tracking_cost_manager_.swarm_traj = swarm_trajs_;
+      tracking_cost_manager_.setTrackingReference(&tracking_reference_);
+      tracking_cost_manager_.setSpatialMode(cost_functional::TrackingCostFunctionalManager::SPATIAL_PLAIN);
+      tracking_cost_manager_.wei_obs = wei_obs_;
+      tracking_cost_manager_.wei_obs_soft = wei_obs_soft_;
+      tracking_cost_manager_.wei_dist = wei_dist_;
+      tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      tracking_cost_manager_.wei_feas = wei_feas_;
+      tracking_cost_manager_.wei_sqrvar = wei_sqrvar_;
+      tracking_cost_manager_.obs_clearance = obs_clearance_;
+      tracking_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
+      tracking_cost_manager_.safe_margin = safety_margin_;
+      tracking_cost_manager_.swarm_clearance = swarm_clearance_;
+      tracking_cost_manager_.max_vel = max_vel_;
+      tracking_cost_manager_.max_acc = max_acc_;
+      tracking_cost_manager_.max_jer = max_jer_;
+      tracking_cost_manager_.drone_id = drone_id_;
+      tracking_cost_manager_.t_now = t_now_;
+      tracking_cost_manager_.touch_goal = touch_goal_;
+      tracking_cost_manager_.cps_per_piece = cps_num_prePiece_;
+      tracking_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
+      tracking_cost_manager_.track_d_min = tracking_distance_min_;
+      tracking_cost_manager_.track_d_max = tracking_distance_max_;
+      tracking_cost_manager_.track_z_tol = tracking_height_tolerance_;
+      tracking_cost_manager_.track_smooth_eps = tracking_smooth_eps_;
+      tracking_cost_manager_.wei_track_near = wei_tracking_near_;
+      tracking_cost_manager_.wei_track_far = wei_tracking_far_;
+      tracking_cost_manager_.wei_track_vertical = wei_tracking_vertical_;
+      tracking_cost_manager_.wei_track_view_xy = wei_tracking_view_xy_;
+      tracking_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
+      tracking_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
+      tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
+    }
+
     Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
@@ -307,7 +349,14 @@ namespace ego_planner
       flag_still_unsafe = false;
       flag_success = false;
       flag_swarm_too_close = false;
-      cost_manager_.wei_swarm = wei_swarm_mod_;
+      if (tracking_task_enabled_)
+      {
+        tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
+      else
+      {
+        cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
 
       t1 = ros::Time::now();
       int result = lbfgs::lbfgs_optimize(
@@ -387,6 +436,24 @@ namespace ego_planner
     return flag_success;
   }
 
+  bool PolyTrajOptimizer::optimizeTrackingTrajectory(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const cost_functional::TrackingReference &tracking_ref,
+      double &final_cost)
+  {
+    if (!tracking_ref.valid())
+    {
+      ROS_WARN("Tracking optimize rejected: invalid tracking reference.");
+      return false;
+    }
+    tracking_reference_ = tracking_ref;
+    tracking_task_enabled_ = true;
+    const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
+    tracking_task_enabled_ = false;
+    return success;
+  }
+
   bool PolyTrajOptimizer::optimizeTrajectoryWithDistanceField(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -454,6 +521,45 @@ namespace ego_planner
     distance_field_cost_manager_.touch_goal = touch_goal_;
     distance_field_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
+    if (tracking_task_enabled_)
+    {
+      tracking_cost_manager_.grid_map = grid_map_;
+      tracking_cost_manager_.cps = &cps_;
+      tracking_cost_manager_.swarm_traj = swarm_trajs_;
+      tracking_cost_manager_.setTrackingReference(&tracking_reference_);
+      tracking_cost_manager_.setSpatialMode(cost_functional::TrackingCostFunctionalManager::SPATIAL_ESDF);
+      tracking_cost_manager_.wei_obs = wei_obs_;
+      tracking_cost_manager_.wei_obs_soft = wei_obs_soft_;
+      tracking_cost_manager_.wei_dist = wei_dist_;
+      tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      tracking_cost_manager_.wei_feas = wei_feas_;
+      tracking_cost_manager_.wei_sqrvar = wei_sqrvar_;
+      tracking_cost_manager_.obs_clearance = obs_clearance_;
+      tracking_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
+      tracking_cost_manager_.safe_margin = safety_margin_;
+      tracking_cost_manager_.swarm_clearance = swarm_clearance_;
+      tracking_cost_manager_.max_vel = max_vel_;
+      tracking_cost_manager_.max_acc = max_acc_;
+      tracking_cost_manager_.max_jer = max_jer_;
+      tracking_cost_manager_.drone_id = drone_id_;
+      tracking_cost_manager_.t_now = t_now_;
+      tracking_cost_manager_.touch_goal = touch_goal_;
+      tracking_cost_manager_.cps_per_piece = cps_num_prePiece_;
+      tracking_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
+      tracking_cost_manager_.track_d_min = tracking_distance_min_;
+      tracking_cost_manager_.track_d_max = tracking_distance_max_;
+      tracking_cost_manager_.track_z_tol = tracking_height_tolerance_;
+      tracking_cost_manager_.track_smooth_eps = tracking_smooth_eps_;
+      tracking_cost_manager_.wei_track_near = wei_tracking_near_;
+      tracking_cost_manager_.wei_track_far = wei_tracking_far_;
+      tracking_cost_manager_.wei_track_vertical = wei_tracking_vertical_;
+      tracking_cost_manager_.wei_track_view_xy = wei_tracking_view_xy_;
+      tracking_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
+      tracking_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
+      tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
+    }
+
     Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
@@ -494,7 +600,14 @@ namespace ego_planner
       force_stop_type_ = DONT_STOP;
       flag_success = false;
       flag_swarm_too_close = false;
-      distance_field_cost_manager_.wei_swarm = wei_swarm_mod_;
+      if (tracking_task_enabled_)
+      {
+        tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
+      else
+      {
+        distance_field_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
 
       const int result = lbfgs::lbfgs_optimize(
           variable_num_,
@@ -547,7 +660,14 @@ namespace ego_planner
           restart_nums++;
           if (!flag_margin_safe || !flag_collision_free)
           {
-            distance_field_cost_manager_.wei_dist *= 2.0;
+            if (tracking_task_enabled_)
+            {
+              tracking_cost_manager_.wei_dist *= 2.0;
+            }
+            else
+            {
+              distance_field_cost_manager_.wei_dist *= 2.0;
+            }
           }
           if (flag_swarm_too_close)
           {
@@ -573,6 +693,24 @@ namespace ego_planner
     }
 
     return flag_success;
+  }
+
+  bool PolyTrajOptimizer::optimizeTrackingTrajectoryWithDistanceField(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const cost_functional::TrackingReference &tracking_ref,
+      double &final_cost)
+  {
+    if (!tracking_ref.valid())
+    {
+      ROS_WARN("Tracking ESDF optimize rejected: invalid tracking reference.");
+      return false;
+    }
+    tracking_reference_ = tracking_ref;
+    tracking_task_enabled_ = true;
+    const bool success = optimizeTrajectoryWithDistanceField(iniState, finState, initInnerPts, initT, final_cost);
+    tracking_task_enabled_ = false;
+    return success;
   }
 
   bool PolyTrajOptimizer::optimizeTrajectory(
@@ -767,6 +905,42 @@ namespace ego_planner
     corridor_cost_manager_.touch_goal = touch_goal_;
     corridor_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
+    if (tracking_task_enabled_)
+    {
+      tracking_corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
+      tracking_corridor_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
+      tracking_corridor_cost_manager_.setTrackingReference(&tracking_reference_);
+      tracking_corridor_cost_manager_.cps = &cps_;
+      tracking_corridor_cost_manager_.swarm_traj = swarm_trajs_;
+      tracking_corridor_cost_manager_.wei_corridor = wei_corridor_;
+      tracking_corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_;
+      tracking_corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+      tracking_corridor_cost_manager_.wei_feas = wei_feas_;
+      tracking_corridor_cost_manager_.wei_sqrvar = wei_sqrvar_;
+      tracking_corridor_cost_manager_.corridor_clearance = corridor_clearance_;
+      tracking_corridor_cost_manager_.corridor_smoothing = corridor_smoothing_;
+      tracking_corridor_cost_manager_.swarm_clearance = swarm_clearance_;
+      tracking_corridor_cost_manager_.max_vel = max_vel_;
+      tracking_corridor_cost_manager_.max_acc = max_acc_;
+      tracking_corridor_cost_manager_.max_jer = max_jer_;
+      tracking_corridor_cost_manager_.drone_id = drone_id_;
+      tracking_corridor_cost_manager_.t_now = t_now_;
+      tracking_corridor_cost_manager_.touch_goal = touch_goal_;
+      tracking_corridor_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
+      tracking_corridor_cost_manager_.track_d_min = tracking_distance_min_;
+      tracking_corridor_cost_manager_.track_d_max = tracking_distance_max_;
+      tracking_corridor_cost_manager_.track_z_tol = tracking_height_tolerance_;
+      tracking_corridor_cost_manager_.track_smooth_eps = tracking_smooth_eps_;
+      tracking_corridor_cost_manager_.wei_track_near = wei_tracking_near_;
+      tracking_corridor_cost_manager_.wei_track_far = wei_tracking_far_;
+      tracking_corridor_cost_manager_.wei_track_vertical = wei_tracking_vertical_;
+      tracking_corridor_cost_manager_.wei_track_view_xy = wei_tracking_view_xy_;
+      tracking_corridor_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
+      tracking_corridor_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
+      tracking_corridor_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
+    }
+
     Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
 
@@ -793,10 +967,20 @@ namespace ego_planner
       force_stop_type_ = DONT_STOP;
       flag_success = false;
       flag_swarm_too_close = false;
-      corridor_cost_manager_.wei_corridor = wei_corridor_work;
-      corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_work;
-      corridor_cost_manager_.wei_feas = wei_feas_work;
-      corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+      if (tracking_task_enabled_)
+      {
+        tracking_corridor_cost_manager_.wei_corridor = wei_corridor_work;
+        tracking_corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_work;
+        tracking_corridor_cost_manager_.wei_feas = wei_feas_work;
+        tracking_corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
+      else
+      {
+        corridor_cost_manager_.wei_corridor = wei_corridor_work;
+        corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_work;
+        corridor_cost_manager_.wei_feas = wei_feas_work;
+        corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
 
       const int result = lbfgs::lbfgs_optimize(
           variable_num_,
@@ -908,6 +1092,32 @@ namespace ego_planner
       corridorMincoOpt_.setWarmStartGuess(x_final);
     }
     return flag_success;
+  }
+
+  bool PolyTrajOptimizer::optimizeTrackingTrajectory(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const spatial_map::PolyhedraH &corridor_hpolys,
+      const Eigen::VectorXi *corridor_piece_idx,
+      const cost_functional::TrackingReference &tracking_ref,
+      double &final_cost)
+  {
+    if (!tracking_ref.valid())
+    {
+      ROS_WARN("Tracking corridor optimize rejected: invalid tracking reference.");
+      return false;
+    }
+    tracking_reference_ = tracking_ref;
+    tracking_task_enabled_ = true;
+    const bool success = optimizeTrajectory(iniState,
+                                            finState,
+                                            initInnerPts,
+                                            initT,
+                                            corridor_hpolys,
+                                            corridor_piece_idx,
+                                            final_cost);
+    tracking_task_enabled_ = false;
+    return success;
   }
 
   // =====================================================
@@ -1781,6 +1991,17 @@ namespace ego_planner
     nh.param("optimization/weight_corridor", wei_corridor_, 1000.0);
     nh.param("optimization/weight_corridor_reference", wei_corridor_ref_, 20.0);
     nh.param("optimization/weight_distance_field", wei_dist_, -1.0);
+    nh.param("optimization/weight_tracking_near", wei_tracking_near_, 200.0);
+    nh.param("optimization/weight_tracking_far", wei_tracking_far_, 60.0);
+    nh.param("optimization/weight_tracking_vertical", wei_tracking_vertical_, 80.0);
+    nh.param("optimization/weight_tracking_view_xy", wei_tracking_view_xy_, 40.0);
+    nh.param("optimization/weight_tracking_view_z", wei_tracking_view_z_, 20.0);
+    nh.param("optimization/weight_tracking_terminal_pos", wei_tracking_terminal_pos_, 0.0);
+    nh.param("optimization/weight_tracking_terminal_vel", wei_tracking_terminal_vel_, 0.0);
+    nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
+    nh.param("optimization/tracking_distance_max", tracking_distance_max_, 4.0);
+    nh.param("optimization/tracking_height_tolerance", tracking_height_tolerance_, 0.4);
+    nh.param("optimization/tracking_smooth_eps", tracking_smooth_eps_, 0.1);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);
@@ -1800,6 +2021,10 @@ namespace ego_planner
     {
       wei_dist_ = wei_obs_;
     }
+    tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
+    tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
+    tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
+    tracking_smooth_eps_ = std::max(1.0e-4, tracking_smooth_eps_);
   }
 
   void PolyTrajOptimizer::setEnvironment(const GridMap::Ptr &map)

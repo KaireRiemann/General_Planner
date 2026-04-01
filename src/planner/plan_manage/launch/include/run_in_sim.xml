@@ -10,6 +10,10 @@
     <arg name="flight_type" default="2"/>
     <arg name="use_sfc_corridor" default="false"/>
     <arg name="use_esdf" default="false"/>
+    <arg name="use_tracking_task" default="false"/>
+    <arg name="tracking_reference_topic" default="/tracking/reference"/>
+    <arg name="tracking_relay_goal" default="true"/>
+    <arg name="tracking_target_goal_topic" default="/tracking/target_goal"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
@@ -62,6 +66,10 @@
         <arg name="use_multitopology_trajs" value="false" />
         <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)" />
         <arg name="use_esdf" value="$(arg use_esdf)" />
+        <arg name="use_tracking_task" value="$(arg use_tracking_task)" />
+        <arg name="tracking_reference_topic" value="$(arg tracking_reference_topic)" />
+        <arg name="tracking_relay_goal" value="$(arg tracking_relay_goal)" />
+        <arg name="tracking_target_goal_topic" value="$(arg tracking_target_goal_topic)" />
         <arg name="enable_esdf" value="$(arg enable_esdf)" />
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
         <arg name="sfc_progress" value="$(arg sfc_progress)" />

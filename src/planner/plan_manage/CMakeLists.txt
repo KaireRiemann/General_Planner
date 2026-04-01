@@ -12,6 +12,8 @@ find_package(PCL 1.7 REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
+  nav_msgs
+  visualization_msgs
   geometry_msgs
   quadrotor_msgs
   plan_env
@@ -53,3 +55,6 @@ add_executable(traj_server src/traj_server.cpp)
 target_link_libraries(traj_server ${catkin_LIBRARIES})
 add_dependencies(traj_server ${catkin_EXPORTED_TARGETS})
 
+add_executable(tracking_target_sim src/tracking_target_sim.cpp)
+target_link_libraries(tracking_target_sim ${catkin_LIBRARIES})
+add_dependencies(tracking_target_sim ${catkin_EXPORTED_TARGETS})

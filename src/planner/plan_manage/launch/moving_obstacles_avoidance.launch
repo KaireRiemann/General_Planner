@@ -360,4 +360,8 @@
 		<arg name="map_size_z" value="$(arg map_size_z)"/>
 		<arg name="odom_topic" value="$(arg odom_topic)"/>
 	</include>
+
+	<node name="rviz" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find ego_planner)/launch/include/default.rviz">
+    </node>
 </launch>

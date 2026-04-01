@@ -7,6 +7,7 @@ namespace ego_planner
   {
     exec_state_ = FSM_EXEC_STATE::INIT;
     have_target_ = false;
+    have_tracking_ref_ = false;
     have_odom_ = false;
     have_recv_pre_agent_ = false;
     flag_escape_emergency_ = true;
@@ -26,6 +27,28 @@ namespace ego_planner
     nh.param("fsm/corridor_check_margin", corridor_check_margin_, 0.05);
     nh.param("fsm/corridor_disable_fail_threshold", corridor_disable_fail_threshold_, 3);
     nh.param("fsm/corridor_disable_duration", corridor_disable_duration_, 1.0);
+    nh.param("fsm/use_tracking_task", use_tracking_task_, false);
+    nh.param("fsm/tracking_reference_topic", tracking_reference_topic_, std::string("/tracking/reference"));
+    nh.param("fsm/tracking_reference_dt", tracking_reference_dt_, 0.2);
+    nh.param("fsm/tracking_relay_goal", tracking_relay_goal_, true);
+    nh.param("fsm/tracking_target_goal_topic", tracking_target_goal_topic_, std::string("/tracking/target_goal"));
+    nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
+    nh.param("optimization/tracking_distance_max", tracking_distance_max_, 4.0);
+    nh.param("optimization/tracking_height_tolerance", tracking_height_tolerance_, 0.4);
+    nh.param("fsm/tracking_wait_distance_buffer", tracking_wait_distance_buffer_, 0.35);
+    nh.param("fsm/tracking_wait_height_buffer", tracking_wait_height_buffer_, 0.20);
+    nh.param("fsm/tracking_wait_target_vel_thresh", tracking_wait_target_vel_thresh_, 0.20);
+    nh.param("fsm/tracking_wait_ego_vel_thresh", tracking_wait_ego_vel_thresh_, 0.15);
+    nh.param("fsm/tracking_resume_target_vel_thresh", tracking_resume_target_vel_thresh_, 0.25);
+    nh.param("fsm/tracking_resume_target_move_thresh", tracking_resume_target_move_thresh_, 0.35);
+    nh.param("fsm/tracking_replan_target_shift_thresh", tracking_replan_target_shift_thresh_, 0.8);
+    nh.param("fsm/tracking_replan_current_traj_lookahead", tracking_replan_current_traj_lookahead_, 0.8);
+    nh.param("fsm/tracking_replan_min_rest_time", tracking_replan_min_rest_time_, 0.8);
+    nh.param("fsm/tracking_replan_distance_buffer", tracking_replan_distance_buffer_, 0.55);
+    nh.param("fsm/tracking_replan_height_buffer", tracking_replan_height_buffer_, 0.30);
+    tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
+    tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
+    tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -35,12 +58,17 @@ namespace ego_planner
       nh.param("fsm/waypoint" + std::to_string(i) + "_z", waypoints_[i][2], -1.0);
     }
 
+    if (target_type_ == TARGET_TYPE::REFENCE_PATH)
+    {
+      use_tracking_task_ = true;
+    }
+
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
     planner_manager_.reset(new EGOPlannerManager);
     planner_manager_->initPlanModules(nh, visualization_);
 
-    have_trigger_ = !flag_realworld_experiment_;
+    have_trigger_ = use_tracking_task_ ? true : !flag_realworld_experiment_;
     no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
 
     /* callback */
@@ -61,7 +89,25 @@ namespace ego_planner
     heartbeat_pub_ = nh.advertise<std_msgs::Empty>("planning/heartbeat", 10);
     ground_height_pub_ = nh.advertise<std_msgs::Float64>("/ground_height_measurement", 10);
 
-    if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
+    if (use_tracking_task_)
+    {
+      tracking_ref_sub_ = nh.subscribe<nav_msgs::Path>(
+          tracking_reference_topic_,
+          1,
+          &EGOReplanFSM::trackingReferenceCallback,
+          this);
+      if (tracking_relay_goal_)
+      {
+        waypoint_sub_ = nh.subscribe("/goal", 1, &EGOReplanFSM::waypointCallback, this);
+        tracking_target_goal_pub_ = nh.advertise<quadrotor_msgs::GoalSet>(tracking_target_goal_topic_, 1);
+      }
+      ROS_INFO("Tracking task enabled. Waiting tracking reference on: %s", tracking_reference_topic_.c_str());
+      if (tracking_relay_goal_)
+      {
+        ROS_INFO("Tracking task goal relay enabled: /goal -> %s", tracking_target_goal_topic_.c_str());
+      }
+    }
+    else if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
       waypoint_sub_ = nh.subscribe("/goal", 1, &EGOReplanFSM::waypointCallback, this);
     }
@@ -108,8 +154,30 @@ namespace ego_planner
 
     case WAIT_TARGET:
     {
-      if (!have_target_ || !have_trigger_) goto force_return;
-      else changeFSMExecState(SEQUENTIAL_START, "FSM");
+      if (use_tracking_task_)
+      {
+        if (!have_tracking_ref_ || !have_odom_) goto force_return;
+        if (tracking_wait_for_motion_)
+        {
+          if (!tracking_target_moving_)
+          {
+            goto force_return;
+          }
+          tracking_wait_for_motion_ = false;
+          ROS_INFO("Tracking target starts moving again, leave WAIT_TARGET.");
+        }
+        else if (trackingShouldEnterWaitTarget())
+        {
+          tracking_wait_for_motion_ = true;
+          ROS_INFO_THROTTLE(1.0, "Tracking target is stationary and distance is satisfied, keep WAIT_TARGET.");
+          goto force_return;
+        }
+      }
+      else
+      {
+        if (!have_target_ || !have_trigger_) goto force_return;
+      }
+      changeFSMExecState(SEQUENTIAL_START, "FSM");
       break;
     }
 
@@ -162,10 +230,19 @@ namespace ego_planner
       LocalTrajData *info = &planner_manager_->traj_.local_traj;
       double t_cur = ros::Time::now().toSec() - info->start_time;
       t_cur = std::min(info->duration, t_cur);
+      const bool tracking_active = use_tracking_task_ && have_tracking_ref_;
+
+      if (tracking_active && trackingShouldEnterWaitTarget())
+      {
+        tracking_wait_for_motion_ = true;
+        changeFSMExecState(WAIT_TARGET, "TRACKING_SETTLED");
+        break;
+      }
       
       Eigen::Vector3d pos = info->traj.getPos(t_cur); 
-      bool touch_the_goal = ((local_target_pt_ - final_goal_).norm() < 1e-2);
+      bool touch_the_goal = tracking_active ? false : ((local_target_pt_ - final_goal_).norm() < 1e-2);
       const bool arrived_goal =
+          (!tracking_active) &&
           touch_the_goal &&
           (final_goal_ - odom_pos_).norm() < std::max(0.25, 0.5 * near_goal_replan_radius_) &&
           odom_vel_.norm() < 0.3;
@@ -176,14 +253,16 @@ namespace ego_planner
       {
         // pass
       }
-      else if ((target_type_ == TARGET_TYPE::PRESET_TARGET) &&
+      else if (!tracking_active &&
+               (target_type_ == TARGET_TYPE::PRESET_TARGET) &&
                (wpt_id_ < waypoint_num_ - 1) &&
                (final_goal_ - pos).norm() < no_replan_thresh_) 
       {
         wpt_id_++;
         planNextWaypoint(wps_[wpt_id_]);
       }
-      else if (arrived_goal || ((t_cur > info->duration - 1e-2) && touch_the_goal)) 
+      else if (!tracking_active &&
+               (arrived_goal || ((t_cur > info->duration - 1e-2) && touch_the_goal))) 
       {
         have_target_ = false;
         have_trigger_ = false;
@@ -200,8 +279,16 @@ namespace ego_planner
       const bool replan_allowed =
           (last_replan_time_ < 0.0) || (now - last_replan_time_ > min_replan_interval_);
 
-      const bool near_goal =
-          (final_goal_ - pos).norm() < near_goal_replan_radius_ || touch_the_goal;
+      const bool near_goal = tracking_active ? false :
+          ((final_goal_ - pos).norm() < near_goal_replan_radius_ || touch_the_goal);
+
+      if (tracking_active &&
+          !near_goal &&
+          (t_cur > replan_thresh_ || (!touch_the_goal && close_to_current_traj_end)) &&
+          trackingCanKeepCurrentTraj(info, t_cur))
+      {
+        break;
+      }
 
       if (replan_allowed &&
           !near_goal &&
@@ -475,18 +562,41 @@ namespace ego_planner
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
-    planner_manager_->getLocalTarget(
-        planning_horizen_, start_pt_, final_goal_,
-        local_target_pt_, local_target_vel_,
-        touch_goal_);
+    const bool tracking_active =
+        use_tracking_task_ &&
+        have_tracking_ref_ &&
+        tracking_reference_.valid();
+
+    if (tracking_active)
+    {
+      local_target_pt_ = tracking_target_pos_now_;
+      local_target_vel_ = tracking_target_vel_now_;
+      touch_goal_ = false;
+    }
+    else
+    {
+      planner_manager_->getLocalTarget(
+          planning_horizen_, start_pt_, final_goal_,
+          local_target_pt_, local_target_vel_,
+          touch_goal_);
+    }
 
     const bool force_plain = shouldForcePlainReplan();
 
-    const bool plan_success = planner_manager_->reboundReplan(
-        start_pt_, start_vel_, start_acc_,
-        local_target_pt_, local_target_vel_,
-        flag_use_poly_init, flag_randomPolyTraj, touch_goal_,
-        force_plain);
+    const bool plan_success = tracking_active ?
+        planner_manager_->planTrackingTask(
+            tracking_reference_,
+            start_pt_,
+            start_vel_,
+            start_acc_,
+            flag_use_poly_init,
+            flag_randomPolyTraj,
+            force_plain) :
+        planner_manager_->reboundReplan(
+            start_pt_, start_vel_, start_acc_,
+            local_target_pt_, local_target_vel_,
+            flag_use_poly_init, flag_randomPolyTraj, touch_goal_,
+            force_plain);
 
     if (plan_success)
     {
@@ -500,6 +610,14 @@ namespace ego_planner
       if (!force_plain)
       {
         resetCorridorFailureState(true);
+      }
+
+      if (tracking_active)
+      {
+        planned_tracking_target_pos_now_ = tracking_target_pos_now_;
+        have_planned_tracking_target_now_ = true;
+        planned_tracking_ref_end_ = tracking_reference_.p_ref.back();
+        have_planned_tracking_ref_end_ = true;
       }
 
       return true;
@@ -616,6 +734,11 @@ namespace ego_planner
 
   bool EGOReplanFSM::mondifyInCollisionFinalGoal()
   {
+    if (use_tracking_task_)
+    {
+      return false;
+    }
+
     if (planner_manager_->grid_map_->getInflateOccupancy(final_goal_))
     {
       Eigen::Vector3d orig_goal = final_goal_;
@@ -641,6 +764,28 @@ namespace ego_planner
   void EGOReplanFSM::waypointCallback(const quadrotor_msgs::GoalSetPtr &msg)
   {
     if (msg->drone_id != planner_manager_->pp_.drone_id || msg->goal[2] < -0.1) return;
+
+    if (use_tracking_task_ && tracking_relay_goal_)
+    {
+      if (tracking_target_goal_pub_)
+      {
+        tracking_target_goal_pub_.publish(*msg);
+      }
+
+      Eigen::Vector3d goal(msg->goal[0], msg->goal[1], msg->goal[2]);
+      if (visualization_)
+      {
+        visualization_->displayGoalPoint(goal,
+                                         Eigen::Vector4d(1.0, 0.8, 0.1, 1.0),
+                                         0.24,
+                                         3000 + planner_manager_->pp_.drone_id);
+      }
+      ROS_INFO("Tracking relay goal: [%.2f %.2f %.2f] -> %s",
+               goal.x(), goal.y(), goal.z(),
+               tracking_target_goal_topic_.c_str());
+      return;
+    }
+
     Eigen::Vector3d end_wp(msg->goal[0], msg->goal[1], msg->goal[2]);
     if (planNextWaypoint(end_wp)) have_trigger_ = true;
   }
@@ -689,6 +834,209 @@ namespace ego_planner
   {
     have_trigger_ = true;
     std::cout << "Triggered!" << std::endl;
+  }
+
+  bool EGOReplanFSM::trackingDistanceSatisfied(const Eigen::Vector3d &ego_pos,
+                                               const Eigen::Vector3d &target_pos,
+                                               const double planar_buffer,
+                                               const double height_buffer) const
+  {
+    const Eigen::Vector3d delta = target_pos - ego_pos;
+    const double planar_dist = delta.head<2>().norm();
+    const double dist_lo = std::max(0.0, tracking_distance_min_ - planar_buffer);
+    const double dist_hi = std::max(dist_lo + 0.05, tracking_distance_max_ + planar_buffer);
+    const double z_tol = std::max(0.0, tracking_height_tolerance_ + height_buffer);
+    return planar_dist >= dist_lo &&
+           planar_dist <= dist_hi &&
+           std::abs(delta.z()) <= z_tol;
+  }
+
+  bool EGOReplanFSM::trackingShouldEnterWaitTarget() const
+  {
+    if (!use_tracking_task_ || !have_tracking_ref_ || !tracking_reference_.valid())
+    {
+      return false;
+    }
+
+    const bool target_static = tracking_target_vel_now_.norm() <= tracking_wait_target_vel_thresh_;
+    const bool drone_slow = odom_vel_.norm() <= tracking_wait_ego_vel_thresh_;
+    const bool distance_ok =
+        trackingDistanceSatisfied(odom_pos_,
+                                  tracking_target_pos_now_,
+                                  tracking_wait_distance_buffer_,
+                                  tracking_wait_height_buffer_);
+    return target_static && drone_slow && distance_ok;
+  }
+
+  bool EGOReplanFSM::trackingCanKeepCurrentTraj(const LocalTrajData *info, double t_cur)
+  {
+    if (!use_tracking_task_ || !have_tracking_ref_ || !tracking_reference_.valid() || info == nullptr)
+    {
+      return false;
+    }
+
+    if (!currentTrajStillUsable(tracking_replan_current_traj_lookahead_))
+    {
+      return false;
+    }
+
+    if (!have_planned_tracking_target_now_)
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d target_shift = tracking_target_pos_now_ - planned_tracking_target_pos_now_;
+    const double target_shift_xy = target_shift.head<2>().norm();
+    const double target_shift_z = std::abs(target_shift.z());
+    const double remaining_t = std::max(0.0, info->duration - t_cur);
+    if (target_shift_xy > tracking_replan_target_shift_thresh_ ||
+        target_shift_z > (tracking_height_tolerance_ + tracking_replan_height_buffer_))
+    {
+      return false;
+    }
+
+    if (remaining_t < tracking_replan_min_rest_time_)
+    {
+      return false;
+    }
+
+    const double query_dt = std::max(0.0, tracking_replan_current_traj_lookahead_);
+    const double sample_t = std::min(info->duration, t_cur + std::max(query_dt, 0.2));
+    const Eigen::Vector3d traj_pos = info->traj.getPos(sample_t);
+
+    Eigen::Vector3d ref_pos = tracking_target_pos_now_;
+    Eigen::Vector3d ref_vel = tracking_target_vel_now_;
+    if (!cost_functional::sampleTrackingReference(
+            tracking_reference_,
+            std::min(query_dt, tracking_reference_.t_ref.back()),
+            ref_pos,
+            ref_vel))
+    {
+      return false;
+    }
+
+    if (!trackingDistanceSatisfied(traj_pos,
+                                   ref_pos,
+                                   tracking_replan_distance_buffer_,
+                                   tracking_replan_height_buffer_))
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d lookahead_delta = ref_pos - traj_pos;
+    ROS_INFO_THROTTLE(0.8,
+                      "Tracking keep current traj: target_shift_xy=%.2f target_shift_z=%.2f lookahead_xy=%.2f lookahead_z=%.2f remaining_t=%.2f lookahead=%.2f",
+                      target_shift_xy,
+                      target_shift_z,
+                      lookahead_delta.head<2>().norm(),
+                      std::abs(lookahead_delta.z()),
+                      remaining_t,
+                      query_dt);
+
+    planned_tracking_target_pos_now_ = tracking_target_pos_now_;
+    have_planned_tracking_target_now_ = true;
+    planned_tracking_ref_end_ = tracking_reference_.p_ref.back();
+    have_planned_tracking_ref_end_ = true;
+    return true;
+  }
+
+  void EGOReplanFSM::trackingReferenceCallback(const nav_msgs::PathConstPtr &msg)
+  {
+    if (!msg || msg->poses.size() < 2)
+    {
+      return;
+    }
+
+    cost_functional::TrackingReference ref;
+    const int N = static_cast<int>(msg->poses.size());
+    ref.t_ref.reserve(static_cast<std::size_t>(N));
+    ref.p_ref.reserve(static_cast<std::size_t>(N));
+    ref.v_ref.resize(static_cast<std::size_t>(N), Eigen::Vector3d::Zero());
+
+    const double min_dt = std::max(0.02, tracking_reference_dt_);
+    const double t0_stamp = msg->poses.front().header.stamp.toSec();
+    double last_t = 0.0;
+
+    for (int i = 0; i < N; ++i)
+    {
+      const auto &pose = msg->poses[static_cast<std::size_t>(i)].pose.position;
+      ref.p_ref.emplace_back(pose.x, pose.y, pose.z);
+
+      double ti = static_cast<double>(i) * min_dt;
+      const double pose_stamp = msg->poses[static_cast<std::size_t>(i)].header.stamp.toSec();
+      if (t0_stamp > 1.0e-6 && pose_stamp > 1.0e-6)
+      {
+        ti = std::max(0.0, pose_stamp - t0_stamp);
+      }
+
+      if (i > 0 && ti <= last_t)
+      {
+        ti = last_t + min_dt;
+      }
+
+      ref.t_ref.push_back(ti);
+      last_t = ti;
+    }
+
+    for (int i = 0; i + 1 < N; ++i)
+    {
+      const double dt = std::max(1.0e-3, ref.t_ref[static_cast<std::size_t>(i + 1)] - ref.t_ref[static_cast<std::size_t>(i)]);
+      ref.v_ref[static_cast<std::size_t>(i)] =
+          (ref.p_ref[static_cast<std::size_t>(i + 1)] - ref.p_ref[static_cast<std::size_t>(i)]) / dt;
+    }
+    ref.v_ref.back() = ref.v_ref[static_cast<std::size_t>(N - 2)];
+
+    if (!ref.valid())
+    {
+      ROS_WARN("Received invalid tracking reference.");
+      return;
+    }
+
+    tracking_reference_ = ref;
+    have_tracking_ref_ = true;
+    have_target_ = true;
+    have_new_target_ = true;
+    have_trigger_ = true;
+
+    tracking_target_pos_now_ = ref.p_ref.front();
+    if (!ref.v_ref.empty())
+    {
+      tracking_target_vel_now_ = ref.v_ref.front();
+    }
+    else
+    {
+      const double dt = std::max(1.0e-3, ref.t_ref[1] - ref.t_ref[0]);
+      tracking_target_vel_now_ = (ref.p_ref[1] - ref.p_ref[0]) / dt;
+    }
+
+    double max_ref_speed = tracking_target_vel_now_.norm();
+    for (const auto &v : ref.v_ref)
+    {
+      max_ref_speed = std::max(max_ref_speed, v.norm());
+    }
+    const double horizon_displacement = (ref.p_ref.back() - ref.p_ref.front()).norm();
+    tracking_target_moving_ =
+        (max_ref_speed > tracking_resume_target_vel_thresh_) ||
+        (horizon_displacement > tracking_resume_target_move_thresh_);
+
+    final_goal_ = tracking_target_pos_now_;
+    local_target_pt_ = tracking_target_pos_now_;
+    local_target_vel_ = tracking_target_vel_now_;
+
+    if (have_odom_)
+    {
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
+    }
+
+    if (visualization_)
+    {
+      visualization_->displayGoalPoint(final_goal_,
+                                       Eigen::Vector4d(1.0, 0.5, 0.0, 1.0),
+                                       0.22,
+                                       2000 + planner_manager_->pp_.drone_id);
+    }
   }
 
   void EGOReplanFSM::RecvBroadcastPolyTrajCallback(const traj_utils::PolyTrajConstPtr &msg)

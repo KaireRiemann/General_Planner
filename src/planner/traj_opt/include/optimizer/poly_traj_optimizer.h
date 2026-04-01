@@ -6,6 +6,9 @@
 #include "CostFunctionalManager/EgoCostManager.hpp"
 #include "CostFunctionalManager/CorridorCostManager.hpp"
 #include "CostFunctionalManager/DistanceFieldCostManager.hpp"
+#include "CostFunctionalManager/TrackingCostManager.hpp"
+#include "CostFunctionalManager/TrackingCorridorCostManager.hpp"
+#include "CostFunctionalManager/TrackingTypes.hpp"
 #include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include "SpatialMap/SFCCommonTypes.hpp"
@@ -31,6 +34,8 @@ namespace ego_planner
     cost_functional::EgoCostFunctionalManager cost_manager_;
     cost_functional::CorridorCostFunctionalManager corridor_cost_manager_;
     cost_functional::DistanceFieldCostFunctionalManager distance_field_cost_manager_;
+    cost_functional::TrackingCostFunctionalManager tracking_cost_manager_;
+    cost_functional::TrackingCorridorCostFunctionalManager tracking_corridor_cost_manager_;
 
     MINCOOpt mincoOpt_;
     ESDFMINCOOpt distanceFieldMincoOpt_;
@@ -72,6 +77,17 @@ namespace ego_planner
     double wei_corridor_;
     double wei_corridor_ref_;
     double wei_dist_;
+    double wei_tracking_near_;
+    double wei_tracking_far_;
+    double wei_tracking_vertical_;
+    double wei_tracking_view_xy_;
+    double wei_tracking_view_z_;
+    double wei_tracking_terminal_pos_;
+    double wei_tracking_terminal_vel_;
+    double tracking_distance_min_;
+    double tracking_distance_max_;
+    double tracking_height_tolerance_;
+    double tracking_smooth_eps_;
     double safety_margin_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
@@ -85,6 +101,8 @@ namespace ego_planner
     } optimize_mode_{MODE_PLAIN};
 
     double t_now_;
+    bool tracking_task_enabled_{false};
+    cost_functional::TrackingReference tracking_reference_;
 
     using PtsChk_t = std::vector<std::vector<std::pair<double,Eigen::Vector3d>>>;
     void resetSpatialOptimizationContext();
@@ -143,16 +161,30 @@ namespace ego_planner
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             double &final_cost);
+    bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                    const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                    const cost_functional::TrackingReference &tracking_ref,
+                                    double &final_cost);
 
     bool optimizeTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                              const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                              double &final_cost);
+    bool optimizeTrackingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                                     const cost_functional::TrackingReference &tracking_ref,
+                                                     double &final_cost);
 
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             const spatial_map::PolyhedraH &corridor_hpolys,
                             const Eigen::VectorXi *corridor_piece_idx,
                             double &final_cost);
+    bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                    const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                    const spatial_map::PolyhedraH &corridor_hpolys,
+                                    const Eigen::VectorXi *corridor_piece_idx,
+                                    const cost_functional::TrackingReference &tracking_ref,
+                                    double &final_cost);
 
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
                                               const MINCOTraj &traj,

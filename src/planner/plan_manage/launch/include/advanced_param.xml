@@ -34,6 +34,10 @@
     <arg name="use_multitopology_trajs"/>
     <arg name="use_sfc_corridor" default="false"/>
     <arg name="use_esdf" default="false"/>
+    <arg name="use_tracking_task" default="false"/>
+    <arg name="tracking_reference_topic" default="/tracking/reference"/>
+    <arg name="tracking_relay_goal" default="true"/>
+    <arg name="tracking_target_goal_topic" default="/tracking/target_goal"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
@@ -65,6 +69,22 @@
         <param name="fsm/emergency_time" value="1.0" type="double"/>
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
+        <param name="fsm/use_tracking_task" value="$(arg use_tracking_task)" type="bool"/>
+        <param name="fsm/tracking_reference_topic" value="$(arg tracking_reference_topic)" type="str"/>
+        <param name="fsm/tracking_reference_dt" value="0.2" type="double"/>
+        <param name="fsm/tracking_relay_goal" value="$(arg tracking_relay_goal)" type="bool"/>
+        <param name="fsm/tracking_target_goal_topic" value="$(arg tracking_target_goal_topic)" type="str"/>
+        <param name="fsm/tracking_wait_distance_buffer" value="0.35" type="double"/>
+        <param name="fsm/tracking_wait_height_buffer" value="0.20" type="double"/>
+        <param name="fsm/tracking_wait_target_vel_thresh" value="0.20" type="double"/>
+        <param name="fsm/tracking_wait_ego_vel_thresh" value="0.15" type="double"/>
+        <param name="fsm/tracking_resume_target_vel_thresh" value="0.25" type="double"/>
+        <param name="fsm/tracking_resume_target_move_thresh" value="0.35" type="double"/>
+        <param name="fsm/tracking_replan_target_shift_thresh" value="0.80" type="double"/>
+        <param name="fsm/tracking_replan_current_traj_lookahead" value="0.80" type="double"/>
+        <param name="fsm/tracking_replan_min_rest_time" value="0.80" type="double"/>
+        <param name="fsm/tracking_replan_distance_buffer" value="0.55" type="double"/>
+        <param name="fsm/tracking_replan_height_buffer" value="0.30" type="double"/>
         <param name="fsm/waypoint_num" value="$(arg point_num)" type="int"/>
         <param name="fsm/waypoint0_x" value="$(arg point0_x)" type="double"/>
         <param name="fsm/waypoint0_y" value="$(arg point0_y)" type="double"/>
@@ -135,12 +155,32 @@
         <param name="manager/sfc_range" value="$(arg sfc_range)" type="double"/>
         <param name="manager/jps_jump_max_cells" value="$(arg jps_jump_max_cells)" type="int"/>
         <param name="manager/jps_near_obs_radius" value="$(arg jps_near_obs_radius)" type="int"/>
+        <param name="manager/tracking_anchor_future_time" value="1.00" type="double"/>
+        <param name="manager/tracking_anchor_max_future_time" value="2.00" type="double"/>
+        <param name="manager/tracking_anchor_dir_hysteresis" value="0.35" type="double"/>
+        <param name="manager/tracking_anchor_side_angle_deg" value="35.0" type="double"/>
+        <param name="manager/tracking_viewpoint_dt" value="0.60" type="double"/>
+        <param name="manager/tracking_viewpoint_max_num" value="5" type="int"/>
+        <param name="manager/tracking_viewpoint_yaw_step_deg" value="20.0" type="double"/>
+        <param name="manager/tracking_viewpoint_connect_dist" value="1.5" type="double"/>
+        <param name="manager/tracking_viewpoint_clearance" value="0.15" type="double"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
         <!-- trajectory optimization -->
         <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>
         <param name="optimization/weight_obstacle_soft" value="5000.0" type="double"/>
         <param name="optimization/weight_distance_field" value="10000.0" type="double"/>
+        <param name="optimization/weight_tracking_near" value="220.0" type="double"/>
+        <param name="optimization/weight_tracking_far" value="60.0" type="double"/>
+        <param name="optimization/weight_tracking_vertical" value="80.0" type="double"/>
+        <param name="optimization/weight_tracking_view_xy" value="40.0" type="double"/>
+        <param name="optimization/weight_tracking_view_z" value="20.0" type="double"/>
+        <param name="optimization/weight_tracking_terminal_pos" value="0.0" type="double"/>
+        <param name="optimization/weight_tracking_terminal_vel" value="0.0" type="double"/>
+        <param name="optimization/tracking_distance_min" value="1.5" type="double"/>
+        <param name="optimization/tracking_distance_max" value="4.0" type="double"/>
+        <param name="optimization/tracking_height_tolerance" value="0.4" type="double"/>
+        <param name="optimization/tracking_smooth_eps" value="0.1" type="double"/>
         <param name="optimization/weight_swarm" value="10000.0" type="double"/>
         <param name="optimization/weight_feasibility" value="10000.0" type="double"/>
         <param name="optimization/weight_sqrvariance" value="10000.0" type="double"/>

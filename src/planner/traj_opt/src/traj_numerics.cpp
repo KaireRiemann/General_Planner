@@ -120,8 +120,13 @@ namespace ego_planner
     PolyTrajOptimizer *opt = reinterpret_cast<PolyTrajOptimizer *>(func_data);
 
     fill(opt->min_ellip_dist2_.begin(), opt->min_ellip_dist2_.end(), std::numeric_limits<double>::max());
-    if (opt->optimize_mode_ == MODE_CORRIDOR)
+    if (opt->optimize_mode_ == MODE_CORRIDOR && opt->tracking_task_enabled_)
+      opt->tracking_corridor_cost_manager_.resetAccumulation();
+    else if (opt->optimize_mode_ == MODE_CORRIDOR)
       opt->corridor_cost_manager_.resetAccumulation();
+    else if ((opt->optimize_mode_ == MODE_ESDF || opt->optimize_mode_ == MODE_PLAIN) &&
+             opt->tracking_task_enabled_)
+      opt->tracking_cost_manager_.resetAccumulation();
     else if (opt->optimize_mode_ == MODE_ESDF)
       opt->distance_field_cost_manager_.resetAccumulation();
     else
@@ -142,11 +147,22 @@ namespace ego_planner
         return opt->time_cost_(T_vec, gdT);
       };
 
-      total_cost = opt->corridorMincoOpt_.evaluate(
-          x_vec,
-          grad_vec,
-          time_cost_wrapper,
-          opt->corridor_cost_manager_);
+      if (opt->tracking_task_enabled_)
+      {
+        total_cost = opt->corridorMincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->tracking_corridor_cost_manager_);
+      }
+      else
+      {
+        total_cost = opt->corridorMincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->corridor_cost_manager_);
+      }
     }
     else if (opt->optimize_mode_ == MODE_ESDF)
     {
@@ -156,11 +172,22 @@ namespace ego_planner
         return opt->time_cost_(T_vec, gdT);
       };
 
-      total_cost = opt->distanceFieldMincoOpt_.evaluate(
-          x_vec,
-          grad_vec,
-          time_cost_wrapper,
-          opt->distance_field_cost_manager_);
+      if (opt->tracking_task_enabled_)
+      {
+        total_cost = opt->distanceFieldMincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->tracking_cost_manager_);
+      }
+      else
+      {
+        total_cost = opt->distanceFieldMincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->distance_field_cost_manager_);
+      }
 
       opt->cps_.points = opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
       opt->cps_.cp_size = opt->cps_.points.cols();
@@ -174,11 +201,22 @@ namespace ego_planner
         return opt->time_cost_(T_vec, gdT);
       };
 
-      total_cost = opt->mincoOpt_.evaluate(
-          x_vec,
-          grad_vec,
-          time_cost_wrapper,
-          opt->cost_manager_);
+      if (opt->tracking_task_enabled_)
+      {
+        total_cost = opt->mincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->tracking_cost_manager_);
+      }
+      else
+      {
+        total_cost = opt->mincoOpt_.evaluate(
+            x_vec,
+            grad_vec,
+            time_cost_wrapper,
+            opt->cost_manager_);
+      }
 
       opt->cps_.points = opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
 

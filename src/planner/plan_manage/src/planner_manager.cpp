@@ -221,6 +221,49 @@ namespace ego_planner
       }
       return samples.size() == static_cast<std::size_t>(sample_count);
     }
+
+    Eigen::Vector3d rotateOnYaw(const Eigen::Vector3d &dir, const double angle_rad)
+    {
+      Eigen::Vector3d rotated = dir;
+      const double c = std::cos(angle_rad);
+      const double s = std::sin(angle_rad);
+      rotated.x() = c * dir.x() - s * dir.y();
+      rotated.y() = s * dir.x() + c * dir.y();
+      rotated.z() = 0.0;
+      return rotated;
+    }
+
+    double wrapAngle(double angle_rad)
+    {
+      constexpr double kTwoPi = 2.0 * M_PI;
+      while (angle_rad > M_PI)
+      {
+        angle_rad -= kTwoPi;
+      }
+      while (angle_rad < -M_PI)
+      {
+        angle_rad += kTwoPi;
+      }
+      return angle_rad;
+    }
+
+    void fillReferenceVelocities(const std::vector<double> &times,
+                                 const std::vector<Eigen::Vector3d> &positions,
+                                 std::vector<Eigen::Vector3d> &velocities)
+    {
+      velocities.assign(positions.size(), Eigen::Vector3d::Zero());
+      if (positions.size() < 2 || times.size() != positions.size())
+      {
+        return;
+      }
+
+      for (std::size_t i = 0; i + 1 < positions.size(); ++i)
+      {
+        const double dt = std::max(1.0e-3, times[i + 1] - times[i]);
+        velocities[i] = (positions[i + 1] - positions[i]) / dt;
+      }
+      velocities.back() = velocities[velocities.size() - 2];
+    }
   } // namespace
 
 
@@ -248,6 +291,28 @@ namespace ego_planner
     nh.param("manager/guide_sparse_min_inner", guide_sparse_min_inner_, 2);
     nh.param("manager/guide_sparse_max_inner", guide_sparse_max_inner_, 5);
     nh.param("manager/guide_turn_angle_deg", guide_turn_angle_deg_, 25.0);
+    nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
+    nh.param("optimization/tracking_distance_max", tracking_distance_max_, 4.0);
+    nh.param("manager/tracking_anchor_future_time", tracking_anchor_future_time_, 1.0);
+    nh.param("manager/tracking_anchor_max_future_time", tracking_anchor_max_future_time_, 2.0);
+    nh.param("manager/tracking_anchor_dir_hysteresis", tracking_anchor_dir_hysteresis_, 0.35);
+    nh.param("manager/tracking_anchor_side_angle_deg", tracking_anchor_side_angle_deg_, 35.0);
+    nh.param("manager/tracking_viewpoint_dt", tracking_viewpoint_dt_, 0.6);
+    nh.param("manager/tracking_viewpoint_max_num", tracking_viewpoint_max_num_, 5);
+    nh.param("manager/tracking_viewpoint_yaw_step_deg", tracking_viewpoint_yaw_step_deg_, 20.0);
+    nh.param("manager/tracking_viewpoint_connect_dist", tracking_viewpoint_connect_dist_, 1.5);
+    nh.param("manager/tracking_viewpoint_clearance", tracking_viewpoint_clearance_, 0.15);
+    tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
+    tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
+    tracking_anchor_future_time_ = std::max(0.0, tracking_anchor_future_time_);
+    tracking_anchor_max_future_time_ = std::max(tracking_anchor_future_time_, tracking_anchor_max_future_time_);
+    tracking_anchor_dir_hysteresis_ = std::max(0.0, std::min(0.95, tracking_anchor_dir_hysteresis_));
+    tracking_anchor_side_angle_deg_ = std::max(0.0, std::min(85.0, tracking_anchor_side_angle_deg_));
+    tracking_viewpoint_dt_ = std::max(0.15, tracking_viewpoint_dt_);
+    tracking_viewpoint_max_num_ = std::max(2, tracking_viewpoint_max_num_);
+    tracking_viewpoint_yaw_step_deg_ = std::max(5.0, std::min(60.0, tracking_viewpoint_yaw_step_deg_));
+    tracking_viewpoint_connect_dist_ = std::max(0.3, tracking_viewpoint_connect_dist_);
+    tracking_viewpoint_clearance_ = std::max(0.0, tracking_viewpoint_clearance_);
     const char *mode_name = use_sfc_corridor_ ? "sfc_corridor" : (use_esdf_ ? "esdf" : "guide_points");
     ROS_INFO("Local planner obstacle mode: %s", mode_name);
 
@@ -267,6 +332,25 @@ namespace ego_planner
 
     ploy_traj_opt_->setSwarmTrajs(&traj_.swarm_traj);
     ploy_traj_opt_->setDroneId(pp_.drone_id);
+  }
+
+  bool EGOPlannerManager::mapWindowReady() const
+  {
+    if (!grid_map_)
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d low = grid_map_->getUpdatedBoxLow();
+    const Eigen::Vector3d high = grid_map_->getUpdatedBoxHigh();
+    if (!low.allFinite() || !high.allFinite())
+    {
+      return false;
+    }
+
+    const double res = std::max(grid_map_->getResolution(), 1.0e-3);
+    const Eigen::Vector3d span = high - low;
+    return (span.array() > 6.0 * res).all();
   }
 
   bool EGOPlannerManager::corridorModeEnabled()
@@ -550,6 +634,60 @@ namespace ego_planner
       *push_dir = accum.norm() > 1.0e-6 ? accum.normalized() : Eigen::Vector3d::Zero();
     }
     return clearance;
+  }
+
+  bool EGOPlannerManager::lineOfSightFree(const Eigen::Vector3d &from,
+                                          const Eigen::Vector3d &to,
+                                          double max_dist) const
+  {
+    if (!grid_map_ || !mapWindowReady())
+    {
+      return true;
+    }
+
+    const double dist = (to - from).norm();
+    if (max_dist > 0.0 && dist > max_dist)
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d low = grid_map_->getUpdatedBoxLow();
+    const Eigen::Vector3d high = grid_map_->getUpdatedBoxHigh();
+    const auto inside = [&](const Eigen::Vector3d &pt) -> bool
+    {
+      return (pt.array() >= low.array()).all() &&
+             (pt.array() <= high.array()).all();
+    };
+
+    if (!inside(from) || !inside(to))
+    {
+      return false;
+    }
+
+    if (dist < 1.0e-6)
+    {
+      return grid_map_->getInflateOccupancy(from) == 0;
+    }
+
+    const double resolution = std::max(grid_map_->getResolution(), 1.0e-3);
+    RayCaster ray_caster;
+    if (!ray_caster.setInput(from / resolution, to / resolution))
+    {
+      return grid_map_->getInflateOccupancy(from) == 0 &&
+             grid_map_->getInflateOccupancy(to) == 0;
+    }
+
+    Eigen::Vector3d ray_idx;
+    while (ray_caster.step(ray_idx))
+    {
+      const Eigen::Vector3d world_pt = (ray_idx.array() + 0.5).matrix() * resolution;
+      if (grid_map_->getInflateOccupancy(world_pt) != 0)
+      {
+        return false;
+      }
+    }
+
+    return grid_map_->getInflateOccupancy(to) == 0;
   }
 
   double EGOPlannerManager::computeTrajectoryMinSdf(const MINCOTraj3D &traj) const
@@ -960,6 +1098,7 @@ namespace ego_planner
   {
     dense_path.clear();
     safe_goal = goal_pt;
+    Eigen::Vector3d safe_start = start_pt;
 
     if (!sanitizeLocalTarget(goal_pt, safe_goal))
     {
@@ -967,13 +1106,18 @@ namespace ego_planner
       return false;
     }
 
-    if ((safe_goal - start_pt).norm() < 1.0e-3)
+    if (!sanitizeLocalTarget(start_pt, safe_start))
+    {
+      safe_start = start_pt;
+    }
+
+    if ((safe_goal - safe_start).norm() < 1.0e-3)
     {
       dense_path = {start_pt, safe_goal};
       return true;
     }
 
-    if (!grid_map_)
+    if (!grid_map_ || !mapWindowReady())
     {
       dense_path = {start_pt, safe_goal};
       return true;
@@ -985,9 +1129,13 @@ namespace ego_planner
       return false;
     }
 
-    if (!jps_astar_->search(start_pt, safe_goal, dense_path))
+    if (!jps_astar_->search(safe_start, safe_goal, dense_path))
     {
-      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: 3D A* failed");
+      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: 3D A* failed, start=[%.2f %.2f %.2f] safe_start=[%.2f %.2f %.2f] goal=[%.2f %.2f %.2f] safe_goal=[%.2f %.2f %.2f]",
+               start_pt.x(), start_pt.y(), start_pt.z(),
+               safe_start.x(), safe_start.y(), safe_start.z(),
+               goal_pt.x(), goal_pt.y(), goal_pt.z(),
+               safe_goal.x(), safe_goal.y(), safe_goal.z());
       return false;
     }
 
@@ -997,7 +1145,595 @@ namespace ego_planner
       return false;
     }
 
+    dense_path.front() = safe_start;
+    dense_path.back() = safe_goal;
+
+    if ((dense_path.front() - start_pt).norm() > 1.0e-3)
+    {
+      dense_path.insert(dense_path.begin(), start_pt);
+    }
+
+    if ((dense_path.back() - safe_goal).norm() > 1.0e-3)
+    {
+      dense_path.push_back(safe_goal);
+    }
+
     return true;
+  }
+
+  bool EGOPlannerManager::buildTrackingAnchorCandidates(
+      const cost_functional::TrackingReference &reference,
+      const Eigen::Vector3d &start_pt,
+      const Eigen::Vector3d &start_vel,
+      std::vector<Eigen::Vector3d> &anchor_candidates,
+      std::vector<Eigen::Vector3d> *anchor_target_vels,
+      std::vector<double> *anchor_times) const
+  {
+    anchor_candidates.clear();
+    if (anchor_target_vels != nullptr)
+    {
+      anchor_target_vels->clear();
+    }
+    if (anchor_times != nullptr)
+    {
+      anchor_times->clear();
+    }
+
+    if (!reference.valid())
+    {
+      return false;
+    }
+
+    const double desired_dist = 0.5 * (tracking_distance_min_ + tracking_distance_max_);
+    const double horizon_end = std::max(0.0, reference.t_ref.back());
+    std::vector<double> sample_times{
+        0.0,
+        std::min(tracking_anchor_future_time_, horizon_end),
+        std::min(tracking_anchor_max_future_time_, horizon_end),
+        std::min(0.5 * horizon_end, tracking_anchor_max_future_time_),
+        horizon_end};
+
+    std::sort(sample_times.begin(), sample_times.end());
+    sample_times.erase(std::unique(sample_times.begin(),
+                                   sample_times.end(),
+                                   [](double a, double b)
+                                   { return std::abs(a - b) < 1.0e-3; }),
+                       sample_times.end());
+
+    Eigen::Vector3d sticky_dir = have_tracking_anchor_dir_
+                                     ? last_tracking_anchor_dir_
+                                     : Eigen::Vector3d::UnitX();
+    sticky_dir.z() = 0.0;
+    if (sticky_dir.head<2>().norm() < 1.0e-3)
+    {
+      sticky_dir = Eigen::Vector3d::UnitX();
+    }
+    sticky_dir.normalize();
+
+    for (double t_query : sample_times)
+    {
+      Eigen::Vector3d ref_pos = Eigen::Vector3d::Zero();
+      Eigen::Vector3d ref_vel = Eigen::Vector3d::Zero();
+      if (!cost_functional::sampleTrackingReference(reference, t_query, ref_pos, ref_vel))
+      {
+        continue;
+      }
+
+      Eigen::Vector3d anchor_dir = start_pt - ref_pos;
+      anchor_dir.z() = 0.0;
+      if (anchor_dir.head<2>().norm() < 0.5)
+      {
+        anchor_dir = -ref_vel;
+        anchor_dir.z() = 0.0;
+      }
+      if (anchor_dir.head<2>().norm() < 0.3)
+      {
+        anchor_dir = -start_vel;
+        anchor_dir.z() = 0.0;
+      }
+      if (anchor_dir.head<2>().norm() < 1.0e-3)
+      {
+        anchor_dir = sticky_dir;
+      }
+      else
+      {
+        anchor_dir.normalize();
+        if (have_tracking_anchor_dir_ &&
+            anchor_dir.dot(sticky_dir) < -tracking_anchor_dir_hysteresis_)
+        {
+          anchor_dir = sticky_dir;
+        }
+      }
+
+      std::vector<Eigen::Vector3d> dir_candidates;
+      dir_candidates.reserve(4);
+      dir_candidates.push_back(anchor_dir);
+
+      constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+      const double side_angle_rad = tracking_anchor_side_angle_deg_ * kDegToRad;
+      if (side_angle_rad > 1.0e-3)
+      {
+        dir_candidates.push_back(rotateOnYaw(anchor_dir, side_angle_rad).normalized());
+        dir_candidates.push_back(rotateOnYaw(anchor_dir, -side_angle_rad).normalized());
+      }
+
+      if (have_tracking_anchor_dir_)
+      {
+        dir_candidates.push_back(sticky_dir);
+      }
+
+      for (const auto &dir_candidate : dir_candidates)
+      {
+        Eigen::Vector3d anchor = ref_pos + desired_dist * dir_candidate;
+        anchor.z() = ref_pos.z();
+
+        bool duplicate = false;
+        for (const auto &cand : anchor_candidates)
+        {
+          if ((cand - anchor).norm() < 0.25)
+          {
+            duplicate = true;
+            break;
+          }
+        }
+        if (duplicate)
+        {
+          continue;
+        }
+
+        anchor_candidates.push_back(anchor);
+        if (anchor_target_vels != nullptr)
+        {
+          anchor_target_vels->push_back(ref_vel);
+        }
+        if (anchor_times != nullptr)
+        {
+          anchor_times->push_back(t_query);
+        }
+      }
+    }
+
+    return !anchor_candidates.empty();
+  }
+
+  bool EGOPlannerManager::buildTrackingViewpointSeries(
+      const cost_functional::TrackingReference &reference,
+      const Eigen::Vector3d &start_pt,
+      const Eigen::Vector3d &start_vel,
+      std::vector<Eigen::Vector3d> &target_samples,
+      std::vector<Eigen::Vector3d> &viewpoint_series,
+      std::vector<Eigen::Vector3d> *viewpoint_target_vels,
+      std::vector<double> *viewpoint_times) const
+  {
+    target_samples.clear();
+    viewpoint_series.clear();
+    if (viewpoint_target_vels != nullptr)
+    {
+      viewpoint_target_vels->clear();
+    }
+    if (viewpoint_times != nullptr)
+    {
+      viewpoint_times->clear();
+    }
+
+    if (!reference.valid())
+    {
+      return false;
+    }
+
+    const double desired_dist = 0.5 * (tracking_distance_min_ + tracking_distance_max_);
+    const double horizon_end = std::max(0.0, reference.t_ref.back());
+    std::vector<double> sample_times;
+    sample_times.reserve(static_cast<std::size_t>(tracking_viewpoint_max_num_));
+
+    if (horizon_end < 1.0e-3)
+    {
+      sample_times.push_back(0.0);
+    }
+    else
+    {
+      const int desired_count = std::max(
+          2,
+          std::min(tracking_viewpoint_max_num_,
+                   static_cast<int>(std::ceil(horizon_end / tracking_viewpoint_dt_)) + 1));
+      for (int i = 0; i < desired_count; ++i)
+      {
+        const double ratio = (desired_count <= 1)
+                                 ? 0.0
+                                 : static_cast<double>(i) / static_cast<double>(desired_count - 1);
+        sample_times.push_back(ratio * horizon_end);
+      }
+    }
+
+    std::sort(sample_times.begin(), sample_times.end());
+    sample_times.erase(std::unique(sample_times.begin(),
+                                   sample_times.end(),
+                                   [](double a, double b)
+                                   { return std::abs(a - b) < 1.0e-3; }),
+                       sample_times.end());
+
+    Eigen::Vector3d seed_dir = Eigen::Vector3d::Zero();
+    Eigen::Vector3d initial_target = Eigen::Vector3d::Zero();
+    Eigen::Vector3d initial_target_vel = Eigen::Vector3d::Zero();
+    if (cost_functional::sampleTrackingReference(reference, sample_times.front(), initial_target, initial_target_vel))
+    {
+      seed_dir = start_pt - initial_target;
+    }
+    seed_dir.z() = 0.0;
+    if (seed_dir.head<2>().norm() < 0.3)
+    {
+      seed_dir = -initial_target_vel;
+      seed_dir.z() = 0.0;
+    }
+    if (seed_dir.head<2>().norm() < 0.3)
+    {
+      seed_dir = -start_vel;
+      seed_dir.z() = 0.0;
+    }
+    if (seed_dir.head<2>().norm() < 1.0e-3)
+    {
+      seed_dir = have_tracking_anchor_dir_ ? last_tracking_anchor_dir_ : Eigen::Vector3d::UnitX();
+    }
+    seed_dir.z() = 0.0;
+    seed_dir.normalize();
+
+    const double yaw_step_rad = tracking_viewpoint_yaw_step_deg_ * M_PI / 180.0;
+    const int max_ring_id = std::max(4, static_cast<int>(std::ceil(M_PI / yaw_step_rad)));
+    const int angle_sample_num = 2 * max_ring_id + 1;
+    const double max_los_dist =
+        std::max(tracking_distance_max_ + 0.5,
+                 desired_dist + 2.0 * std::max(guide_min_clearance_, tracking_viewpoint_clearance_));
+    const double resolution = grid_map_ ? std::max(grid_map_->getResolution(), 1.0e-3) : 0.1;
+    const double probe_radius =
+        std::max(tracking_viewpoint_clearance_, 2.0 * resolution);
+    Eigen::Vector3d prev_viewpoint = start_pt;
+
+    for (const double t_query : sample_times)
+    {
+      Eigen::Vector3d ref_pos = Eigen::Vector3d::Zero();
+      Eigen::Vector3d ref_vel = Eigen::Vector3d::Zero();
+      if (!cost_functional::sampleTrackingReference(reference, t_query, ref_pos, ref_vel))
+      {
+        continue;
+      }
+
+      if (!viewpoint_series.empty())
+      {
+        seed_dir = viewpoint_series.back() - ref_pos;
+        seed_dir.z() = 0.0;
+      }
+      if (seed_dir.head<2>().norm() < 0.3)
+      {
+        seed_dir = -ref_vel;
+        seed_dir.z() = 0.0;
+      }
+      if (seed_dir.head<2>().norm() < 0.3)
+      {
+        seed_dir = prev_viewpoint - ref_pos;
+        seed_dir.z() = 0.0;
+      }
+      if (seed_dir.head<2>().norm() < 1.0e-3)
+      {
+        seed_dir = Eigen::Vector3d::UnitX();
+      }
+      seed_dir.normalize();
+
+      const double seed_yaw = std::atan2(seed_dir.y(), seed_dir.x());
+      double best_score = -std::numeric_limits<double>::infinity();
+      Eigen::Vector3d best_viewpoint = Eigen::Vector3d::Zero();
+      bool found = false;
+
+      for (int sample_id = 0; sample_id < angle_sample_num; ++sample_id)
+      {
+        const int ring_id = (sample_id == 0) ? 0 : ((sample_id + 1) / 2);
+        const double yaw_offset = static_cast<double>(ring_id) * yaw_step_rad;
+        const double candidate_yaw =
+            seed_yaw + ((sample_id % 2 == 0) ? yaw_offset : -yaw_offset);
+
+        Eigen::Vector3d candidate = ref_pos;
+        candidate.x() += desired_dist * std::cos(candidate_yaw);
+        candidate.y() += desired_dist * std::sin(candidate_yaw);
+        candidate.z() = ref_pos.z();
+
+        Eigen::Vector3d safe_candidate = candidate;
+        if (!sanitizeLocalTarget(candidate, safe_candidate))
+        {
+          continue;
+        }
+
+        const Eigen::Vector3d rel = safe_candidate - ref_pos;
+        const double radial_dist = rel.head<2>().norm();
+        if (radial_dist < 0.7 * tracking_distance_min_ ||
+            radial_dist > 1.35 * tracking_distance_max_)
+        {
+          continue;
+        }
+
+        if (!lineOfSightFree(safe_candidate, ref_pos, max_los_dist))
+        {
+          continue;
+        }
+
+        const double clearance =
+            estimateObstacleClearance(safe_candidate, probe_radius, nullptr);
+        const double radial_err = std::abs(radial_dist - desired_dist);
+        const double align =
+            std::cos(wrapAngle(std::atan2(rel.y(), rel.x()) - seed_yaw));
+        const double connect_bonus =
+            lineOfSightFree(prev_viewpoint, safe_candidate, tracking_viewpoint_connect_dist_) ? 0.4 : 0.0;
+        const double score =
+            2.0 * align +
+            0.8 * clearance +
+            connect_bonus -
+            0.6 * radial_err -
+            0.12 * (safe_candidate - prev_viewpoint).head<2>().norm();
+
+        if (!found || score > best_score)
+        {
+          best_score = score;
+          best_viewpoint = safe_candidate;
+          found = true;
+        }
+      }
+
+      if (!found)
+      {
+        continue;
+      }
+
+      if (!viewpoint_series.empty() &&
+          (best_viewpoint - viewpoint_series.back()).norm() < std::max(0.3, 2.0 * resolution) &&
+          (t_query + 1.0e-3 < horizon_end))
+      {
+        continue;
+      }
+
+      target_samples.push_back(ref_pos);
+      viewpoint_series.push_back(best_viewpoint);
+      if (viewpoint_target_vels != nullptr)
+      {
+        viewpoint_target_vels->push_back(ref_vel);
+      }
+      if (viewpoint_times != nullptr)
+      {
+        viewpoint_times->push_back(t_query);
+      }
+
+      prev_viewpoint = best_viewpoint;
+      seed_dir = best_viewpoint - ref_pos;
+      seed_dir.z() = 0.0;
+      if (seed_dir.head<2>().norm() > 1.0e-3)
+      {
+        seed_dir.normalize();
+      }
+    }
+
+    return !viewpoint_series.empty();
+  }
+
+  bool EGOPlannerManager::buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
+                                                      std::vector<Eigen::Vector3d> &guide_path) const
+  {
+    guide_path.clear();
+    if (waypoints.size() < 2)
+    {
+      return false;
+    }
+
+    guide_path.push_back(waypoints.front());
+    for (std::size_t i = 1; i < waypoints.size(); ++i)
+    {
+      const Eigen::Vector3d &next_wp = waypoints[i];
+      if ((next_wp - guide_path.back()).norm() < 1.0e-3)
+      {
+        continue;
+      }
+
+      if (lineOfSightFree(guide_path.back(), next_wp, tracking_viewpoint_connect_dist_))
+      {
+        guide_path.push_back(next_wp);
+        continue;
+      }
+
+      std::vector<Eigen::Vector3d> segment_path;
+      Eigen::Vector3d safe_goal = next_wp;
+      if (!prepareLocalAStarPath(guide_path.back(), next_wp, segment_path, safe_goal))
+      {
+        return false;
+      }
+
+      for (std::size_t j = 1; j < segment_path.size(); ++j)
+      {
+        if ((segment_path[j] - guide_path.back()).norm() > 1.0e-3)
+        {
+          guide_path.push_back(segment_path[j]);
+        }
+      }
+    }
+
+    return guide_path.size() >= 2;
+  }
+
+  bool EGOPlannerManager::planTrackingTask(
+      const cost_functional::TrackingReference &reference,
+      const Eigen::Vector3d &start_pt,
+      const Eigen::Vector3d &start_vel,
+      const Eigen::Vector3d &start_acc,
+      const bool flag_polyInit,
+      const bool flag_randomPolyTraj,
+      const bool force_plain)
+  {
+    if (!reference.valid())
+    {
+      ROS_WARN("planTrackingTask rejected: invalid tracking reference.");
+      return false;
+    }
+
+    const Eigen::Vector3d tracking_target = reference.p_ref.front();
+    const bool touch_goal = false;
+    const double desired_dist = 0.5 * (tracking_distance_min_ + tracking_distance_max_);
+
+    std::vector<Eigen::Vector3d> target_samples;
+    std::vector<Eigen::Vector3d> viewpoint_series;
+    std::vector<Eigen::Vector3d> viewpoint_target_vels;
+    std::vector<double> viewpoint_times;
+    std::vector<Eigen::Vector3d> tracking_guide_path;
+    if (buildTrackingViewpointSeries(reference,
+                                     start_pt,
+                                     start_vel,
+                                     target_samples,
+                                     viewpoint_series,
+                                     &viewpoint_target_vels,
+                                     &viewpoint_times))
+    {
+      std::vector<Eigen::Vector3d> tracking_waypoints;
+      tracking_waypoints.reserve(viewpoint_series.size() + 1);
+      tracking_waypoints.push_back(start_pt);
+      tracking_waypoints.insert(tracking_waypoints.end(),
+                                viewpoint_series.begin(),
+                                viewpoint_series.end());
+
+      if (buildGuidePathFromWaypoints(tracking_waypoints, tracking_guide_path))
+      {
+        cost_functional::TrackingReference planning_reference = reference;
+        planning_reference.t_view_ref = viewpoint_times;
+        planning_reference.p_view_ref = viewpoint_series;
+        fillReferenceVelocities(planning_reference.t_view_ref,
+                                planning_reference.p_view_ref,
+                                planning_reference.v_view_ref);
+
+        if (visualization_)
+        {
+          visualization_->displayDebugPathList(target_samples,
+                                               0.10,
+                                               Eigen::Vector4d(1.0, 0.55, 0.05, 1.0),
+                                               8000);
+          visualization_->displayDebugPathList(viewpoint_series,
+                                               0.12,
+                                               Eigen::Vector4d(0.15, 0.75, 1.0, 1.0),
+                                               8001);
+          visualization_->displayDebugPathList(tracking_guide_path,
+                                               0.08,
+                                               Eigen::Vector4d(0.15, 1.0, 0.35, 1.0),
+                                               8002,
+                                               true);
+        }
+
+        const Eigen::Vector3d &tracking_anchor = viewpoint_series.back();
+        const Eigen::Vector3d target_vel =
+            viewpoint_target_vels.empty() ? cost_functional::terminalTrackingVelocity(reference)
+                                          : viewpoint_target_vels.back();
+        const double anchor_t =
+            viewpoint_times.empty() ? reference.t_ref.back() : viewpoint_times.back();
+
+        ROS_INFO("planTrackingTask: ref_size=%zu viewpoint_count=%zu guide_pts=%zu view_ref=%s horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
+                 reference.t_ref.size(),
+                 viewpoint_series.size(),
+                 tracking_guide_path.size(),
+                 planning_reference.viewValid() ? "yes" : "no",
+                 reference.t_ref.back(),
+                 anchor_t,
+                 tracking_target.x(),
+                 tracking_target.y(),
+                 tracking_target.z(),
+                 tracking_anchor.x(),
+                 tracking_anchor.y(),
+                 tracking_anchor.z(),
+                 desired_dist);
+
+        if (reboundReplan(start_pt,
+                          start_vel,
+                          start_acc,
+                          tracking_anchor,
+                          target_vel,
+                          flag_polyInit,
+                          flag_randomPolyTraj,
+                          touch_goal,
+                          force_plain,
+                          &planning_reference,
+                          &tracking_guide_path))
+        {
+          Eigen::Vector3d success_dir = tracking_anchor - tracking_target;
+          success_dir.z() = 0.0;
+          if (success_dir.head<2>().norm() > 1.0e-3)
+          {
+            last_tracking_anchor_dir_ = success_dir.normalized();
+            have_tracking_anchor_dir_ = true;
+          }
+          return true;
+        }
+
+        ROS_WARN("planTrackingTask: viewpoint-series init failed, fallback to anchor trials.");
+      }
+      else
+      {
+        ROS_WARN("planTrackingTask: failed to build guide path from viewpoint series, fallback to anchor trials.");
+      }
+    }
+    else
+    {
+      ROS_WARN("planTrackingTask: failed to build viewpoint series, fallback to anchor trials.");
+    }
+
+    std::vector<Eigen::Vector3d> anchor_candidates;
+    std::vector<Eigen::Vector3d> anchor_target_vels;
+    std::vector<double> anchor_times;
+    if (!buildTrackingAnchorCandidates(reference,
+                                       start_pt,
+                                       start_vel,
+                                       anchor_candidates,
+                                       &anchor_target_vels,
+                                       &anchor_times))
+    {
+      ROS_WARN("planTrackingTask rejected: failed to build tracking anchor candidates.");
+      return false;
+    }
+
+    for (std::size_t i = 0; i < anchor_candidates.size(); ++i)
+    {
+      const Eigen::Vector3d &tracking_anchor = anchor_candidates[i];
+      const Eigen::Vector3d target_vel =
+          (i < anchor_target_vels.size()) ? anchor_target_vels[i] : Eigen::Vector3d::Zero();
+      const double anchor_t = (i < anchor_times.size()) ? anchor_times[i] : 0.0;
+
+      ROS_INFO("planTrackingTask: ref_size=%zu anchor_trial=%zu horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
+               reference.t_ref.size(),
+               i + 1,
+               reference.t_ref.back(),
+               anchor_t,
+               tracking_target.x(),
+               tracking_target.y(),
+               tracking_target.z(),
+               tracking_anchor.x(),
+               tracking_anchor.y(),
+               tracking_anchor.z(),
+               desired_dist);
+
+      if (reboundReplan(start_pt,
+                        start_vel,
+                        start_acc,
+                        tracking_anchor,
+                        target_vel,
+                        flag_polyInit,
+                        flag_randomPolyTraj,
+                        touch_goal,
+                        force_plain,
+                        &reference,
+                        nullptr))
+      {
+        Eigen::Vector3d success_dir = tracking_anchor - tracking_target;
+        success_dir.z() = 0.0;
+        if (success_dir.head<2>().norm() > 1.0e-3)
+        {
+          last_tracking_anchor_dir_ = success_dir.normalized();
+          have_tracking_anchor_dir_ = true;
+        }
+        return true;
+      }
+    }
+
+    ROS_WARN("planTrackingTask failed after %zu anchor trials.", anchor_candidates.size());
+    return false;
   }
 
   bool EGOPlannerManager::reboundReplan(
@@ -1005,7 +1741,9 @@ namespace ego_planner
       const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
       const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
       const bool flag_randomPolyTraj, const bool touch_goal,
-      const bool force_plain)
+      const bool force_plain,
+      const cost_functional::TrackingReference *tracking_ref,
+      const std::vector<Eigen::Vector3d> *preferred_guide_path)
   {
     ros::Time t_start = ros::Time::now();
     ros::Duration t_init, t_opt;
@@ -1023,6 +1761,12 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     Eigen::Vector3d safe_target_pt = local_target_pt;
+    const bool is_tracking_task = (tracking_ref != nullptr && tracking_ref->valid());
+    if (tracking_ref != nullptr && !tracking_ref->valid())
+    {
+      ROS_WARN("Tracking task rejected: invalid tracking reference.");
+      return false;
+    }
 
     if (!sanitizeLocalTarget(local_target_pt, safe_target_pt))
     {
@@ -1035,13 +1779,50 @@ namespace ego_planner
 
     const bool use_corridor = use_sfc_corridor_ && !force_plain;
     const bool use_esdf = use_esdf_ && !use_corridor && !force_plain;
+    const bool has_preferred_guide =
+        preferred_guide_path != nullptr && preferred_guide_path->size() >= 2;
 
     if (use_corridor)
     {
       std::vector<Eigen::Vector3d> guide_path;
       std::vector<Eigen::Vector3d> transition_points;
       std::vector<double> inner_clearances;
-      if (!prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
+      bool corridor_ready = false;
+      if (has_preferred_guide)
+      {
+        guide_path = *preferred_guide_path;
+        guide_path.front() = start_pt;
+        guide_path.back() = safe_target_pt;
+
+        std::vector<Eigen::Vector3d> sparse_guide_path;
+        if (sparsifyGuidePath(guide_path, sparse_guide_path) &&
+            generateSafeFlightCorridor(sparse_guide_path, corridor_hpolys))
+        {
+          guide_path = sparse_guide_path;
+          corridor_ready = true;
+        }
+        else if (generateSafeFlightCorridor(guide_path, corridor_hpolys))
+        {
+          corridor_ready = true;
+        }
+        else
+        {
+          ROS_WARN("Tracking preferred guide path failed to generate corridor, fallback to local guide search.");
+        }
+
+        if (corridor_ready && visualization_)
+        {
+          visualization_->displayGlobalPathList(*preferred_guide_path, 0.08, 2);
+          visualization_->displayFrontendList(guide_path, 0.12, 2);
+
+          std::vector<Eigen::Vector3d> tri, edges;
+          buildCorridorVisualization(corridor_hpolys, tri, edges);
+          visualization_->displayCorridor(tri, edges, 2);
+        }
+      }
+
+      if (!corridor_ready &&
+          !prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
       {
         return false;
       }
@@ -1130,13 +1911,23 @@ namespace ego_planner
     {
       std::vector<Eigen::Vector3d> dense_path, guide_path;
       Eigen::Vector3d safe_goal = safe_target_pt;
-      if (!prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
+      if (has_preferred_guide)
+      {
+        dense_path = *preferred_guide_path;
+        dense_path.front() = start_pt;
+        dense_path.back() = safe_goal;
+        if (!sparsifyGuidePath(dense_path, guide_path))
+        {
+          guide_path = dense_path;
+        }
+      }
+      else if (!prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
       {
         ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot prepare local A* path for ESDF");
         return false;
       }
 
-      if (!sparsifyGuidePath(dense_path, guide_path))
+      if (guide_path.empty() && !sparsifyGuidePath(dense_path, guide_path))
       {
         ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot sparsify ESDF guide path");
         return false;
@@ -1262,11 +2053,23 @@ namespace ego_planner
     if (use_corridor)
     {
       double final_cost;
-      flag_success = ploy_traj_opt_->optimizeTrajectory(headState, tailState,
-                                                        innerPts, durations,
-                                                        corridor_hpolys,
-                                                        &corridor_piece_idx,
-                                                        final_cost);
+      if (is_tracking_task)
+      {
+        flag_success = ploy_traj_opt_->optimizeTrackingTrajectory(headState, tailState,
+                                                                  innerPts, durations,
+                                                                  corridor_hpolys,
+                                                                  &corridor_piece_idx,
+                                                                  *tracking_ref,
+                                                                  final_cost);
+      }
+      else
+      {
+        flag_success = ploy_traj_opt_->optimizeTrajectory(headState, tailState,
+                                                          innerPts, durations,
+                                                          corridor_hpolys,
+                                                          &corridor_piece_idx,
+                                                          final_cost);
+      }
 
       t_opt = ros::Time::now() - t_start;
 
@@ -1292,8 +2095,18 @@ namespace ego_planner
     else if (use_esdf)
     {
       double final_cost;
-      flag_success = ploy_traj_opt_->optimizeTrajectoryWithDistanceField(headState, tailState,
-                                                                         innerPts, durations, final_cost);
+      if (is_tracking_task)
+      {
+        flag_success = ploy_traj_opt_->optimizeTrackingTrajectoryWithDistanceField(headState, tailState,
+                                                                                    innerPts, durations,
+                                                                                    *tracking_ref,
+                                                                                    final_cost);
+      }
+      else
+      {
+        flag_success = ploy_traj_opt_->optimizeTrajectoryWithDistanceField(headState, tailState,
+                                                                           innerPts, durations, final_cost);
+      }
 
       t_opt = ros::Time::now() - t_start;
 
@@ -1373,8 +2186,18 @@ namespace ego_planner
     else
     {
       double final_cost;
-      flag_success = ploy_traj_opt_->optimizeTrajectory(headState, tailState,
-                                                        innerPts, durations, final_cost);
+      if (is_tracking_task)
+      {
+        flag_success = ploy_traj_opt_->optimizeTrackingTrajectory(headState, tailState,
+                                                                  innerPts, durations,
+                                                                  *tracking_ref,
+                                                                  final_cost);
+      }
+      else
+      {
+        flag_success = ploy_traj_opt_->optimizeTrajectory(headState, tailState,
+                                                          innerPts, durations, final_cost);
+      }
 
       t_opt = ros::Time::now() - t_start;
 

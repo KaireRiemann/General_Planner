@@ -11,6 +11,7 @@
 #include <plan_env/grid_map.h>
 #include <SpatialMap/SFCCommonTypes.hpp>
 #include <SpatialMap/CorridorInit.hpp>
+#include <CostFunctionalManager/TrackingTypes.hpp>
 #include <path_searching/jps_a_star.hpp>
 
 namespace ego_planner
@@ -53,6 +54,17 @@ namespace ego_planner
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
         const Eigen::Vector3d &end_vel, const bool flag_polyInit,
         const bool flag_randomPolyTraj, const bool touch_goal,
+        const bool force_plain = false,
+        const cost_functional::TrackingReference *tracking_ref = nullptr,
+        const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr);
+
+    bool planTrackingTask(
+        const cost_functional::TrackingReference &reference,
+        const Eigen::Vector3d &start_pt,
+        const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc,
+        const bool flag_polyInit,
+        const bool flag_randomPolyTraj,
         const bool force_plain = false);
 
     bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
@@ -98,8 +110,24 @@ namespace ego_planner
   private:
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
                              Eigen::Vector3d &safe_target) const;
+    bool mapWindowReady() const;
     bool sparsifyGuidePath(const std::vector<Eigen::Vector3d> &dense_path,
                            std::vector<Eigen::Vector3d> &sparse_path) const;
+    bool buildTrackingAnchorCandidates(const cost_functional::TrackingReference &reference,
+                                       const Eigen::Vector3d &start_pt,
+                                       const Eigen::Vector3d &start_vel,
+                                       std::vector<Eigen::Vector3d> &anchor_candidates,
+                                       std::vector<Eigen::Vector3d> *anchor_target_vels = nullptr,
+                                       std::vector<double> *anchor_times = nullptr) const;
+    bool buildTrackingViewpointSeries(const cost_functional::TrackingReference &reference,
+                                      const Eigen::Vector3d &start_pt,
+                                      const Eigen::Vector3d &start_vel,
+                                      std::vector<Eigen::Vector3d> &target_samples,
+                                      std::vector<Eigen::Vector3d> &viewpoint_series,
+                                      std::vector<Eigen::Vector3d> *viewpoint_target_vels = nullptr,
+                                      std::vector<double> *viewpoint_times = nullptr) const;
+    bool buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
+                                     std::vector<Eigen::Vector3d> &guide_path) const;
     bool buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
                                      const Eigen::Vector3d &start_vel,
                                      const Eigen::Vector3d &start_acc,
@@ -133,6 +161,9 @@ namespace ego_planner
     double estimateObstacleClearance(const Eigen::Vector3d &pt,
                                      double search_radius,
                                      Eigen::Vector3d *push_dir = nullptr) const;
+    bool lineOfSightFree(const Eigen::Vector3d &from,
+                         const Eigen::Vector3d &to,
+                         double max_dist = -1.0) const;
     double computeTrajectoryMinSdf(const MINCOTraj3D &traj) const;
     void reportCorridorFailure(CorridorFailureType type,
                                const std::string &detail);
@@ -157,6 +188,19 @@ namespace ego_planner
     int guide_sparse_min_inner_{2};
     int guide_sparse_max_inner_{5};
     double guide_turn_angle_deg_{25.0};
+    double tracking_distance_min_{1.5};
+    double tracking_distance_max_{4.0};
+    double tracking_anchor_future_time_{1.0};
+    double tracking_anchor_max_future_time_{2.0};
+    double tracking_anchor_dir_hysteresis_{0.35};
+    double tracking_anchor_side_angle_deg_{35.0};
+    double tracking_viewpoint_dt_{0.6};
+    int tracking_viewpoint_max_num_{5};
+    double tracking_viewpoint_yaw_step_deg_{20.0};
+    double tracking_viewpoint_connect_dist_{1.5};
+    double tracking_viewpoint_clearance_{0.15};
+    mutable bool have_tracking_anchor_dir_{false};
+    mutable Eigen::Vector3d last_tracking_anchor_dir_{Eigen::Vector3d::UnitX()};
 
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};

@@ -1,0 +1,129 @@
+<launch>
+    <arg name="map_size_x" default="200.0"/>
+    <arg name="map_size_y" default="200.0"/>
+    <arg name="map_size_z" default="3.0"/>
+    <arg name="odom_topic" default="visual_slam/odom"/>
+    <arg name="launch_prefix" default=""/>
+    <arg name="obs_num" default="35"/>
+    <arg name="circle_num" default="15"/>
+    <arg name="obs_lower_rad" default="0.45"/>
+    <arg name="obs_upper_rad" default="0.65"/>
+    <arg name="obs_min_distance" default="1.2"/>
+
+    <arg name="init_x" default="-15.0"/>
+    <arg name="init_y" default="0.0"/>
+    <arg name="init_z" default="1.0"/>
+
+    <arg name="use_esdf" default="true"/>
+    <arg name="use_sfc_corridor" default="true"/>
+    <arg name="enable_esdf" default="false"/>
+
+    <!-- map -->
+    <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
+        <param name="map/x_size" value="50"/>
+        <param name="map/y_size" value="30"/>
+        <param name="map/z_size" value="3"/>
+        <param name="map/resolution" value="0.1"/>
+        <param name="ObstacleShape/seed" value="1"/>
+        <param name="map/obs_num" value="$(arg obs_num)"/>
+        <param name="ObstacleShape/lower_rad" value="$(arg obs_lower_rad)"/>
+        <param name="ObstacleShape/upper_rad" value="$(arg obs_upper_rad)"/>
+        <param name="ObstacleShape/lower_hei" value="0.0"/>
+        <param name="ObstacleShape/upper_hei" value="3.0"/>
+        <param name="map/circle_num" value="$(arg circle_num)"/>
+        <param name="ObstacleShape/radius_l" value="0.7"/>
+        <param name="ObstacleShape/radius_h" value="0.5"/>
+        <param name="ObstacleShape/z_l" value="0.7"/>
+        <param name="ObstacleShape/z_h" value="0.8"/>
+        <param name="ObstacleShape/theta" value="0.5"/>
+        <param name="pub_rate" value="1.0"/>
+        <param name="min_distance" value="$(arg obs_min_distance)"/>
+    </node>
+
+    <include file="$(find ego_planner)/launch/include/run_in_sim.xml">
+        <arg name="drone_id" value="0"/>
+        <arg name="init_x" value="$(arg init_x)"/>
+        <arg name="init_y" value="$(arg init_y)"/>
+        <arg name="init_z" value="$(arg init_z)"/>
+        <arg name="map_size_x" value="$(arg map_size_x)"/>
+        <arg name="map_size_y" value="$(arg map_size_y)"/>
+        <arg name="map_size_z" value="$(arg map_size_z)"/>
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="launch_prefix" value="$(arg launch_prefix)"/>
+        <arg name="flight_type" value="3"/>
+        <arg name="point_num" value="1"/>
+        <arg name="target0_x" value="0.0"/>
+        <arg name="target0_y" value="0.0"/>
+        <arg name="target0_z" value="0.0"/>
+        <arg name="use_tracking_task" value="true"/>
+        <arg name="tracking_reference_topic" value="/tracking/reference"/>
+        <arg name="tracking_relay_goal" value="true"/>
+        <arg name="tracking_target_goal_topic" value="/tracking/target_goal"/>
+        <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)"/>
+        <arg name="use_esdf" value="$(arg use_esdf)"/>
+        <arg name="enable_esdf" value="$(arg enable_esdf)"/>
+    </include>
+
+    <node pkg="ego_planner" type="tracking_target_sim" name="tracking_target_sim" output="screen">
+        <param name="frame_id" value="world"/>
+        <param name="drone_id" value="0"/>
+        <param name="use_jps" value="true"/>
+        <param name="use_external_goal" value="true"/>
+        <param name="external_goal_topic" value="/tracking/target_goal"/>
+        <param name="publish_goal_with_id" value="false"/>
+        <param name="sim_dt" value="0.02"/>
+        <param name="replan_period" value="0.5"/>
+        <param name="target_speed" value="0.8"/>
+        <param name="goal_ahead_distance" value="4.0"/>
+        <param name="goal_lateral_jitter" value="1.2"/>
+        <param name="goal_vertical_jitter" value="0.0"/>
+        <param name="goal_reach_tolerance" value="0.25"/>
+        <param name="horizon_time" value="4.0"/>
+        <param name="horizon_dt" value="0.2"/>
+        <param name="target_box_size" value="0.45"/>
+        <param name="init_offset_x" value="3.0"/>
+        <param name="init_offset_y" value="0.0"/>
+        <param name="init_offset_z" value="0.0"/>
+        <param name="jps_timeout" value="0.08"/>
+        <param name="jps_jump_max_cells" value="6"/>
+        <param name="jps_near_obs_radius" value="1"/>
+
+        <param name="grid_map/resolution" value="0.1" />
+        <param name="grid_map/local_update_range_x" value="5.5" />
+        <param name="grid_map/local_update_range_y" value="5.5" />
+        <param name="grid_map/local_update_range_z" value="2.0" />
+        <param name="grid_map/obstacles_inflation" value="0.1" />
+        <param name="grid_map/enable_virtual_wall" value="true"/>
+        <param name="grid_map/virtual_ceil" value="3.0"/>
+        <param name="grid_map/virtual_ground" value="-0.1"/>
+        <param name="grid_map/frame_id" value="world"/>
+        <param name="grid_map/pose_type" value="1"/>
+        <param name="grid_map/fx" value="387.229248046875"/>
+        <param name="grid_map/fy" value="387.229248046875"/>
+        <param name="grid_map/cx" value="321.04638671875"/>
+        <param name="grid_map/cy" value="243.44969177246094"/>
+        <param name="grid_map/use_depth_filter" value="true"/>
+        <param name="grid_map/depth_filter_tolerance" value="0.15"/>
+        <param name="grid_map/depth_filter_mindist" value="0.2"/>
+        <param name="grid_map/depth_filter_margin" value="2"/>
+        <param name="grid_map/k_depth_scaling_factor" value="1000.0"/>
+        <param name="grid_map/skip_pixel" value="2"/>
+        <param name="grid_map/p_hit" value="0.65"/>
+        <param name="grid_map/p_miss" value="0.35"/>
+        <param name="grid_map/p_min" value="0.12"/>
+        <param name="grid_map/p_max" value="0.9"/>
+        <param name="grid_map/p_occ" value="0.8"/>
+        <param name="grid_map/fading_time" value="1000.0"/>
+        <param name="grid_map/min_ray_length" value="0.1"/>
+        <param name="grid_map/enable_esdf" value="$(arg enable_esdf)"/>
+
+        <remap from="grid_map/odom" to="/drone_0_$(arg odom_topic)"/>
+        <remap from="grid_map/cloud" to="/drone_0_pcl_render_node/cloud"/>
+        <remap from="grid_map/pose" to="/drone_0_pcl_render_node/camera_pose"/>
+        <remap from="grid_map/depth" to="/drone_0_pcl_render_node/depth"/>
+    </node>
+
+    <node name="rviz" pkg="rviz" type="rviz" output="screen"
+        args="-d $(find ego_planner)/launch/include/default_tracking.rviz">
+    </node>
+</launch>

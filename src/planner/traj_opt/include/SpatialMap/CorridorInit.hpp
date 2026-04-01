@@ -328,6 +328,7 @@ inline bool solveShortestPathInCorridor(const Eigen::Vector3d &start_pt,
 }
 
 inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_path,
+                                    const Eigen::Vector3d &start_vel,
                                     const double piece_length,
                                     const double alloc_speed,
                                     Eigen::MatrixXd &inner_pts,
@@ -355,12 +356,57 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
 
   int k = 0;
   int inner_col = 0;
+  const double safe_speed = std::max(alloc_speed, 0.2);
+  const Eigen::Vector3d start_vel_dir =
+      (start_vel.norm() > 1.0e-3) ? start_vel.normalized() : Eigen::Vector3d::Zero();
   for (int i = 0; i < seg_num; ++i)
   {
     const Eigen::Vector3d a = short_path[i];
     const Eigen::Vector3d b = short_path[i + 1];
-    const Eigen::Vector3d step = (b - a) / static_cast<double>(piece_idx[i]);
-    const double dt = std::max(step.norm() / std::max(alloc_speed, 1.0e-3), 0.03);
+    const Eigen::Vector3d seg_vec = b - a;
+    const double seg_len = seg_vec.norm();
+    if (seg_len < 1.0e-6)
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d seg_dir = seg_vec / seg_len;
+    const Eigen::Vector3d step = seg_vec / static_cast<double>(piece_idx[i]);
+    double dt = std::max(step.norm() / safe_speed, 0.03);
+
+    double time_scale = 1.0;
+
+    if (i == 0 && start_vel.norm() > 0.1)
+    {
+      const double heading_cos = std::max(-1.0, std::min(1.0, start_vel_dir.dot(seg_dir)));
+      if (heading_cos < 0.0)
+      {
+        const double speed_ratio = std::min(start_vel.norm() / safe_speed, 2.5);
+        time_scale *= (1.8 + 1.2 * (-heading_cos) + 0.6 * speed_ratio);
+      }
+      else if (heading_cos < 0.35)
+      {
+        time_scale *= (1.1 + 0.6 * (0.35 - heading_cos));
+      }
+    }
+
+    if (i > 0)
+    {
+      const Eigen::Vector3d prev_vec = short_path[i] - short_path[i - 1];
+      const double prev_len = prev_vec.norm();
+      if (prev_len > 1.0e-6)
+      {
+        const Eigen::Vector3d prev_dir = prev_vec / prev_len;
+        const double turn_cos = std::max(-1.0, std::min(1.0, prev_dir.dot(seg_dir)));
+        const double turn_angle = std::acos(turn_cos);
+        if (turn_angle > M_PI / 9.0)
+        {
+          time_scale *= (1.0 + 1.2 * (turn_angle / M_PI));
+        }
+      }
+    }
+
+    dt *= std::max(1.0, std::min(time_scale, 8.0));
 
     for (int j = 0; j < piece_idx[i]; ++j)
     {
@@ -395,15 +441,16 @@ inline bool setInitialFromShortPath(const std::vector<Eigen::Vector3d> &short_pa
 }
 
 inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
-                                          const Eigen::Vector3d &goal_pt,
-                                          const PolyhedraH &corridor_hpolys,
-                                          const double piece_length,
-                                          const double alloc_speed,
-                                          Eigen::MatrixXd &inner_pts,
-                                          Eigen::VectorXd &durations,
-                                          std::vector<Eigen::Vector3d> *transition_points = nullptr,
-                                          std::vector<Eigen::Vector3d> *short_path_out = nullptr,
-                                          Eigen::VectorXi *piece_idx_out = nullptr)
+                              const Eigen::Vector3d &start_vel,
+                              const Eigen::Vector3d &goal_pt,
+                              const PolyhedraH &corridor_hpolys,
+                              const double piece_length,
+                              const double alloc_speed,
+                              Eigen::MatrixXd &inner_pts,
+                              Eigen::VectorXd &durations,
+                              std::vector<Eigen::Vector3d> *transition_points = nullptr,
+                              std::vector<Eigen::Vector3d> *short_path_out = nullptr,
+                              Eigen::VectorXi *piece_idx_out = nullptr)
 {
   inner_pts.resize(3, 0);
   durations.resize(0);
@@ -432,7 +479,7 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
     {
       *short_path_out = short_path;
     }
-    return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
+    return setInitialFromShortPath(short_path, start_vel, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
   }
 
   PolyhedraV overlap_vpolys;
@@ -462,7 +509,7 @@ inline bool buildCorridorInit(const Eigen::Vector3d &start_pt,
     *short_path_out = short_path;
   }
 
-  return setInitialFromShortPath(short_path, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
+  return setInitialFromShortPath(short_path, start_vel, piece_length, alloc_speed, inner_pts, durations, piece_idx_out);
 }
 
 // inline double shortestPathDistanceEval(void *instance,
