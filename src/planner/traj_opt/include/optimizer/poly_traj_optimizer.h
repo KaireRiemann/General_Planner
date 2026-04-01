@@ -70,6 +70,7 @@ namespace ego_planner
     double wei_sqrvar_;
     double wei_time_;
     double wei_corridor_;
+    double wei_corridor_ref_;
     double wei_dist_;
     double safety_margin_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;

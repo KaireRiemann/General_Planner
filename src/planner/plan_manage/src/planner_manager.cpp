@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <set>
 
 namespace ego_planner
@@ -145,7 +146,7 @@ namespace ego_planner
       }
 
       const Eigen::VectorXd base_durations = durations;
-      const std::array<double, 5> scale_candidates{{1.25, 1.5, 2.0, 3.0, 4.0}};
+      const std::array<double, 7> scale_candidates{{1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0}};
       bool found_feasible = false;
 
       for (const double scale : scale_candidates)
@@ -241,6 +242,8 @@ namespace ego_planner
     nh.param("manager/sfc_progress", sfc_progress_, 0.75);
     nh.param("manager/sfc_range", sfc_range_, 0.8);
     nh.param("manager/sfc_corridor_margin", sfc_corridor_margin_, 0.05);
+    nh.param("manager/jps_jump_max_cells", jps_jump_max_cells_, 6);
+    nh.param("manager/jps_near_obs_radius", jps_near_obs_radius_, 1);
     nh.param("manager/guide_min_clearance", guide_min_clearance_, 0.35);
     nh.param("manager/guide_sparse_min_inner", guide_sparse_min_inner_, 2);
     nh.param("manager/guide_sparse_max_inner", guide_sparse_max_inner_, 5);
@@ -251,8 +254,10 @@ namespace ego_planner
     grid_map_.reset(new GridMap);
     grid_map_->initMap(nh);
 
-    simple_astar_.reset(new SimpleAStar(grid_map_, 0.0));
-    simple_astar_->setTimeOut(sfc_path_timeout_);
+    jps_astar_.reset(new JPSAStar(grid_map_, 0.0));
+    jps_astar_->setTimeOut(sfc_path_timeout_);
+    jps_astar_->setJumpMaxCells(jps_jump_max_cells_);
+    jps_astar_->setJumpNearObsRadius(jps_near_obs_radius_);
 
     ploy_traj_opt_.reset(new PolyTrajOptimizer);
     ploy_traj_opt_->setParam(nh);
@@ -729,7 +734,9 @@ namespace ego_planner
     return true;
   }
 
-  bool EGOPlannerManager::buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt, const Eigen::Vector3d &goal_pt,
+  bool EGOPlannerManager::buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,
+                                                        const Eigen::Vector3d &start_vel,
+                                                        const Eigen::Vector3d &goal_pt,
                                                         const spatial_map::PolyhedraH &corridor_hpolys, Eigen::MatrixXd &inner_pts,
                                                         Eigen::VectorXd &durations, Eigen::VectorXi &corridor_piece_idx,
                                                         std::vector<Eigen::Vector3d> &transition_points,
@@ -747,11 +754,12 @@ namespace ego_planner
     }
 
     const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
-    const double alloc_speed = std::max(3.0 * pp_.max_vel_, 0.5);
+    const double alloc_speed = std::max(0.9 * pp_.max_vel_, 0.35);
 
     std::vector<Eigen::Vector3d> short_path;
     if (!spatial_map::buildCorridorInit(
             start_pt,
+            start_vel,
             goal_pt,
             corridor_hpolys,
             piece_length,
@@ -787,12 +795,13 @@ namespace ego_planner
           nullptr);
     }
 
-    ROS_INFO("buildCorridorAwareInitialGuess: pieces=%ld inner=%ld totalT=%.3f transitions=%ld short_path=%ld",
+    ROS_INFO("buildCorridorAwareInitialGuess: pieces=%ld inner=%ld totalT=%.3f transitions=%ld short_path=%ld alloc_speed=%.3f conservative_timing=yes",
              static_cast<long>(durations.size()),
              static_cast<long>(inner_pts.cols()),
              durations.sum(),
              static_cast<long>(transition_points.size()),
-             static_cast<long>(short_path.size()));
+             static_cast<long>(short_path.size()),
+             alloc_speed);
 
     return true;
   }
@@ -970,13 +979,13 @@ namespace ego_planner
       return true;
     }
 
-    if (!simple_astar_)
+    if (!jps_astar_)
     {
-      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: simple_astar_ is null");
+      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: jps_astar_ is null");
       return false;
     }
 
-    if (!simple_astar_->search(start_pt, safe_goal, dense_path))
+    if (!jps_astar_->search(start_pt, safe_goal, dense_path))
     {
       ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: 3D A* failed");
       return false;
@@ -1037,6 +1046,7 @@ namespace ego_planner
         return false;
       }
       if (!buildCorridorAwareInitialGuess(start_pt,
+                                          start_vel,
                                           safe_target_pt,
                                           corridor_hpolys,
                                           innerPts,
@@ -1095,13 +1105,26 @@ namespace ego_planner
         return false;
       }
 
+      const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(initTraj);
+      const bool seed_inside_corridor =
+          ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0);
       ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
-               ploy_traj_opt_->isTrajectoryCollisionFree(initTraj) ? "yes" : "no",
+               seed_collision_free ? "yes" : "no",
                computeTrajectoryMinSdf(initTraj),
-               ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0) ? "yes" : "no");
+               seed_inside_corridor ? "yes" : "no");
       ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
                corridor_warm_timing_used ? "yes" : "no",
                init_seed_feasible ? "yes" : "no");
+
+      if (!seed_collision_free || !seed_inside_corridor)
+      {
+        std::stringstream ss;
+        ss << "corridor seed remains infeasible after conservative timing/scaling: "
+           << "collision_free=" << (seed_collision_free ? "yes" : "no")
+           << " inside_corridor=" << (seed_inside_corridor ? "yes" : "no");
+        reportCorridorFailure(FAIL_CORRIDOR_INIT, ss.str());
+        return false;
+      }
     }
     else if (use_esdf)
     {

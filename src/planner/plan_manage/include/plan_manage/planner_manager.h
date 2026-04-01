@@ -11,7 +11,7 @@
 #include <plan_env/grid_map.h>
 #include <SpatialMap/SFCCommonTypes.hpp>
 #include <SpatialMap/CorridorInit.hpp>
-#include <path_searching/simple_a_star.hpp>
+#include <path_searching/jps_a_star.hpp>
 
 namespace ego_planner
 {
@@ -114,6 +114,7 @@ namespace ego_planner
     bool generateSafeFlightCorridor(const std::vector<Eigen::Vector3d> &guide_path,
                                     spatial_map::PolyhedraH &corridor_hpolys) const;
     bool buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,
+                                        const Eigen::Vector3d &start_vel,
                                         const Eigen::Vector3d &goal_pt,
                                         const spatial_map::PolyhedraH &corridor_hpolys,
                                         Eigen::MatrixXd &inner_pts,
@@ -143,13 +144,15 @@ namespace ego_planner
 
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
-    SimpleAStar::Ptr simple_astar_;
+    JPSAStar::Ptr jps_astar_;
     bool use_sfc_corridor_{false};
     bool use_esdf_{false};
     double sfc_path_timeout_{0.2};
     double sfc_progress_{0.75};
     double sfc_range_{0.8};
     double sfc_corridor_margin_{0.05};
+    int jps_jump_max_cells_{6};
+    int jps_near_obs_radius_{1};
     double guide_min_clearance_{0.35};
     int guide_sparse_min_inner_{2};
     int guide_sparse_max_inner_{5};

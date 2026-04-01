@@ -20,12 +20,14 @@ namespace cost_functional
     public:
         using Types = cost_functional::PlanningTypesAdapter;
         using PolyhedraH = spatial_map::PolyhedraH;
+        using ReferencePoints = Eigen::Matrix<double, 3, Eigen::Dynamic>;
 
         const PolyhedraH *h_polys;
         const Eigen::VectorXi *segment_poly_idx;
+        const ReferencePoints *reference_points;
         Types::ConstraintPoints *cps;
         Types::SwarmTrajData *swarm_traj;
-        double wei_corridor, wei_swarm, wei_feas, wei_sqrvar;
+        double wei_corridor, wei_corridor_ref, wei_swarm, wei_feas, wei_sqrvar;
         double corridor_clearance, corridor_smoothing, swarm_clearance;
         double max_vel, max_acc, max_jer;
         int drone_id;
@@ -35,15 +37,15 @@ namespace cost_functional
         mutable Eigen::VectorXd accumulated_costs;
 
         CorridorCostFunctionalManager()
-            : h_polys(nullptr), segment_poly_idx(nullptr),
+            : h_polys(nullptr), segment_poly_idx(nullptr), reference_points(nullptr),
               cps(nullptr), swarm_traj(nullptr),
-              wei_corridor(0.0), wei_swarm(0.0), wei_feas(0.0), wei_sqrvar(0.0),
+              wei_corridor(0.0), wei_corridor_ref(0.0), wei_swarm(0.0), wei_feas(0.0), wei_sqrvar(0.0),
               corridor_clearance(0.0), corridor_smoothing(0.05), swarm_clearance(0.0),
               max_vel(0.0), max_acc(0.0), max_jer(0.0),
               drone_id(-1), t_now(0.0), touch_goal(false),
               min_ellip_dist2_ptr(nullptr)
         {
-            accumulated_costs.resize(4);
+            accumulated_costs.resize(5);
             accumulated_costs.setZero();
         }
 
@@ -51,6 +53,12 @@ namespace cost_functional
         {
             h_polys = polys;
             segment_poly_idx = indices;
+        }
+
+        void setReferencePoints(const ReferencePoints *refs, double weight)
+        {
+            reference_points = refs;
+            wei_corridor_ref = std::max(0.0, weight);
         }
 
         void resetAccumulation() const
@@ -131,17 +139,29 @@ namespace cost_functional
             const double cost_smooth =
                 cost_functional::accumulateVarianceSampleCost(points, wei_sqrvar, grad_points);
 
+            double cost_ref = 0.0;
+            const int ref_cols = (reference_points != nullptr) ? static_cast<int>(reference_points->cols()) : 0;
+
             for (int logical_idx = 0; logical_idx < point_num; ++logical_idx)
             {
                 const int sample_idx = canonical_sample[logical_idx];
                 if (sample_idx >= 0)
                 {
                     grad_p.col(sample_idx) += grad_points.row(logical_idx).transpose();
+
+                    if (wei_corridor_ref > 0.0 && logical_idx < ref_cols)
+                    {
+                        const Types::Vec3 ref_pt = reference_points->col(logical_idx);
+                        const Types::Vec3 err = samples[sample_idx].p - ref_pt;
+                        grad_p.col(sample_idx) += wei_corridor_ref * err;
+                        cost_ref += 0.5 * wei_corridor_ref * err.squaredNorm();
+                    }
                 }
             }
 
             accumulated_costs(3) += cost_smooth;
-            return cost_smooth;
+            accumulated_costs(4) += cost_ref;
+            return cost_smooth + cost_ref;
         }
 
     private:

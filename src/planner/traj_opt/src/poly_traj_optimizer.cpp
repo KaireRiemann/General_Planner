@@ -79,6 +79,63 @@ namespace
     Eigen::Vector3d worst_corridor_pt{Eigen::Vector3d::Zero()};
   };
 
+  struct DynamicsCheckDebug
+  {
+    bool feasible{true};
+    double max_vel{0.0};
+    double max_acc{0.0};
+    double max_jer{0.0};
+    double t_max_vel{0.0};
+    double t_max_acc{0.0};
+    double t_max_jer{0.0};
+  };
+
+  DynamicsCheckDebug analyzeTrajectoryDynamics(const ego_planner::MINCOTraj &traj,
+                                              const GridMap::Ptr &grid_map,
+                                              const double vel_limit,
+                                              const double acc_limit,
+                                              const double jer_limit,
+                                              const double tolerance)
+  {
+    DynamicsCheckDebug debug;
+    const double total_duration = traj.getTotalDuration();
+    const double map_dt =
+        grid_map ? std::min(0.02, grid_map->getResolution() / std::max(vel_limit, 0.1) * 0.5) : 0.02;
+    const double dt = std::max(0.005, map_dt);
+
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      const double vel = traj.evaluate(sample_t, 1).norm();
+      const double acc = traj.evaluate(sample_t, 2).norm();
+      const double jer = traj.evaluate(sample_t, 3).norm();
+
+      if (vel > debug.max_vel)
+      {
+        debug.max_vel = vel;
+        debug.t_max_vel = sample_t;
+      }
+      if (acc > debug.max_acc)
+      {
+        debug.max_acc = acc;
+        debug.t_max_acc = sample_t;
+      }
+      if (jer > debug.max_jer)
+      {
+        debug.max_jer = jer;
+        debug.t_max_jer = sample_t;
+      }
+    }
+
+    const double vel_bound = tolerance * vel_limit;
+    const double acc_bound = tolerance * acc_limit;
+    const double jer_bound = tolerance * jer_limit;
+    debug.feasible = (debug.max_vel <= vel_bound &&
+                      debug.max_acc <= acc_bound &&
+                      debug.max_jer <= jer_bound);
+    return debug;
+  }
+
   double computePolyViolation(const spatial_map::PolyhedronH &poly,
                               const Eigen::Vector3d &pt,
                               const double margin)
@@ -158,6 +215,7 @@ namespace ego_planner
     corridor_hpoly_idx_.resize(0);
     corridorSpatialMap_.reset(nullptr, nullptr, 0);
     corridor_cost_manager_.setCorridor(nullptr, nullptr);
+    corridor_cost_manager_.setReferencePoints(nullptr, 0.0);
   }
 
   // =====================================================
@@ -546,7 +604,8 @@ namespace ego_planner
     piece_num_ = initT.size();
 
     corridorMincoOpt_.setEnergyWeight(rho_energy_);
-    corridorMincoOpt_.setSamplesPerPiece(std::max(cps_num_prePiece_ * 4, 16));
+    const int corridor_samples_per_piece = std::max(cps_num_prePiece_ * 4, 16);
+    corridorMincoOpt_.setSamplesPerPiece(corridor_samples_per_piece);
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose();
@@ -560,6 +619,20 @@ namespace ego_planner
     for (int i = 0; i < piece_num_; ++i)
     {
       time_segs[i] = initT(i);
+    }
+
+    Eigen::Matrix<double, 3, Eigen::Dynamic> corridor_reference_points(
+        3, piece_num_ * corridor_samples_per_piece + 1);
+    for (int i = 0; i < piece_num_; ++i)
+    {
+      const Eigen::Vector3d p0 = waypoints.row(i).transpose();
+      const Eigen::Vector3d p1 = waypoints.row(i + 1).transpose();
+      for (int k = 0; k <= corridor_samples_per_piece; ++k)
+      {
+        const int logical_idx = i * corridor_samples_per_piece + k;
+        const double alpha = static_cast<double>(k) / static_cast<double>(corridor_samples_per_piece);
+        corridor_reference_points.col(logical_idx) = (1.0 - alpha) * p0 + alpha * p1;
+      }
     }
 
     spatial_map::PolyhedraH normalized_corridor = corridor_hpolys;
@@ -675,9 +748,11 @@ namespace ego_planner
     corridorMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
 
     corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
+    corridor_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
     corridor_cost_manager_.cps = &cps_;
     corridor_cost_manager_.swarm_traj = swarm_trajs_;
     corridor_cost_manager_.wei_corridor = wei_corridor_;
+    corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_;
     corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
     corridor_cost_manager_.wei_feas = wei_feas_;
     corridor_cost_manager_.wei_sqrvar = wei_sqrvar_;
@@ -708,12 +783,19 @@ namespace ego_planner
     lbfgs_params.past = 3;
     lbfgs_params.delta = 1.0e-2;
 
+    double wei_corridor_work = wei_corridor_;
+    double wei_corridor_ref_work = wei_corridor_ref_;
+    double wei_feas_work = wei_feas_;
+
     do
     {
       iter_num_ = 0;
       force_stop_type_ = DONT_STOP;
       flag_success = false;
       flag_swarm_too_close = false;
+      corridor_cost_manager_.wei_corridor = wei_corridor_work;
+      corridor_cost_manager_.wei_corridor_ref = wei_corridor_ref_work;
+      corridor_cost_manager_.wei_feas = wei_feas_work;
       corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
 
       const int result = lbfgs::lbfgs_optimize(
@@ -750,7 +832,19 @@ namespace ego_planner
                                       normalized_corridor,
                                       hard_corridor_margin);
 
-        if (!flag_swarm_too_close && flag_collision_free && flag_inside_corridor)
+        const DynamicsCheckDebug dyn_debug =
+            analyzeTrajectoryDynamics(corridorMincoOpt_.getTrajectory(),
+                                      grid_map_,
+                                      max_vel_,
+                                      max_acc_,
+                                      max_jer_,
+                                      1.03);
+        const bool flag_dyn_feasible = dyn_debug.feasible;
+
+        if (!flag_swarm_too_close &&
+            flag_collision_free &&
+            flag_inside_corridor &&
+            flag_dyn_feasible)
         {
           flag_success = true;
         }
@@ -763,11 +857,13 @@ namespace ego_planner
                                      corridor_clearance_,
                                      max_vel_);
 
-          ROS_WARN("Corridor optimize rejected: inside_corridor=%s collision_free=%s swarm_safe=%s cost=%.3f "
+          ROS_WARN("Corridor optimize rejected: inside_corridor=%s collision_free=%s dyn_ok=%s swarm_safe=%s cost=%.3f "
                    "first_collision_t=%.3f first_collision_pt=[%.2f %.2f %.2f] "
-                   "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f]",
+                   "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f] "
+                   "max_v=%.2f(<=%.2f) max_a=%.2f(<=%.2f) max_j=%.2f(<=%.2f)",
                    flag_inside_corridor ? "yes" : "no",
                    flag_collision_free ? "yes" : "no",
+                   flag_dyn_feasible ? "yes" : "no",
                    flag_swarm_too_close ? "no" : "yes",
                    final_cost,
                    debug.first_collision_t,
@@ -778,11 +874,19 @@ namespace ego_planner
                    debug.worst_corridor_t,
                    debug.worst_corridor_pt.x(),
                    debug.worst_corridor_pt.y(),
-                   debug.worst_corridor_pt.z());
+                   debug.worst_corridor_pt.z(),
+                   dyn_debug.max_vel, 1.03 * max_vel_,
+                   dyn_debug.max_acc, 1.03 * max_acc_,
+                   dyn_debug.max_jer, 1.03 * max_jer_);
           restart_nums++;
-          if (!flag_inside_corridor)
+          if (!flag_inside_corridor || !flag_collision_free)
           {
-            corridor_cost_manager_.wei_corridor *= 2.0;
+            wei_corridor_work *= 1.8;
+            wei_corridor_ref_work *= 1.6;
+          }
+          if (!flag_dyn_feasible)
+          {
+            wei_feas_work *= 1.8;
           }
           if (flag_swarm_too_close)
           {
@@ -1675,6 +1779,7 @@ namespace ego_planner
     nh.param("optimization/weight_obstacle", wei_obs_, -1.0);
     nh.param("optimization/weight_obstacle_soft", wei_obs_soft_, -1.0);
     nh.param("optimization/weight_corridor", wei_corridor_, 1000.0);
+    nh.param("optimization/weight_corridor_reference", wei_corridor_ref_, 20.0);
     nh.param("optimization/weight_distance_field", wei_dist_, -1.0);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);

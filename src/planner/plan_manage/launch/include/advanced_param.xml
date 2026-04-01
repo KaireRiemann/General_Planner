@@ -38,6 +38,8 @@
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
     <arg name="sfc_range" default="0.8"/>
+    <arg name="jps_jump_max_cells" default="6"/>
+    <arg name="jps_near_obs_radius" default="1"/>
     <arg name="drone_id"/>
     <arg name="launch_prefix" default=""/>
     <!-- main node -->
@@ -131,6 +133,8 @@
         <param name="manager/sfc_path_timeout" value="$(arg sfc_path_timeout)" type="double"/>
         <param name="manager/sfc_progress" value="$(arg sfc_progress)" type="double"/>
         <param name="manager/sfc_range" value="$(arg sfc_range)" type="double"/>
+        <param name="manager/jps_jump_max_cells" value="$(arg jps_jump_max_cells)" type="int"/>
+        <param name="manager/jps_near_obs_radius" value="$(arg jps_near_obs_radius)" type="int"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
         <!-- trajectory optimization -->
         <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
