@@ -39,6 +39,7 @@ namespace ego_planner
     void initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis = NULL);
 
     bool corridorModeEnabled();
+    bool esdfModeEnabled();
 
     // This system is organized as:
     // TaskSpec + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.

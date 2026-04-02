@@ -11,7 +11,9 @@ core::TaskSpec TaskFactory::makeStateToStateTask(const Eigen::Vector3d &start_pt
                                                  bool touch_goal,
                                                  bool flag_poly_init,
                                                  bool flag_random_poly_traj,
-                                                 bool force_plain)
+                                                 bool force_plain,
+                                                 bool prefer_corridor,
+                                                 bool prefer_esdf)
 {
   return StateToStateTask::build(start_pt,
                                  start_vel,
@@ -21,7 +23,9 @@ core::TaskSpec TaskFactory::makeStateToStateTask(const Eigen::Vector3d &start_pt
                                  touch_goal,
                                  flag_poly_init,
                                  flag_random_poly_traj,
-                                 force_plain);
+                                 force_plain,
+                                 prefer_corridor,
+                                 prefer_esdf);
 }
 
 core::TaskSpec TaskFactory::makeTrackingTask(const cost_functional::TrackingReference &reference,
@@ -57,4 +61,3 @@ core::TaskSpec TaskFactory::makePerchingTask(const Eigen::Vector3d &start_pt,
 }
 
 } // namespace ego_planner::tasks
-

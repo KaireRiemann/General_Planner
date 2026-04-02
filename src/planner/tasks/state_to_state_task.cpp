@@ -11,7 +11,9 @@ core::TaskSpec StateToStateTask::build(const Eigen::Vector3d &start_pt,
                                        bool touch_goal,
                                        bool flag_poly_init,
                                        bool flag_random_poly_traj,
-                                       bool force_plain)
+                                       bool force_plain,
+                                       bool prefer_corridor,
+                                       bool prefer_esdf)
 {
   core::TaskSpec task;
   task.type = core::TaskType::STATE_TO_STATE;
@@ -25,6 +27,8 @@ core::TaskSpec StateToStateTask::build(const Eigen::Vector3d &start_pt,
   task.flag_poly_init = flag_poly_init;
   task.flag_random_poly_traj = flag_random_poly_traj;
   task.force_plain = force_plain;
+  task.prefer_corridor = prefer_corridor;
+  task.prefer_esdf = prefer_esdf;
 
   core::PhaseSpec phase;
   phase.name = "cruise";
@@ -36,4 +40,3 @@ core::TaskSpec StateToStateTask::build(const Eigen::Vector3d &start_pt,
 }
 
 } // namespace ego_planner::tasks
-

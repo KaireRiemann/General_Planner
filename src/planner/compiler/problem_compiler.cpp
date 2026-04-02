@@ -16,6 +16,40 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
   problem.task = task;
   problem.prefer_legacy_fallback = (task.type != core::TaskType::STATE_TO_STATE);
 
+  // Single authoritative active-space-model selection.
+  switch (task.type)
+  {
+  case core::TaskType::STATE_TO_STATE:
+    if (task.force_plain)
+    {
+      problem.active_space_model = core::ActiveSpaceModel::PLAIN;
+    }
+    else if (task.prefer_corridor && context.has_grid_map && context.has_jps)
+    {
+      problem.active_space_model = core::ActiveSpaceModel::CORRIDOR;
+    }
+    else if (task.prefer_esdf && context.has_esdf)
+    {
+      problem.active_space_model = core::ActiveSpaceModel::ESDF;
+    }
+    else
+    {
+      problem.active_space_model = core::ActiveSpaceModel::PLAIN;
+    }
+    break;
+  case core::TaskType::TRACKING:
+    problem.active_space_model =
+        task.force_plain ? core::ActiveSpaceModel::PLAIN : core::ActiveSpaceModel::VISIBLE_REGION;
+    break;
+  case core::TaskType::PERCHING:
+    problem.active_space_model = core::ActiveSpaceModel::TERMINAL_MANIFOLD;
+    break;
+  case core::TaskType::UNKNOWN:
+  default:
+    problem.active_space_model = core::ActiveSpaceModel::PLAIN;
+    break;
+  }
+
   if (!reference_builder_.build(context, task, problem))
   {
     return false;
@@ -55,18 +89,24 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
       optimization::CON_DYNAMICS |
       optimization::CON_COLLISION;
 
-  if (context.use_corridor && !task.force_plain)
+  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
   {
     problem.objective_mask |= optimization::OBJ_CORRIDOR;
     problem.constraint_mask |= optimization::CON_CORRIDOR;
   }
-  if (task.type == core::TaskType::TRACKING)
+  if (problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION ||
+      task.type == core::TaskType::TRACKING)
   {
     problem.objective_mask |=
         optimization::OBJ_TRACKING_DISTANCE |
         optimization::OBJ_TRACKING_VIEW |
         optimization::OBJ_TRACKING_VISIBILITY |
         optimization::OBJ_TERMINAL_SOFT;
+    problem.constraint_mask |= optimization::CON_VISIBLE_REGION;
+  }
+  if (problem.active_space_model == core::ActiveSpaceModel::TERMINAL_MANIFOLD)
+  {
+    problem.objective_mask |= optimization::OBJ_TERMINAL_SOFT;
   }
 
   if (adapter_ != nullptr)

@@ -10,15 +10,35 @@ bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
                                      const core::PlanningProblem &problem,
                                      core::SeedSpec &seed) const
 {
-  if (problem.references.guide_path.size() < 2)
+  std::vector<Eigen::Vector3d> seed_path = problem.references.guide_path;
+  std::vector<double> seed_times = problem.references.guide_times;
+
+  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+  {
+    for (const auto &set : problem.feasible_sets)
+    {
+      if (!set.enabled || set.type != core::FeasibleSetType::CORRIDOR_POLYTOPE)
+      {
+        continue;
+      }
+      if (set.corridor_seed_path.size() >= 2)
+      {
+        seed_path = set.corridor_seed_path;
+        seed_times = set.corridor_seed_times;
+        break;
+      }
+    }
+  }
+
+  if (seed_path.size() < 2)
   {
     return false;
   }
 
   seed = core::SeedSpec{};
   seed.valid = true;
-  seed.anchor_points = problem.references.guide_path;
-  seed.kind = core::SeedSpec::Kind::GUIDE_PATH;
+  seed.anchor_points = seed_path;
+  seed.kind = core::SeedSpec::Kind::GUIDE_PATH_INIT;
 
   const int piece_num = static_cast<int>(seed.anchor_points.size()) - 1;
   seed.durations.resize(piece_num);
@@ -30,14 +50,14 @@ bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
     seed.durations(i) = std::max(seg_len / std::max(0.1, context.max_vel), 0.2);
   }
 
-  if (problem.references.guide_times.size() == seed.anchor_points.size())
+  if (seed_times.size() == seed.anchor_points.size())
   {
     for (int i = 0; i < piece_num; ++i)
     {
       const double dt = std::max(
           0.05,
-          problem.references.guide_times[static_cast<std::size_t>(i + 1)] -
-              problem.references.guide_times[static_cast<std::size_t>(i)]);
+          seed_times[static_cast<std::size_t>(i + 1)] -
+              seed_times[static_cast<std::size_t>(i)]);
       seed.durations(i) = 0.5 * seed.durations(i) + 0.5 * dt;
     }
   }
@@ -52,7 +72,7 @@ bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
                                         });
   if (has_corridor)
   {
-    seed.kind = core::SeedSpec::Kind::CORRIDOR_AWARE;
+    seed.kind = core::SeedSpec::Kind::CORRIDOR_INIT;
     seed.corridor_aware = true;
   }
 
@@ -69,6 +89,23 @@ bool SeedBuilder::build(const core::PlanningContext &context,
   if (buildSeedFromGuide(context, problem, guide_seed))
   {
     problem.seed = guide_seed;
+    if (problem.active_space_model == core::ActiveSpaceModel::PLAIN)
+    {
+      problem.seed.kind = core::SeedSpec::Kind::PLAIN_INIT;
+    }
+    else if (problem.active_space_model == core::ActiveSpaceModel::ESDF)
+    {
+      problem.seed.kind = core::SeedSpec::Kind::ESDF_INIT;
+    }
+    else if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+    {
+      problem.seed.kind = core::SeedSpec::Kind::CORRIDOR_INIT;
+      problem.seed.corridor_aware = true;
+    }
+    else if (problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION)
+    {
+      problem.seed.kind = core::SeedSpec::Kind::SEMANTIC_INIT;
+    }
   }
 
   if (context.allow_warm_start)

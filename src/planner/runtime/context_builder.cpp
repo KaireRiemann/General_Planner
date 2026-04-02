@@ -8,8 +8,9 @@ namespace ego_planner::runtime
 
 core::PlanningContext ContextBuilder::build(int drone_id,
                                             bool map_ready,
-                                            bool use_corridor,
-                                            bool use_esdf,
+                                            bool has_grid_map,
+                                            bool has_esdf,
+                                            bool has_jps,
                                             const GridMap::Ptr &grid_map,
                                             JPSAStar *jps_astar,
                                             const Eigen::Vector3d &odom_pos,
@@ -31,8 +32,9 @@ core::PlanningContext ContextBuilder::build(int drone_id,
   context.drone_id = drone_id;
   context.now = ros::Time::now().toSec();
   context.map_ready = map_ready;
-  context.use_corridor = use_corridor;
-  context.use_esdf = use_esdf;
+  context.has_grid_map = has_grid_map;
+  context.has_esdf = has_esdf;
+  context.has_jps = has_jps;
   context.grid_map = grid_map;
   context.jps_astar = jps_astar;
   context.odom_pos = odom_pos;

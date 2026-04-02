@@ -25,8 +25,10 @@ struct PlanningContext
   int drone_id{-1};
   double now{0.0};
   bool map_ready{false};
-  bool use_corridor{false};
-  bool use_esdf{false};
+  // Capability-style fields (not active planning mode).
+  bool has_grid_map{false};
+  bool has_esdf{false};
+  bool has_jps{false};
   bool allow_warm_start{true};
 
   GridMap::Ptr grid_map;

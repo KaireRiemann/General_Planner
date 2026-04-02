@@ -17,10 +17,11 @@ public:
                               bool touch_goal,
                               bool flag_poly_init,
                               bool flag_random_poly_traj,
-                              bool force_plain);
+                              bool force_plain,
+                              bool prefer_corridor,
+                              bool prefer_esdf);
 };
 
 } // namespace ego_planner::tasks
 
 #endif // PLANNER_TASKS_STATE_TO_STATE_TASK_HPP_
-

@@ -20,7 +20,9 @@ public:
                                              bool touch_goal,
                                              bool flag_poly_init,
                                              bool flag_random_poly_traj,
-                                             bool force_plain);
+                                             bool force_plain,
+                                             bool prefer_corridor,
+                                             bool prefer_esdf);
 
   static core::TaskSpec makeTrackingTask(const cost_functional::TrackingReference &reference,
                                          const Eigen::Vector3d &start_pt,
@@ -41,4 +43,3 @@ public:
 } // namespace ego_planner::tasks
 
 #endif // PLANNER_TASKS_TASK_FACTORY_HPP_
-

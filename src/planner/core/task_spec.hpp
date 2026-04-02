@@ -33,6 +33,8 @@ struct TaskSpec
 
   bool touch_goal{false};
   bool force_plain{false};
+  bool prefer_corridor{false};
+  bool prefer_esdf{false};
   bool flag_poly_init{false};
   bool flag_random_poly_traj{false};
 
@@ -47,4 +49,3 @@ struct TaskSpec
 } // namespace ego_planner::core
 
 #endif // PLANNER_CORE_TASK_SPEC_HPP_
-

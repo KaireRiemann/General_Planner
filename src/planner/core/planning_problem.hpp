@@ -26,6 +26,15 @@ enum class RepresentationKind
   MINCO
 };
 
+enum class ActiveSpaceModel
+{
+  PLAIN = 0,
+  ESDF,
+  CORRIDOR,
+  VISIBLE_REGION,
+  TERMINAL_MANIFOLD
+};
+
 struct BoundaryConditionSpec
 {
   bool valid{false};
@@ -51,9 +60,12 @@ struct SeedSpec
   enum class Kind
   {
     NONE = 0,
-    WARM_START,
-    GUIDE_PATH,
-    CORRIDOR_AWARE
+    PLAIN_INIT,
+    ESDF_INIT,
+    GUIDE_PATH_INIT,
+    CORRIDOR_INIT,
+    SEMANTIC_INIT,
+    WARM_START
   };
 
   Kind kind{Kind::NONE};
@@ -94,6 +106,7 @@ struct PlanningProblem
 
   // Compiled solver-facing IR. New pipeline should prefer these fields.
   RepresentationKind representation{RepresentationKind::UNKNOWN};
+  ActiveSpaceModel active_space_model{ActiveSpaceModel::PLAIN};
   BoundaryConditionSpec start_boundary;
   BoundaryConditionSpec terminal_boundary;
   CompiledReferenceSpec references;

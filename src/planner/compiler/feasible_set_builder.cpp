@@ -15,7 +15,7 @@ bool FeasibleSetBuilder::buildTransitFeasibleSets(const core::PlanningContext &c
   problem.references.guide_path = guide_artifact.points;
   problem.references.guide_times = guide_artifact.times;
 
-  if (context.use_corridor && !task.force_plain)
+  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
   {
     core::FeasibleSetSpec corridor_set;
     if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
@@ -38,7 +38,8 @@ bool FeasibleSetBuilder::buildTrackingFeasibleSets(const core::PlanningContext &
   {
     problem.references.guide_path = guide_artifact.points;
     problem.references.guide_times = guide_artifact.times;
-    if (context.use_corridor && !task.force_plain)
+    if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR ||
+        problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION)
     {
       core::FeasibleSetSpec corridor_set;
       if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
@@ -63,7 +64,7 @@ bool FeasibleSetBuilder::buildPerchingFeasibleSets(const core::PlanningContext &
                                                    core::PlanningProblem &problem) const
 {
   (void)context;
-  // Perching is still partial: keep phase-provided manifold/corridor structures.
+  // Perching keeps manifold structures from phases.
   for (const auto &phase : task.phases)
   {
     for (const auto &set : phase.feasible_sets)
@@ -94,4 +95,3 @@ bool FeasibleSetBuilder::build(const core::PlanningContext &context,
 }
 
 } // namespace ego_planner::compiler
-

@@ -616,8 +616,9 @@ namespace ego_planner
       planning_context = context_builder_->build(
           planner_manager_->pp_.drone_id,
           planner_manager_->grid_map_ != nullptr,
-          planner_manager_->corridorModeEnabled(),
+          planner_manager_->grid_map_ != nullptr,
           planner_manager_->grid_map_ != nullptr && planner_manager_->grid_map_->esdfEnabled(),
+          planner_manager_->getJpsAstar() != nullptr,
           planner_manager_->grid_map_,
           planner_manager_->getJpsAstar(),
           odom_pos_,
@@ -656,7 +657,9 @@ namespace ego_planner
                                          touch_goal_,
                                          flag_use_poly_init,
                                          flag_randomPolyTraj,
-                                         force_plain);
+                                         force_plain,
+                                         planner_manager_->corridorModeEnabled(),
+                                         planner_manager_->esdfModeEnabled());
 
     core::PlanningSolution planning_solution;
     const bool plan_success = task_executor_

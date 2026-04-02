@@ -12,8 +12,9 @@ class ContextBuilder
 public:
   core::PlanningContext build(int drone_id,
                               bool map_ready,
-                              bool use_corridor,
-                              bool use_esdf,
+                              bool has_grid_map,
+                              bool has_esdf,
+                              bool has_jps,
                               const GridMap::Ptr &grid_map,
                               JPSAStar *jps_astar,
                               const Eigen::Vector3d &odom_pos,

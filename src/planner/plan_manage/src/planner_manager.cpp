@@ -420,68 +420,84 @@ namespace ego_planner
     const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
 
     std::vector<Eigen::Vector3d> guide_path = problem.references.guide_path;
-    if (guide_path.size() < 2)
+    if (guide_path.size() >= 2)
     {
-      guide_path = {start_pt, goal_pt};
-    }
-    guide_path.front() = start_pt;
-    guide_path.back() = goal_pt;
-
-    MINCOBoundaryState3D head_state = makeBoundaryState(start_pt, start_vel, start_acc);
-    MINCOBoundaryState3D tail_state = makeBoundaryState(goal_pt, goal_vel, Eigen::Vector3d::Zero());
-    Eigen::MatrixXd inner_pts;
-    Eigen::VectorXd durations;
-    MINCOTraj3D init_traj;
-
-    bool init_ok = false;
-    if (problem.seed.valid && problem.seed.anchor_points.size() >= 2)
-    {
-      std::vector<Eigen::Vector3d> anchors = problem.seed.anchor_points;
-      anchors.front() = start_pt;
-      anchors.back() = goal_pt;
-      init_ok = assembleInitialGuessFromAnchors(anchors, inner_pts, durations, nullptr);
-      if (init_ok &&
-          problem.seed.durations.size() == durations.size() &&
-          problem.seed.durations.allFinite())
-      {
-        durations = problem.seed.durations.cwiseMax(0.03);
-      }
-      if (init_ok)
-      {
-        init_ok = init_traj.generate(inner_pts, head_state, tail_state, durations);
-      }
+      guide_path.front() = start_pt;
+      guide_path.back() = goal_pt;
     }
 
-    if (!init_ok)
+    bool compiled_use_corridor = false;
+    bool compiled_use_esdf = false;
+    bool compiled_force_plain = task.force_plain;
+    const char *mode_str = "PLAIN";
+
+    switch (problem.active_space_model)
     {
-      init_ok = buildInitStateFromGuidePath(start_pt,
-                                            start_vel,
-                                            start_acc,
-                                            goal_pt,
-                                            goal_vel,
-                                            guide_path,
-                                            init_traj,
-                                            inner_pts,
-                                            durations,
-                                            head_state,
-                                            tail_state);
+    case core::ActiveSpaceModel::CORRIDOR:
+      compiled_use_corridor = !task.force_plain;
+      compiled_use_esdf = false;
+      compiled_force_plain = task.force_plain;
+      mode_str = compiled_use_corridor ? "CORRIDOR" : "PLAIN";
+      break;
+    case core::ActiveSpaceModel::ESDF:
+      compiled_use_corridor = false;
+      compiled_use_esdf = !task.force_plain;
+      compiled_force_plain = task.force_plain;
+      mode_str = compiled_use_esdf ? "ESDF" : "PLAIN";
+      break;
+    case core::ActiveSpaceModel::PLAIN:
+    case core::ActiveSpaceModel::VISIBLE_REGION:
+    case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
+    default:
+      compiled_use_corridor = false;
+      compiled_use_esdf = false;
+      compiled_force_plain = true;
+      mode_str = "PLAIN";
+      break;
     }
-    if (!init_ok)
+
+    ROS_INFO("[CompiledS2S] selected_mode=%s force_plain=%s seed_kind=%d guide_pts=%zu feasible_sets=%zu",
+             mode_str,
+             compiled_force_plain ? "yes" : "no",
+             static_cast<int>(problem.seed.kind),
+             guide_path.size(),
+             problem.feasible_sets.size());
+
+    const bool prev_use_corridor = use_sfc_corridor_;
+    const bool prev_use_esdf = use_esdf_;
+    use_sfc_corridor_ = compiled_use_corridor;
+    use_esdf_ = compiled_use_esdf;
+
+    const bool success = reboundReplan(start_pt,
+                                       start_vel,
+                                       start_acc,
+                                       goal_pt,
+                                       goal_vel,
+                                       task.flag_poly_init,
+                                       task.flag_random_poly_traj,
+                                       task.touch_goal,
+                                       compiled_force_plain,
+                                       nullptr,
+                                       guide_path.size() >= 2 ? &guide_path : nullptr,
+                                       nullptr);
+
+    use_sfc_corridor_ = prev_use_corridor;
+    use_esdf_ = prev_use_esdf;
+
+    if (!success)
     {
-      ROS_WARN("Compiled state-to-state solve: init generation failed, fallback to legacy.");
+      ROS_WARN("[CompiledS2S] failed in compiled mode=%s, fallback to legacy-compatible state-to-state.", mode_str);
       return solveStateToStateLegacy(task, solution);
     }
 
-    const bool use_corridor = problem.context.use_corridor && !task.force_plain;
-    const bool use_esdf = problem.context.use_esdf && !use_corridor && !task.force_plain;
-    double final_cost = std::numeric_limits<double>::infinity();
-    bool opt_success = false;
-    ploy_traj_opt_->setIfTouchGoal(task.touch_goal);
-
-    if (use_corridor)
+    const MINCOTraj3D &opt_traj = traj_.local_traj.traj;
+    const int piece_num = opt_traj.getPieceNum();
+    const double total_T = opt_traj.getTotalDuration();
+    const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+    bool inside_corridor = true;
+    if (compiled_use_corridor)
     {
       spatial_map::PolyhedraH corridor_hpolys;
-      Eigen::VectorXi corridor_piece_idx;
       for (const auto &set : problem.feasible_sets)
       {
         if (set.enabled &&
@@ -489,61 +505,21 @@ namespace ego_planner
             !set.corridor.empty())
         {
           corridor_hpolys = set.corridor;
-          corridor_piece_idx = set.corridor_piece_idx;
           break;
         }
       }
-      if (corridor_hpolys.empty())
+      if (!corridor_hpolys.empty())
       {
-        if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
-        {
-          ROS_WARN("Compiled state-to-state solve: corridor missing, fallback to legacy.");
-          return solveStateToStateLegacy(task, solution);
-        }
+        inside_corridor = ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0);
       }
-
-      const Eigen::VectorXi *piece_idx_ptr =
-          (corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()) &&
-           corridor_piece_idx.sum() == durations.size())
-              ? &corridor_piece_idx
-              : nullptr;
-      opt_success = ploy_traj_opt_->optimizeTrajectory(head_state,
-                                                       tail_state,
-                                                       inner_pts,
-                                                       durations,
-                                                       corridor_hpolys,
-                                                       piece_idx_ptr,
-                                                       final_cost);
-    }
-    else if (use_esdf)
-    {
-      opt_success = ploy_traj_opt_->optimizeTrajectoryWithDistanceField(head_state,
-                                                                        tail_state,
-                                                                        inner_pts,
-                                                                        durations,
-                                                                        final_cost);
-    }
-    else
-    {
-      opt_success = ploy_traj_opt_->optimizeTrajectory(head_state,
-                                                       tail_state,
-                                                       inner_pts,
-                                                       durations,
-                                                       final_cost);
     }
 
-    if (!opt_success)
-    {
-      ROS_WARN("Compiled state-to-state solve: optimizer failed, fallback to legacy.");
-      return solveStateToStateLegacy(task, solution);
-    }
-
-    const MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
-    if (!setLocalTrajFromOpt(opt_traj, task.touch_goal))
-    {
-      ROS_WARN("Compiled state-to-state solve: failed to set local traj, fallback to legacy.");
-      return solveStateToStateLegacy(task, solution);
-    }
+    ROS_INFO("[CompiledS2S] parity success=yes mode=%s pieces=%d total_T=%.3f min_sdf=%.3f inside_corridor=%s",
+             mode_str,
+             piece_num,
+             total_T,
+             min_sdf,
+             inside_corridor ? "yes" : "no");
 
     solution.success = true;
     solution.used_legacy_adapter = false;
@@ -694,6 +670,11 @@ namespace ego_planner
   bool EGOPlannerManager::corridorModeEnabled()
   {
     return use_sfc_corridor_;
+  }
+
+  bool EGOPlannerManager::esdfModeEnabled()
+  {
+    return use_esdf_;
   }
 
   void EGOPlannerManager::reportCorridorFailure(CorridorFailureType type,
