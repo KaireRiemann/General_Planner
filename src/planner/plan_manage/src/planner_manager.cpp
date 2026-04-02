@@ -252,6 +252,20 @@ namespace ego_planner
       }
       velocities.back() = velocities[velocities.size() - 2];
     }
+
+    const core::FeasibleSetSpec *findCorridorFeasibleSet(const core::PlanningProblem &problem)
+    {
+      for (const auto &set : problem.feasible_sets)
+      {
+        if (set.enabled &&
+            set.type == core::FeasibleSetType::CORRIDOR_POLYTOPE &&
+            !set.corridor.empty())
+        {
+          return &set;
+        }
+      }
+      return nullptr;
+    }
   } // namespace
 
 
@@ -414,26 +428,14 @@ namespace ego_planner
 
     if (problem.representation != core::RepresentationKind::MINCO ||
         !problem.start_boundary.valid ||
-        !problem.terminal_boundary.valid)
+        !problem.terminal_boundary.valid ||
+        !problem.seed.valid)
     {
       return solveStateToStateLegacy(problem.task, solution);
     }
 
     const core::TaskDefinition &task_definition = problem.task_definition;
     const core::TaskSpec &task = problem.task;
-    const Eigen::Vector3d start_pt = problem.start_boundary.position;
-    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
-    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
-    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
-    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
-
-    std::vector<Eigen::Vector3d> guide_path = problem.references.guide_path;
-    if (guide_path.size() >= 2)
-    {
-      guide_path.front() = start_pt;
-      guide_path.back() = goal_pt;
-    }
-
     bool compiled_use_corridor = false;
     bool compiled_use_esdf = false;
     bool compiled_force_plain = task_definition.space_model_policy.force_plain || task.force_plain;
@@ -468,66 +470,348 @@ namespace ego_planner
              mode_str,
              compiled_force_plain ? "yes" : "no",
              static_cast<int>(problem.seed.kind),
-             guide_path.size(),
+             problem.references.guide_path.size(),
              problem.feasible_sets.size());
 
-    const bool prev_use_corridor = use_sfc_corridor_;
-    const bool prev_use_esdf = use_esdf_;
-    use_sfc_corridor_ = compiled_use_corridor;
-    use_esdf_ = compiled_use_esdf;
-
-    const bool success = reboundReplan(start_pt,
-                                       start_vel,
-                                       start_acc,
-                                       goal_pt,
-                                       goal_vel,
-                                       task_definition.runtime_policy.flag_poly_init,
-                                       task_definition.runtime_policy.flag_random_poly_traj,
-                                       task_definition.runtime_policy.touch_goal,
-                                       compiled_force_plain,
-                                       nullptr,
-                                       guide_path.size() >= 2 ? &guide_path : nullptr,
-                                       nullptr);
-
-    use_sfc_corridor_ = prev_use_corridor;
-    use_esdf_ = prev_use_esdf;
-
-    if (!success)
+    const auto fallbackToLegacy = [&](const std::string &reason) -> bool
     {
-      ROS_WARN("[CompiledS2S] failed in compiled mode=%s, fallback to legacy-compatible state-to-state.", mode_str);
+      ROS_WARN("[CompiledS2S] %s, fallback to legacy-compatible state-to-state.",
+               reason.c_str());
       return solveStateToStateLegacy(task, solution);
+    };
+
+    const Eigen::Vector3d start_pt = problem.start_boundary.position;
+    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
+    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
+    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
+    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+
+    spatial_map::PolyhedraH corridor_hpolys;
+    Eigen::VectorXi corridor_piece_idx = problem.seed.corridor_piece_idx;
+    if (compiled_use_corridor)
+    {
+      reportCorridorFailure(FAIL_NONE, "");
+      const auto *corridor_set = findCorridorFeasibleSet(problem);
+      if (corridor_set == nullptr)
+      {
+        reportCorridorFailure(FAIL_CORRIDOR_GENERATION,
+                              "compiled problem is missing corridor feasible set");
+        return fallbackToLegacy("compiled corridor problem has no feasible corridor");
+      }
+
+      corridor_hpolys = corridor_set->corridor;
+      if ((corridor_piece_idx.size() != static_cast<int>(corridor_hpolys.size()) ||
+           corridor_piece_idx.sum() != problem.seed.durations.size()) &&
+          corridor_set->corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()) &&
+          corridor_set->corridor_piece_idx.sum() == problem.seed.durations.size())
+      {
+        corridor_piece_idx = corridor_set->corridor_piece_idx;
+      }
+
+      if (corridor_piece_idx.size() != static_cast<int>(corridor_hpolys.size()) ||
+          corridor_piece_idx.sum() != problem.seed.durations.size())
+      {
+        reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                              "compiled corridor seed piece allocation is inconsistent");
+        return fallbackToLegacy("compiled corridor seed has invalid piece-to-polytope layout");
+      }
+    }
+
+    if (problem.seed.durations.size() <= 0 ||
+        !problem.seed.durations.allFinite())
+    {
+      return fallbackToLegacy("compiled seed has invalid durations");
+    }
+    if (problem.seed.inner_points.cols() !=
+        std::max(0, static_cast<int>(problem.seed.durations.size()) - 1))
+    {
+      return fallbackToLegacy("compiled seed inner point layout does not match durations");
+    }
+
+    ploy_traj_opt_->setIfTouchGoal(task_definition.runtime_policy.touch_goal);
+
+    MINCOBoundaryState3D headState = makeBoundaryState(start_pt, start_vel, start_acc);
+    MINCOBoundaryState3D tailState =
+        makeBoundaryState(goal_pt, goal_vel, problem.terminal_boundary.acceleration);
+    Eigen::MatrixXd innerPts = problem.seed.inner_points;
+    Eigen::VectorXd durations = problem.seed.durations;
+    MINCOTraj3D initTraj;
+    if (!initTraj.generate(innerPts, headState, tailState, durations) ||
+        initTraj.getTotalDuration() <= 1.0e-6)
+    {
+      if (compiled_use_corridor)
+      {
+        reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                              "compiled initial guess failed to generate MINCO trajectory");
+      }
+      return fallbackToLegacy("compiled seed could not generate initial MINCO trajectory");
+    }
+
+    if (compiled_use_corridor)
+    {
+      const bool init_seed_feasible = improveCorridorSeedByTimeScaling(ploy_traj_opt_.get(),
+                                                                       headState,
+                                                                       tailState,
+                                                                       innerPts,
+                                                                       durations,
+                                                                       corridor_hpolys,
+                                                                       initTraj);
+      const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(initTraj);
+      const bool seed_inside_corridor =
+          ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0);
+      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
+               seed_collision_free ? "yes" : "no",
+               computeTrajectoryMinSdf(initTraj),
+               seed_inside_corridor ? "yes" : "no");
+      ROS_INFO("Corridor seed time-scaling feasibility: %s",
+               init_seed_feasible ? "yes" : "no");
+
+      if (!seed_collision_free || !seed_inside_corridor)
+      {
+        reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                              "compiled corridor seed remains infeasible after conservative timing");
+        return fallbackToLegacy("compiled corridor seed is still infeasible");
+      }
+    }
+    else if (compiled_use_esdf)
+    {
+      const double init_min_sdf = computeTrajectoryMinSdf(initTraj);
+      const double esdf_tol =
+          grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+               init_min_sdf >= esdf_tol ? "yes" : "no",
+               init_min_sdf);
+    }
+
+    Eigen::MatrixXd cstr_pts =
+        initTraj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+    std::vector<std::pair<int, int>> segments;
+    if (!compiled_use_corridor && !compiled_use_esdf)
+    {
+      if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) ==
+          PolyTrajOptimizer::CHK_RET::ERR)
+      {
+        return fallbackToLegacy("compiled plain seed failed initial collision checking");
+      }
+    }
+
+    std::vector<Eigen::Vector3d> point_set;
+    point_set.reserve(static_cast<std::size_t>(cstr_pts.cols()));
+    for (int i = 0; i < cstr_pts.cols(); ++i)
+    {
+      point_set.push_back(cstr_pts.col(i));
+    }
+    if (visualization_)
+    {
+      visualization_->displayInitPathList(point_set, 0.2, 0);
+    }
+
+    const ros::Time t_start = ros::Time::now();
+    bool flag_success = false;
+    std::vector<std::vector<Eigen::Vector3d>> vis_trajs;
+
+    if (compiled_use_corridor)
+    {
+      double final_cost = 0.0;
+      flag_success = ploy_traj_opt_->optimizeTrajectory(headState,
+                                                        tailState,
+                                                        innerPts,
+                                                        durations,
+                                                        corridor_hpolys,
+                                                        &corridor_piece_idx,
+                                                        final_cost);
+
+      if (flag_success)
+      {
+        const MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+        ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f inside_corridor=%s",
+                 computeTrajectoryMinSdf(opt_traj),
+                 ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
+        setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
+        have_active_tracking_semantic_guide_ = false;
+        active_tracking_semantic_guide_.clear();
+        active_tracking_corridor_.clear();
+        cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
+      }
+      else
+      {
+        const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
+        ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
+                 ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
+                 computeTrajectoryMinSdf(opt_traj),
+                 ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
+        reportCorridorFailure(FAIL_CORRIDOR_OPT,
+                              "compiled corridor optimization rejected seed");
+      }
+    }
+    else if (compiled_use_esdf)
+    {
+      double final_cost = 0.0;
+      flag_success = ploy_traj_opt_->optimizeTrajectoryWithDistanceField(headState,
+                                                                         tailState,
+                                                                         innerPts,
+                                                                         durations,
+                                                                         final_cost);
+
+      if (flag_success)
+      {
+        const MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        const double esdf_tol =
+            grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+        ROS_INFO("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+                 min_sdf >= esdf_tol ? "yes" : "no",
+                 min_sdf);
+        setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
+        have_active_tracking_semantic_guide_ = false;
+        active_tracking_semantic_guide_.clear();
+        active_tracking_corridor_.clear();
+        cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
+      }
+      else
+      {
+        const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
+        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+                 min_sdf >= (grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0) ? "yes" : "no",
+                 min_sdf);
+      }
+    }
+    else if (pp_.use_multitopology_trajs)
+    {
+      std::vector<Types::ConstraintPoints> trajs = ploy_traj_opt_->distinctiveTrajs(segments);
+      Eigen::VectorXi success = Eigen::VectorXi::Zero(static_cast<int>(trajs.size()));
+      double final_cost = 0.0;
+      double min_cost = 999999.0;
+      MINCOTraj3D best_traj;
+
+      for (int i = static_cast<int>(trajs.size()) - 1; i >= 0; --i)
+      {
+        ploy_traj_opt_->setConstraintPoints(trajs[static_cast<std::size_t>(i)]);
+        ploy_traj_opt_->setUseMultitopologyTrajs(true);
+        if (ploy_traj_opt_->optimizeTrajectory(headState,
+                                               tailState,
+                                               innerPts,
+                                               durations,
+                                               final_cost))
+        {
+          success(i) = true;
+          if (final_cost < min_cost)
+          {
+            min_cost = final_cost;
+            best_traj = ploy_traj_opt_->getTrajectory();
+            flag_success = true;
+          }
+
+          const MINCOTraj3D vis_traj = ploy_traj_opt_->getTrajectory();
+          const Eigen::MatrixXd ctrl_pts_temp =
+              vis_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+          std::vector<Eigen::Vector3d> vis_pts;
+          vis_pts.reserve(static_cast<std::size_t>(ctrl_pts_temp.cols()));
+          for (int j = 0; j < ctrl_pts_temp.cols(); ++j)
+          {
+            vis_pts.push_back(ctrl_pts_temp.col(j));
+          }
+          vis_trajs.push_back(vis_pts);
+        }
+      }
+
+      if (trajs.size() > 1)
+      {
+        std::cout << "\033[1;33m" << "multi-trajs=" << trajs.size() << ",\033[1;0m"
+                  << " Success:fail=" << success.sum() << ":" << success.size() - success.sum() << std::endl;
+      }
+
+      if (visualization_)
+      {
+        visualization_->displayMultiOptimalPathList(vis_trajs, 0.1);
+      }
+
+      if (flag_success)
+      {
+        setLocalTrajFromOpt(best_traj, task_definition.runtime_policy.touch_goal);
+        have_active_tracking_semantic_guide_ = false;
+        active_tracking_semantic_guide_.clear();
+        active_tracking_corridor_.clear();
+        cstr_pts = best_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
+      }
+    }
+    else
+    {
+      double final_cost = 0.0;
+      flag_success = ploy_traj_opt_->optimizeTrajectory(headState,
+                                                        tailState,
+                                                        innerPts,
+                                                        durations,
+                                                        final_cost);
+
+      if (flag_success)
+      {
+        const MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+        setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
+        have_active_tracking_semantic_guide_ = false;
+        active_tracking_semantic_guide_.clear();
+        active_tracking_corridor_.clear();
+        cstr_pts = opt_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
+      }
+    }
+
+    const double solve_time_ms = (ros::Time::now() - t_start).toSec() * 1.0e3;
+    std::cout << "Success=" << (flag_success ? "yes" : "no") << std::endl;
+    if (flag_success)
+    {
+      continous_failures_count_ = 0;
+    }
+    else
+    {
+      const MINCOTraj3D fail_traj = ploy_traj_opt_->getTrajectory();
+      if (compiled_use_corridor || compiled_use_esdf)
+      {
+        cstr_pts = sampleTrajectoryForDisplay(fail_traj, 0.02);
+      }
+      else
+      {
+        cstr_pts = fail_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
+      }
+      if (visualization_)
+      {
+        visualization_->displayFailedList(cstr_pts, 0);
+      }
+      continous_failures_count_++;
+      return fallbackToLegacy("compiled backend solve failed");
     }
 
     const MINCOTraj3D &opt_traj = traj_.local_traj.traj;
     const int piece_num = opt_traj.getPieceNum();
     const double total_T = opt_traj.getTotalDuration();
     const double min_sdf = computeTrajectoryMinSdf(opt_traj);
-    bool inside_corridor = true;
-    if (compiled_use_corridor)
-    {
-      spatial_map::PolyhedraH corridor_hpolys;
-      for (const auto &set : problem.feasible_sets)
-      {
-        if (set.enabled &&
-            set.type == core::FeasibleSetType::CORRIDOR_POLYTOPE &&
-            !set.corridor.empty())
-        {
-          corridor_hpolys = set.corridor;
-          break;
-        }
-      }
-      if (!corridor_hpolys.empty())
-      {
-        inside_corridor = ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0);
-      }
-    }
+    const bool inside_corridor =
+        !compiled_use_corridor ||
+        ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0);
 
-    ROS_INFO("[CompiledS2S] parity success=yes mode=%s pieces=%d total_T=%.3f min_sdf=%.3f inside_corridor=%s",
+    ROS_INFO("[CompiledS2S] success=yes mode=%s pieces=%d total_T=%.3f min_sdf=%.3f inside_corridor=%s solve_ms=%.3f",
              mode_str,
              piece_num,
              total_T,
              min_sdf,
-             inside_corridor ? "yes" : "no");
+             inside_corridor ? "yes" : "no",
+             solve_time_ms);
 
     solution.success = true;
     solution.used_legacy_adapter = false;

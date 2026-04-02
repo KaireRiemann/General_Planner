@@ -23,6 +23,9 @@ core::PlanningContext ContextBuilder::build(int drone_id,
                                             double max_acc,
                                             double poly_piece_length,
                                             double guide_min_clearance,
+                                            int guide_sparse_min_inner,
+                                            int guide_sparse_max_inner,
+                                            double guide_turn_angle_deg,
                                             double sfc_progress,
                                             double sfc_range,
                                             double sfc_corridor_margin,
@@ -47,6 +50,10 @@ core::PlanningContext ContextBuilder::build(int drone_id,
   context.max_acc = std::max(0.1, max_acc);
   context.poly_piece_length = std::max(0.1, poly_piece_length);
   context.guide_min_clearance = std::max(0.0, guide_min_clearance);
+  context.guide_sparse_min_inner = std::max(0, guide_sparse_min_inner);
+  context.guide_sparse_max_inner =
+      std::max(context.guide_sparse_min_inner, guide_sparse_max_inner);
+  context.guide_turn_angle_deg = std::max(0.0, guide_turn_angle_deg);
   context.sfc_progress = std::max(0.1, sfc_progress);
   context.sfc_range = std::max(0.1, sfc_range);
   context.sfc_corridor_margin = std::max(0.0, sfc_corridor_margin);
@@ -55,6 +62,15 @@ core::PlanningContext ContextBuilder::build(int drone_id,
   {
     context.warm_start.valid = true;
     context.warm_start.stamp = local_traj->start_time;
+    context.warm_start.durations = local_traj->traj.getDurations();
+
+    const auto positions = local_traj->traj.getPositions();
+    context.warm_start.anchor_points.reserve(
+        static_cast<std::size_t>(std::max<Eigen::Index>(0, positions.cols())));
+    for (int i = 0; i < positions.cols(); ++i)
+    {
+      context.warm_start.anchor_points.emplace_back(positions.col(i));
+    }
   }
   return context;
 }

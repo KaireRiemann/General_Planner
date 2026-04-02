@@ -31,6 +31,7 @@ bool CorridorService::buildFromGuidePath(const core::PlanningContext &context,
                        context.sfc_progress,
                        context.sfc_range,
                        corridor_hpolys);
+  sfc_gen::shortCut(corridor_hpolys);
   if (corridor_hpolys.empty())
   {
     return false;

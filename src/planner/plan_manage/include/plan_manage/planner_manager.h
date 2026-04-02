@@ -140,6 +140,9 @@ namespace ego_planner
     inline const std::string &getLastCorridorFailureTag(void) const { return last_corridor_failure_tag_; }
     inline JPSAStar *getJpsAstar(void) const { return jps_astar_.get(); }
     inline double getGuideMinClearance(void) const { return guide_min_clearance_; }
+    inline int getGuideSparseMinInner(void) const { return guide_sparse_min_inner_; }
+    inline int getGuideSparseMaxInner(void) const { return guide_sparse_max_inner_; }
+    inline double getGuideTurnAngleDeg(void) const { return guide_turn_angle_deg_; }
     inline double getSfcProgress(void) const { return sfc_progress_; }
     inline double getSfcRange(void) const { return sfc_range_; }
     inline double getSfcCorridorMargin(void) const { return sfc_corridor_margin_; }
@@ -149,6 +152,8 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
+    // Orchestration bridge: state-to-state compiled solving should consume
+    // PlanningProblem directly, while the helpers below remain for legacy paths.
     bool solveStateToStateLegacy(const core::TaskSpec &task,
                                  core::PlanningSolution &solution);
     bool solveTrackingLegacyTask(const core::TaskSpec &task,
@@ -158,6 +163,7 @@ namespace ego_planner
     bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
                                           core::PlanningSolution &solution);
 
+    // Frontend / seed helpers that still back the legacy replan path.
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
                              Eigen::Vector3d &safe_target) const;
     bool mapWindowReady() const;

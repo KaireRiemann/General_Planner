@@ -16,6 +16,7 @@ namespace ego_planner::runtime
 class TaskExecutor
 {
 public:
+  // Runtime owns execution timing and delegates semantics/problem building upstream.
   explicit TaskExecutor(EGOPlannerManager *planner_manager)
       : planner_manager_(planner_manager) {}
 

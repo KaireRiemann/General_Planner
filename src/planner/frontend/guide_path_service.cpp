@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <limits>
+#include <set>
+
+#include <cmath>
 
 namespace
 {
@@ -20,6 +23,102 @@ bool mapWindowReady(const GridMap::Ptr &map)
   }
   const double res = std::max(map->getResolution(), 1.0e-3);
   return ((high - low).array() > 6.0 * res).all();
+}
+
+bool sparsifyGuidePath(const ego_planner::core::PlanningContext &context,
+                       const std::vector<Eigen::Vector3d> &dense_path,
+                       std::vector<Eigen::Vector3d> &sparse_path)
+{
+  sparse_path.clear();
+  if (dense_path.size() < 2)
+  {
+    return false;
+  }
+
+  if (dense_path.size() <= 2)
+  {
+    sparse_path = dense_path;
+    return true;
+  }
+
+  std::vector<double> accum_len(dense_path.size(), 0.0);
+  for (std::size_t i = 1; i < dense_path.size(); ++i)
+  {
+    accum_len[i] = accum_len[i - 1] + (dense_path[i] - dense_path[i - 1]).norm();
+  }
+
+  const double total_len = accum_len.back();
+  const double piece_length = std::max(context.poly_piece_length, 0.2);
+  int desired_inner = std::max(0, static_cast<int>(std::round(total_len / piece_length)) - 1);
+  desired_inner = std::max(desired_inner, context.guide_sparse_min_inner);
+  desired_inner = std::min(desired_inner, context.guide_sparse_max_inner);
+  desired_inner = std::min(desired_inner, static_cast<int>(dense_path.size()) - 2);
+
+  std::vector<std::pair<double, int>> turn_candidates;
+  const double turn_thresh_rad =
+      context.guide_turn_angle_deg * std::acos(-1.0) / 180.0;
+  for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+  {
+    const Eigen::Vector3d vin =
+        dense_path[static_cast<std::size_t>(i)] - dense_path[static_cast<std::size_t>(i - 1)];
+    const Eigen::Vector3d vout =
+        dense_path[static_cast<std::size_t>(i + 1)] - dense_path[static_cast<std::size_t>(i)];
+    if (vin.norm() < 1.0e-4 || vout.norm() < 1.0e-4)
+    {
+      continue;
+    }
+
+    const double angle = std::acos(
+        std::max(-1.0, std::min(1.0, vin.normalized().dot(vout.normalized()))));
+    if (angle >= turn_thresh_rad)
+    {
+      turn_candidates.emplace_back(angle, i);
+    }
+  }
+
+  std::sort(turn_candidates.begin(),
+            turn_candidates.end(),
+            [](const auto &lhs, const auto &rhs)
+            {
+              return lhs.first > rhs.first;
+            });
+
+  std::set<int> selected;
+  for (const auto &candidate : turn_candidates)
+  {
+    if (static_cast<int>(selected.size()) >= desired_inner)
+    {
+      break;
+    }
+    selected.insert(candidate.second);
+  }
+
+  for (int k = 1; static_cast<int>(selected.size()) < desired_inner && k <= desired_inner; ++k)
+  {
+    const double target_s =
+        total_len * static_cast<double>(k) / static_cast<double>(desired_inner + 1);
+    int best_idx = 1;
+    double best_err = std::numeric_limits<double>::infinity();
+    for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+    {
+      const double err =
+          std::abs(accum_len[static_cast<std::size_t>(i)] - target_s);
+      if (err < best_err)
+      {
+        best_err = err;
+        best_idx = i;
+      }
+    }
+    selected.insert(best_idx);
+  }
+
+  sparse_path.push_back(dense_path.front());
+  for (const int idx : selected)
+  {
+    sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
+  }
+  sparse_path.push_back(dense_path.back());
+  return sparse_path.size() >= 2;
 }
 
 } // namespace
@@ -44,11 +143,15 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
 
   if (guide_ref != nullptr && !guide_ref->points.empty())
   {
-    if (!buildFromWaypoints(guide_ref->points, artifact))
+    std::vector<Eigen::Vector3d> sparse_points;
+    const auto &points =
+        sparsifyGuidePath(context, guide_ref->points, sparse_points) ? sparse_points : guide_ref->points;
+    if (!buildFromWaypoints(points, artifact))
     {
       return false;
     }
-    if (guide_ref->times.size() == guide_ref->points.size())
+    if (guide_ref->times.size() == guide_ref->points.size() &&
+        guide_ref->points.size() == points.size())
     {
       artifact.times = guide_ref->times;
     }
@@ -114,7 +217,12 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
 
   if (!task.preferred_guide_path.empty())
   {
-    return buildFromWaypoints(task.preferred_guide_path, artifact);
+    std::vector<Eigen::Vector3d> sparse_points;
+    const auto &points =
+        sparsifyGuidePath(context, task.preferred_guide_path, sparse_points)
+            ? sparse_points
+            : task.preferred_guide_path;
+    return buildFromWaypoints(points, artifact);
   }
 
   Eigen::Vector3d safe_start = task.start_pt;
@@ -151,6 +259,12 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
   if ((path.back() - task.goal_pt).norm() > 1.0e-3)
   {
     path.push_back(task.goal_pt);
+  }
+
+  std::vector<Eigen::Vector3d> sparse_path;
+  if (sparsifyGuidePath(context, path, sparse_path))
+  {
+    path.swap(sparse_path);
   }
 
   return buildFromWaypoints(path, artifact);

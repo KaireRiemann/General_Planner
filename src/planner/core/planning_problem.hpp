@@ -73,7 +73,9 @@ struct SeedSpec
   bool valid{false};
   bool corridor_aware{false};
   std::vector<Eigen::Vector3d> anchor_points;
+  Eigen::MatrixXd inner_points;
   Eigen::VectorXd durations;
+  Eigen::VectorXi corridor_piece_idx;
 };
 
 struct VariableLayoutSpec

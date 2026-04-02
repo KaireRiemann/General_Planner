@@ -13,6 +13,8 @@ namespace ego_planner::compiler
 class ProblemCompiler
 {
 public:
+  // ProblemCompiler is the semantic-to-optimization bridge:
+  // it lowers TaskDefinition into a solver-facing PlanningProblem IR.
   void setProblemAdapter(optimization::ProblemAdapter *adapter)
   {
     adapter_ = adapter;

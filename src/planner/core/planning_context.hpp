@@ -45,6 +45,9 @@ struct PlanningContext
   double max_acc{1.0};
   double poly_piece_length{0.6};
   double guide_min_clearance{0.2};
+  int guide_sparse_min_inner{2};
+  int guide_sparse_max_inner{5};
+  double guide_turn_angle_deg{25.0};
   double sfc_progress{0.75};
   double sfc_range{0.8};
   double sfc_corridor_margin{0.05};
