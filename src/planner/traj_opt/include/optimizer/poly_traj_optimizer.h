@@ -9,6 +9,7 @@
 #include "CostFunctionalManager/TrackingCostManager.hpp"
 #include "CostFunctionalManager/TrackingCorridorCostManager.hpp"
 #include "CostFunctionalManager/TrackingTypes.hpp"
+#include "CostFunctionalManager/TrackingSemanticGuide.hpp"
 #include "CostFunctionalManager/CostFunctional/TemporalCosts/LinearTimeCost.hpp"
 #include "CostFunctionalManager/PlanningTypesAdapter.hpp"
 #include "SpatialMap/SFCCommonTypes.hpp"
@@ -85,6 +86,8 @@ namespace ego_planner
     double wei_tracking_terminal_pos_;
     double wei_tracking_terminal_vel_;
     double wei_tracking_los_;
+    double wei_tracking_visible_fan_;
+    double wei_tracking_view_dir_smooth_;
     double tracking_los_clearance_;
     double tracking_distance_min_;
     double tracking_distance_max_;
@@ -104,7 +107,9 @@ namespace ego_planner
 
     double t_now_;
     bool tracking_task_enabled_{false};
+    bool tracking_semantic_enabled_{false};
     cost_functional::TrackingReference tracking_reference_;
+    cost_functional::TrackingSemanticGuide tracking_semantic_guide_;
 
     using PtsChk_t = std::vector<std::vector<std::pair<double,Eigen::Vector3d>>>;
     void resetSpatialOptimizationContext();
@@ -166,6 +171,7 @@ namespace ego_planner
     bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                     const cost_functional::TrackingReference &tracking_ref,
+                                    const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
                                     double &final_cost);
 
     bool optimizeTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
@@ -174,6 +180,7 @@ namespace ego_planner
     bool optimizeTrackingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                                      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                                      const cost_functional::TrackingReference &tracking_ref,
+                                                     const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
                                                      double &final_cost);
 
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
@@ -187,6 +194,13 @@ namespace ego_planner
                                     const Eigen::VectorXi *corridor_piece_idx,
                                     const cost_functional::TrackingReference &tracking_ref,
                                     double &final_cost);
+    bool optimizeTrackingTrajectoryWithVisibleRegions(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                                      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                                      const spatial_map::PolyhedraH &corridor_hpolys,
+                                                      const Eigen::VectorXi *corridor_piece_idx,
+                                                      const cost_functional::TrackingReference &tracking_ref,
+                                                      const cost_functional::TrackingSemanticGuide &tracking_semantic_guide,
+                                                      double &final_cost);
 
     CHK_RET finelyCheckAndSetConstraintPoints(std::vector<std::pair<int, int>> &segments,
                                               const MINCOTraj &traj,

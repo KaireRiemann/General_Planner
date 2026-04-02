@@ -12,6 +12,7 @@
 #include <SpatialMap/SFCCommonTypes.hpp>
 #include <SpatialMap/CorridorInit.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
+#include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
@@ -58,7 +59,8 @@ namespace ego_planner
         const bool flag_randomPolyTraj, const bool touch_goal,
         const bool force_plain = false,
         const cost_functional::TrackingReference *tracking_ref = nullptr,
-        const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr);
+        const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr,
+        const cost_functional::TrackingSemanticGuide *tracking_semantic_guide = nullptr);
 
     bool planTrackingTask(
         const cost_functional::TrackingReference &reference,
@@ -99,6 +101,7 @@ namespace ego_planner
     bool checkCollision(int drone_id);
     
     bool setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal);
+    bool trackingSemanticHorizonValid(double t_cur, double horizon) const;
     
     inline double getSwarmClearance(void) { return ploy_traj_opt_->get_swarm_clearance_(); }
     inline int getCpsNumPrePiece(void) { return ploy_traj_opt_->get_cps_num_prePiece_(); }
@@ -137,6 +140,11 @@ namespace ego_planner
                                          std::vector<Eigen::Vector3d> *viewpoint_target_vels = nullptr,
                                          std::vector<double> *viewpoint_times = nullptr,
                                          std::vector<Eigen::Vector3d> *candidate_points = nullptr) const;
+    bool buildTrackingSemanticGuideHypotheses(const cost_functional::TrackingReference &reference,
+                                              const Eigen::Vector3d &start_pt,
+                                              const Eigen::Vector3d &start_vel,
+                                              std::vector<cost_functional::TrackingSemanticGuide> &hypotheses) const;
+    bool buildTrackingVisibleFanRegions(cost_functional::TrackingSemanticGuide &semantic_guide) const;
     bool buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
                                      std::vector<Eigen::Vector3d> &guide_path) const;
     bool buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
@@ -152,6 +160,18 @@ namespace ego_planner
                                      MINCOBoundaryState3D &tail_state) const;
     bool generateSafeFlightCorridor(const std::vector<Eigen::Vector3d> &guide_path,
                                     spatial_map::PolyhedraH &corridor_hpolys) const;
+    bool generateTrackingSafeFlightCorridor(const cost_functional::TrackingSemanticGuide &semantic_guide,
+                                            spatial_map::PolyhedraH &corridor_hpolys,
+                                            Eigen::VectorXi &corridor_piece_idx) const;
+    bool buildTimeAlignedTrackingInitialGuess(const Eigen::Vector3d &start_pt,
+                                              const Eigen::Vector3d &start_vel,
+                                              const Eigen::Vector3d &goal_pt,
+                                              const cost_functional::TrackingSemanticGuide &semantic_guide,
+                                              const spatial_map::PolyhedraH &corridor_hpolys,
+                                              Eigen::MatrixXd &inner_pts,
+                                              Eigen::VectorXd &durations,
+                                              Eigen::VectorXi &corridor_piece_idx,
+                                              std::vector<double> *inner_clearances = nullptr) const;
     bool buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,
                                         const Eigen::Vector3d &start_vel,
                                         const Eigen::Vector3d &goal_pt,
@@ -211,8 +231,15 @@ namespace ego_planner
     double tracking_viewpoint_yaw_step_deg_{20.0};
     double tracking_viewpoint_connect_dist_{1.5};
     double tracking_viewpoint_clearance_{0.15};
+    int tracking_hypothesis_topk_{3};
+    double tracking_time_align_alpha_{0.55};
+    double tracking_visible_yaw_half_span_deg_{35.0};
+    double tracking_visible_z_half_span_{0.50};
     mutable bool have_tracking_anchor_dir_{false};
     mutable Eigen::Vector3d last_tracking_anchor_dir_{Eigen::Vector3d::UnitX()};
+    mutable cost_functional::TrackingSemanticGuide active_tracking_semantic_guide_;
+    mutable spatial_map::PolyhedraH active_tracking_corridor_;
+    mutable bool have_active_tracking_semantic_guide_{false};
 
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};

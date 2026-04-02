@@ -3,6 +3,7 @@
 #include <plan_env/grid_map.h>
 #include <plan_env/raycast.h>
 #include <path_searching/jps_a_star.hpp>
+#include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 
 #include <Eigen/Eigen>
 
@@ -21,6 +22,7 @@ class VisibleRegionGraph
 {
 public:
   using Ptr = std::unique_ptr<VisibleRegionGraph>;
+  using Result = cost_functional::TrackingSemanticGuide;
 
   struct Config
   {
@@ -47,16 +49,10 @@ public:
     double rel_align_weight{0.70};
     double los_edge_bonus{0.45};
     double non_los_edge_penalty{0.18};
-  };
-
-  struct Result
-  {
-    std::vector<Eigen::Vector3d> target_samples;
-    std::vector<Eigen::Vector3d> viewpoint_series;
-    std::vector<Eigen::Vector3d> viewpoint_target_vels;
-    std::vector<double> viewpoint_times;
-    std::vector<Eigen::Vector3d> guide_path;
-    std::vector<Eigen::Vector3d> candidate_points;
+    double edge_visibility_ratio_min{0.70};
+    double edge_visibility_margin_min{0.02};
+    double edge_distance_band_slack{0.30};
+    double edge_sample_spacing{0.18};
   };
 
   explicit VisibleRegionGraph(const GridMap::Ptr &map = nullptr)
@@ -90,7 +86,7 @@ public:
               const Eigen::Vector3d *sticky_dir,
               Result &result) const
   {
-    result = Result();
+    result.clear();
 
     if (!referenceValid(t_ref, p_ref, v_ref))
     {
@@ -426,13 +422,24 @@ public:
         {
           Node &node = layer[i];
           const EdgeInfo &edge = queryEdgePath(0, start_pt, node.id, node.viewpoint);
-          if (!edge.valid)
+          cost_functional::SemanticGuideEdge continuity_edge;
+          if (!checkEdgeVisibilityContinuity(t_ref,
+                                             p_ref,
+                                             v_ref,
+                                             start_pt,
+                                             0.0,
+                                             node.viewpoint,
+                                             node.t,
+                                             edge.path,
+                                             continuity_edge))
           {
             continue;
           }
           node.dp_score =
               node.base_score -
               config_.path_length_weight * edge.path_length +
+              config_.visibility_weight * continuity_edge.visibility_ratio +
+              config_.visibility_weight * continuity_edge.min_visibility_margin +
               (edge.los ? config_.los_edge_bonus : -config_.non_los_edge_penalty);
         }
         continue;
@@ -451,7 +458,16 @@ public:
           }
 
           const EdgeInfo &edge = queryEdgePath(prev.id, prev.viewpoint, node.id, node.viewpoint);
-          if (!edge.valid)
+          cost_functional::SemanticGuideEdge continuity_edge;
+          if (!checkEdgeVisibilityContinuity(t_ref,
+                                             p_ref,
+                                             v_ref,
+                                             prev.viewpoint,
+                                             prev.t,
+                                             node.viewpoint,
+                                             node.t,
+                                             edge.path,
+                                             continuity_edge))
           {
             continue;
           }
@@ -468,6 +484,9 @@ public:
               node.base_score +
               config_.rel_align_weight * rel_align -
               config_.path_length_weight * edge.path_length +
+              config_.visibility_weight * continuity_edge.visibility_ratio +
+              config_.visibility_weight * continuity_edge.min_visibility_margin -
+              0.35 * continuity_edge.mean_distance_error +
               (edge.los ? config_.los_edge_bonus : -config_.non_los_edge_penalty);
 
           if (transition_score > node.dp_score)
@@ -518,41 +537,81 @@ public:
       return false;
     }
 
-    result.guide_path.clear();
-    result.guide_path.push_back(start_pt);
+    result.corridor_seed_path.clear();
+    result.corridor_seed_times.clear();
+    result.corridor_seed_path.push_back(start_pt);
+    result.corridor_seed_times.push_back(0.0);
     int prev_id = 0;
     Eigen::Vector3d prev_pt = start_pt;
+    double prev_t = 0.0;
+    result.edges.clear();
     for (std::size_t i = 0; i < sequence.size(); ++i)
     {
       const Node &node = sequence[i];
       const EdgeInfo &edge = queryEdgePath(prev_id, prev_pt, node.id, node.viewpoint);
-      if (!edge.valid || edge.path.size() < 2)
+      cost_functional::SemanticGuideEdge continuity_edge;
+      if (!edge.valid || edge.path.size() < 2 ||
+          !checkEdgeVisibilityContinuity(t_ref,
+                                         p_ref,
+                                         v_ref,
+                                         prev_pt,
+                                         prev_t,
+                                         node.viewpoint,
+                                         node.t,
+                                         edge.path,
+                                         continuity_edge))
       {
         return false;
       }
+      continuity_edge.from_region_idx = static_cast<int>(i) - 1;
+      continuity_edge.to_region_idx = static_cast<int>(i);
       for (std::size_t k = 1; k < edge.path.size(); ++k)
       {
-        if ((edge.path[k] - result.guide_path.back()).norm() > 1.0e-3)
+        if ((edge.path[k] - result.corridor_seed_path.back()).norm() > 1.0e-3)
         {
-          result.guide_path.push_back(edge.path[k]);
+          result.corridor_seed_path.push_back(edge.path[k]);
+          const double t_k = continuity_edge.dense_times.empty()
+                                 ? node.t
+                                 : continuity_edge.dense_times[std::min(k, continuity_edge.dense_times.size() - 1)];
+          result.corridor_seed_times.push_back(t_k);
         }
       }
       result.target_samples.push_back(node.target);
+      result.target_vel_samples.push_back(node.target_vel);
       result.viewpoint_series.push_back(node.viewpoint);
-      result.viewpoint_target_vels.push_back(node.target_vel);
       result.viewpoint_times.push_back(node.t);
+      result.edges.push_back(continuity_edge);
       prev_id = node.id;
       prev_pt = node.viewpoint;
+      prev_t = node.t;
     }
 
-    std::vector<Eigen::Vector3d> shortcut;
-    shortcutPath(result.guide_path, shortcut);
-    result.guide_path.swap(shortcut);
-
-    return result.viewpoint_series.size() >= 1 && result.guide_path.size() >= 2;
+    if (result.edges.size() == result.viewpoint_series.size())
+    {
+      result.edges.erase(result.edges.begin());
+    }
+    result.path_length = pathLength(result.corridor_seed_path);
+    result.visibility_score = 0.0;
+    for (const auto &edge : result.edges)
+    {
+      result.visibility_score += edge.visibility_ratio + edge.min_visibility_margin;
+    }
+    result.hypothesis_score = best_score;
+    result.valid = result.viewpoint_series.size() >= 1 &&
+                   result.corridor_seed_path.size() >= 2;
+    return result.consistent();
   }
 
 private:
+  struct EdgeContinuityStats
+  {
+    bool valid{false};
+    double visibility_ratio{0.0};
+    double min_visibility_margin{0.0};
+    double mean_distance_error{0.0};
+    std::vector<double> dense_times;
+  };
+
   GridMap::Ptr map_;
   mutable std::unique_ptr<JPSAStar> jps_;
   Config config_;
@@ -906,6 +965,110 @@ private:
       return 0.0;
     }
     return min_margin;
+  }
+
+  bool checkEdgeVisibilityContinuity(const std::vector<double> &t_ref,
+                                     const std::vector<Eigen::Vector3d> &p_ref,
+                                     const std::vector<Eigen::Vector3d> &v_ref,
+                                     const Eigen::Vector3d &from,
+                                     const double from_t,
+                                     const Eigen::Vector3d &to,
+                                     const double to_t,
+                                     const std::vector<Eigen::Vector3d> &dense_path,
+                                     cost_functional::SemanticGuideEdge &guide_edge) const
+  {
+    guide_edge = cost_functional::SemanticGuideEdge();
+    if (dense_path.size() < 2)
+    {
+      return false;
+    }
+
+    guide_edge.dense_path = dense_path;
+    const double path_len = [&]()
+    {
+      double len = 0.0;
+      for (std::size_t i = 1; i < dense_path.size(); ++i)
+      {
+        len += (dense_path[i] - dense_path[i - 1]).norm();
+      }
+      return len;
+    }();
+
+    std::vector<double> accum(dense_path.size(), 0.0);
+    for (std::size_t i = 1; i < dense_path.size(); ++i)
+    {
+      accum[i] = accum[i - 1] + (dense_path[i] - dense_path[i - 1]).norm();
+    }
+    const double dt = std::max(1.0e-3, to_t - from_t);
+    guide_edge.dense_times.resize(dense_path.size(), from_t);
+    for (std::size_t i = 0; i < dense_path.size(); ++i)
+    {
+      const double ratio = (accum.back() <= 1.0e-9) ? 0.0 : accum[i] / accum.back();
+      guide_edge.dense_times[i] = from_t + ratio * dt;
+    }
+    const double spacing = std::max(config_.edge_sample_spacing,
+                                    map_ ? 1.5 * map_->getResolution() : 0.15);
+    const int sample_num = std::max(2, static_cast<int>(std::ceil(std::max(path_len, 1.0e-3) / spacing)) + 1);
+    const double desired_dist = 0.5 * (config_.tracking_distance_min + config_.tracking_distance_max);
+    int visible_cnt = 0;
+    int band_cnt = 0;
+    double dist_error_sum = 0.0;
+    double min_margin = std::numeric_limits<double>::infinity();
+
+    for (int sample_id = 0; sample_id < sample_num; ++sample_id)
+    {
+      const double ratio = (sample_num <= 1) ? 0.0 :
+          static_cast<double>(sample_id) / static_cast<double>(sample_num - 1);
+      const double s = ratio * accum.back();
+
+      std::size_t idx = 1;
+      while (idx < accum.size() && accum[idx] < s)
+      {
+        ++idx;
+      }
+      idx = std::min(idx, accum.size() - 1);
+      const double seg_s0 = accum[idx - 1];
+      const double seg_s1 = accum[idx];
+      const double alpha = (seg_s1 <= seg_s0 + 1.0e-9) ? 0.0 : (s - seg_s0) / (seg_s1 - seg_s0);
+      const Eigen::Vector3d sample_pt =
+          dense_path[idx - 1] + alpha * (dense_path[idx] - dense_path[idx - 1]);
+      const double sample_t = from_t + ratio * dt;
+
+      Eigen::Vector3d target_pt = Eigen::Vector3d::Zero();
+      Eigen::Vector3d target_vel = Eigen::Vector3d::Zero();
+      if (!sampleReference(t_ref, p_ref, v_ref, sample_t, target_pt, target_vel))
+      {
+        return false;
+      }
+
+      if (mapWindowReady() && !isFree(sample_pt))
+      {
+        return false;
+      }
+
+      const bool los_ok = lineOfSightFree(sample_pt, target_pt);
+      const double vis_margin = rayVisibilityMargin(sample_pt, target_pt);
+      const double radial_dist = (sample_pt - target_pt).head<2>().norm();
+      const double dist_err = std::abs(radial_dist - desired_dist);
+      const bool band_ok =
+          radial_dist >= (1.0 - config_.edge_distance_band_slack) * config_.tracking_distance_min &&
+          radial_dist <= (1.0 + config_.edge_distance_band_slack) * config_.tracking_distance_max;
+
+      visible_cnt += los_ok ? 1 : 0;
+      band_cnt += band_ok ? 1 : 0;
+      dist_error_sum += dist_err;
+      min_margin = std::min(min_margin, vis_margin);
+    }
+
+    guide_edge.visibility_ratio =
+        static_cast<double>(visible_cnt) / static_cast<double>(sample_num);
+    guide_edge.min_visibility_margin = std::isfinite(min_margin) ? min_margin : 0.0;
+    guide_edge.mean_distance_error = dist_error_sum / static_cast<double>(sample_num);
+    guide_edge.valid =
+        guide_edge.visibility_ratio >= config_.edge_visibility_ratio_min &&
+        guide_edge.min_visibility_margin >= config_.edge_visibility_margin_min &&
+        band_cnt >= static_cast<int>(std::ceil(0.75 * sample_num));
+    return guide_edge.valid;
   }
 
   void shortcutPath(const std::vector<Eigen::Vector3d> &raw_path,

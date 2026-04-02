@@ -1064,6 +1064,11 @@ namespace ego_planner
       return false;
     }
 
+    if (!planner_manager_->trackingSemanticHorizonValid(t_cur, tracking_replan_current_traj_lookahead_))
+    {
+      return false;
+    }
+
     const Eigen::Vector3d lookahead_delta = ref_pos - traj_pos;
     ROS_INFO_THROTTLE(0.8,
                       "Tracking keep current traj: target_shift_xy=%.2f target_shift_z=%.2f lookahead_xy=%.2f lookahead_z=%.2f remaining_t=%.2f lookahead=%.2f",

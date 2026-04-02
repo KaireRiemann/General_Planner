@@ -3,10 +3,12 @@
 
 #include "CostFunctionalManager/CorridorCostManager.hpp"
 #include "CostFunctionalManager/TrackingTypes.hpp"
+#include "CostFunctionalManager/TrackingSemanticGuide.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/DistanceKeepingCost.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/SoftTerminalReferenceCost.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingViewReferenceCost.hpp"
 #include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingLosCost.hpp"
+#include "CostFunctionalManager/CostFunctional/SpatialCosts/TrackingVisibleRegionCost.hpp"
 
 namespace cost_functional
 {
@@ -19,6 +21,7 @@ namespace cost_functional
 
         Types::GridMapPtr grid_map{nullptr};
         const RefType *tracking_ref{nullptr};
+        const TrackingSemanticGuide *tracking_semantic_guide{nullptr};
 
         double track_d_min{0.0}, track_d_max{0.0}, track_z_tol{0.4}, track_smooth_eps{0.1};
         double wei_track_near{0.0}, wei_track_far{0.0}, wei_track_vertical{0.0};
@@ -27,16 +30,19 @@ namespace cost_functional
 
         double wei_track_los{0.0};
         double track_los_clearance{0.2};
+        double wei_track_visible_fan{0.0};
+        double wei_track_view_dir_smooth{0.0};
 
         double wei_terminal_pos{0.0}, wei_terminal_vel{0.0};
 
         TrackingCorridorCostFunctionalManager()
         {
-            accumulated_costs.resize(9);
+            accumulated_costs.resize(11);
             accumulated_costs.setZero();
         }
 
         void setTrackingReference(const RefType *ref) { tracking_ref = ref; }
+        void setTrackingSemanticGuide(const TrackingSemanticGuide *guide) { tracking_semantic_guide = guide; }
         void resetAccumulation() const { accumulated_costs.setZero(); }
 
         double evaluateIntegral(const int cp_idx,
@@ -62,6 +68,7 @@ namespace cost_functional
             double cost_distance = 0.0;
             double cost_view_ref = 0.0;
             double cost_los = 0.0;
+            double cost_visible_fan = 0.0;
 
             if (tracking_ref != nullptr)
             {
@@ -103,10 +110,27 @@ namespace cost_functional
                 }
             }
 
+            if (tracking_semantic_guide != nullptr)
+            {
+                VisibleFanRegion region;
+                if (semantic_guide::sampleVisibleFanRegion(*tracking_semantic_guide, t_global, region))
+                {
+                    Types::Vec3 grad_visible = Types::Vec3::Zero();
+                    cost_visible_fan =
+                        accumulateVisibleFanRegionViolationCost(position,
+                                                                region,
+                                                                wei_track_visible_fan,
+                                                                grad_visible);
+                    grad_position += grad_visible;
+                    grad_time += -grad_visible.dot(region.target_velocity);
+                }
+            }
+
             accumulated_costs(5) += cost_distance;
             accumulated_costs(6) += cost_view_ref;
             accumulated_costs(7) += cost_los;
-            return base_cost + cost_distance + cost_view_ref + cost_los;
+            accumulated_costs(8) += cost_visible_fan;
+            return base_cost + cost_distance + cost_view_ref + cost_los + cost_visible_fan;
         }
 
         template <typename SamplesType>
@@ -115,6 +139,39 @@ namespace cost_functional
                               Eigen::VectorXd &grad_t_global) const
         {
             double cost = Base::evaluateSample(samples, grad_p, grad_t_global);
+
+            double cost_view_dir_smooth = 0.0;
+            if (tracking_semantic_guide != nullptr &&
+                wei_track_view_dir_smooth > 0.0 &&
+                samples.size() >= 2)
+            {
+                for (int i = 1; i < static_cast<int>(samples.size()); ++i)
+                {
+                    VisibleFanRegion prev_region, curr_region;
+                    if (!semantic_guide::sampleVisibleFanRegion(*tracking_semantic_guide,
+                                                                samples[i - 1].t_global,
+                                                                prev_region) ||
+                        !semantic_guide::sampleVisibleFanRegion(*tracking_semantic_guide,
+                                                                samples[i].t_global,
+                                                                curr_region))
+                    {
+                        continue;
+                    }
+
+                    Types::Vec3 grad_prev = Types::Vec3::Zero();
+                    Types::Vec3 grad_curr = Types::Vec3::Zero();
+                    cost_view_dir_smooth +=
+                        accumulateTrackingViewDirectionSmoothnessCost(samples[i - 1].p,
+                                                                      samples[i].p,
+                                                                      prev_region,
+                                                                      curr_region,
+                                                                      wei_track_view_dir_smooth,
+                                                                      grad_prev,
+                                                                      grad_curr);
+                    grad_p.col(i - 1) += grad_prev;
+                    grad_p.col(i) += grad_curr;
+                }
+            }
 
             double cost_terminal = 0.0;
             if (tracking_ref != nullptr &&
@@ -164,8 +221,9 @@ namespace cost_functional
                 }
             }
 
-            accumulated_costs(8) += cost_terminal;
-            return cost + cost_terminal;
+            accumulated_costs(9) += cost_view_dir_smooth;
+            accumulated_costs(10) += cost_terminal;
+            return cost + cost_view_dir_smooth + cost_terminal;
         }
     };
 }

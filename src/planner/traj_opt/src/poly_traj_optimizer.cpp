@@ -220,6 +220,11 @@ namespace ego_planner
     tracking_corridor_cost_manager_.setCorridor(nullptr, nullptr);
     tracking_corridor_cost_manager_.setReferencePoints(nullptr, 0.0);
     tracking_corridor_cost_manager_.setTrackingReference(nullptr);
+    tracking_corridor_cost_manager_.setTrackingSemanticGuide(nullptr);
+    tracking_cost_manager_.setTrackingReference(nullptr);
+    tracking_cost_manager_.setTrackingSemanticGuide(nullptr);
+    tracking_semantic_enabled_ = false;
+    tracking_semantic_guide_.clear();
   }
 
   // =====================================================
@@ -312,6 +317,8 @@ namespace ego_planner
       tracking_cost_manager_.touch_goal = touch_goal_;
       tracking_cost_manager_.cps_per_piece = cps_num_prePiece_;
       tracking_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+      tracking_cost_manager_.setTrackingSemanticGuide(
+          tracking_semantic_enabled_ ? &tracking_semantic_guide_ : nullptr);
 
       tracking_cost_manager_.track_d_min = tracking_distance_min_;
       tracking_cost_manager_.track_d_max = tracking_distance_max_;
@@ -326,6 +333,8 @@ namespace ego_planner
       tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
       tracking_cost_manager_.wei_track_los = wei_tracking_los_;
       tracking_cost_manager_.track_los_clearance = tracking_los_clearance_;
+      tracking_cost_manager_.wei_track_visible_fan = wei_tracking_visible_fan_;
+      tracking_cost_manager_.wei_track_view_dir_smooth = wei_tracking_view_dir_smooth_;
     }
 
     Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
@@ -448,6 +457,7 @@ namespace ego_planner
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       const cost_functional::TrackingReference &tracking_ref,
+      const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
       double &final_cost)
   {
     if (!tracking_ref.valid())
@@ -457,8 +467,16 @@ namespace ego_planner
     }
     tracking_reference_ = tracking_ref;
     tracking_task_enabled_ = true;
+    tracking_semantic_enabled_ =
+        tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
+    if (tracking_semantic_enabled_)
+    {
+      tracking_semantic_guide_ = *tracking_semantic_guide;
+    }
     const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
     tracking_task_enabled_ = false;
+    tracking_semantic_enabled_ = false;
+    tracking_semantic_guide_.clear();
     return success;
   }
 
@@ -554,6 +572,8 @@ namespace ego_planner
       tracking_cost_manager_.touch_goal = touch_goal_;
       tracking_cost_manager_.cps_per_piece = cps_num_prePiece_;
       tracking_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+      tracking_cost_manager_.setTrackingSemanticGuide(
+          tracking_semantic_enabled_ ? &tracking_semantic_guide_ : nullptr);
 
       tracking_cost_manager_.track_d_min = tracking_distance_min_;
       tracking_cost_manager_.track_d_max = tracking_distance_max_;
@@ -568,6 +588,8 @@ namespace ego_planner
       tracking_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
       tracking_cost_manager_.wei_track_los = wei_tracking_los_;
       tracking_cost_manager_.track_los_clearance = tracking_los_clearance_;
+      tracking_cost_manager_.wei_track_visible_fan = wei_tracking_visible_fan_;
+      tracking_cost_manager_.wei_track_view_dir_smooth = wei_tracking_view_dir_smooth_;
       tracking_corridor_cost_manager_.wei_track_los = wei_tracking_los_;
       tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
     }
@@ -716,6 +738,7 @@ namespace ego_planner
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       const cost_functional::TrackingReference &tracking_ref,
+      const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
       double &final_cost)
   {
     if (!tracking_ref.valid())
@@ -725,8 +748,16 @@ namespace ego_planner
     }
     tracking_reference_ = tracking_ref;
     tracking_task_enabled_ = true;
+    tracking_semantic_enabled_ =
+        tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
+    if (tracking_semantic_enabled_)
+    {
+      tracking_semantic_guide_ = *tracking_semantic_guide;
+    }
     const bool success = optimizeTrajectoryWithDistanceField(iniState, finState, initInnerPts, initT, final_cost);
     tracking_task_enabled_ = false;
+    tracking_semantic_enabled_ = false;
+    tracking_semantic_guide_.clear();
     return success;
   }
 
@@ -928,6 +959,8 @@ namespace ego_planner
       tracking_corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
       tracking_corridor_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
       tracking_corridor_cost_manager_.setTrackingReference(&tracking_reference_);
+      tracking_corridor_cost_manager_.setTrackingSemanticGuide(
+          tracking_semantic_enabled_ ? &tracking_semantic_guide_ : nullptr);
       tracking_corridor_cost_manager_.cps = &cps_;
       tracking_corridor_cost_manager_.swarm_traj = swarm_trajs_;
       tracking_corridor_cost_manager_.wei_corridor = wei_corridor_;
@@ -957,6 +990,8 @@ namespace ego_planner
       tracking_corridor_cost_manager_.wei_track_view_z = wei_tracking_view_z_;
       tracking_corridor_cost_manager_.wei_track_los = wei_tracking_los_;
       tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
+      tracking_corridor_cost_manager_.wei_track_visible_fan = wei_tracking_visible_fan_;
+      tracking_corridor_cost_manager_.wei_track_view_dir_smooth = wei_tracking_view_dir_smooth_;
       tracking_corridor_cost_manager_.wei_terminal_pos = wei_tracking_terminal_pos_;
       tracking_corridor_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
     }
@@ -1134,6 +1169,8 @@ namespace ego_planner
     }
     tracking_reference_ = tracking_ref;
     tracking_task_enabled_ = true;
+    tracking_semantic_enabled_ = false;
+    tracking_semantic_guide_.clear();
     const bool success = optimizeTrajectory(iniState,
                                             finState,
                                             initInnerPts,
@@ -1142,6 +1179,37 @@ namespace ego_planner
                                             corridor_piece_idx,
                                             final_cost);
     tracking_task_enabled_ = false;
+    return success;
+  }
+
+  bool PolyTrajOptimizer::optimizeTrackingTrajectoryWithVisibleRegions(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const spatial_map::PolyhedraH &corridor_hpolys,
+      const Eigen::VectorXi *corridor_piece_idx,
+      const cost_functional::TrackingReference &tracking_ref,
+      const cost_functional::TrackingSemanticGuide &tracking_semantic_guide,
+      double &final_cost)
+  {
+    if (!tracking_ref.valid() || !tracking_semantic_guide.consistent())
+    {
+      ROS_WARN("Tracking visible-region optimize rejected: invalid tracking semantic inputs.");
+      return false;
+    }
+    tracking_reference_ = tracking_ref;
+    tracking_task_enabled_ = true;
+    tracking_semantic_enabled_ = true;
+    tracking_semantic_guide_ = tracking_semantic_guide;
+    const bool success = optimizeTrajectory(iniState,
+                                            finState,
+                                            initInnerPts,
+                                            initT,
+                                            corridor_hpolys,
+                                            corridor_piece_idx,
+                                            final_cost);
+    tracking_task_enabled_ = false;
+    tracking_semantic_enabled_ = false;
+    tracking_semantic_guide_.clear();
     return success;
   }
 
@@ -2028,6 +2096,8 @@ namespace ego_planner
     nh.param("optimization/tracking_height_tolerance", tracking_height_tolerance_, 0.4);
     nh.param("optimization/tracking_smooth_eps", tracking_smooth_eps_, 0.1);
     nh.param("optimization/weight_tracking_los", wei_tracking_los_, 80.0);
+    nh.param("optimization/weight_tracking_visible_fan", wei_tracking_visible_fan_, 45.0);
+    nh.param("optimization/weight_tracking_view_dir_smooth", wei_tracking_view_dir_smooth_, 8.0);
     nh.param("optimization/tracking_los_clearance", tracking_los_clearance_, 0.20);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
