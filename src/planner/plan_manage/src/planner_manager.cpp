@@ -310,6 +310,20 @@ namespace ego_planner
     jps_astar_->setJumpMaxCells(jps_jump_max_cells_);
     jps_astar_->setJumpNearObsRadius(jps_near_obs_radius_);
 
+    tracking_vrg_.reset(new VisibleRegionGraph(grid_map_));
+    VisibleRegionGraph::Config vrg_cfg;
+    vrg_cfg.tracking_distance_min = tracking_distance_min_;
+    vrg_cfg.tracking_distance_max = tracking_distance_max_;
+    vrg_cfg.viewpoint_dt = tracking_viewpoint_dt_;
+    vrg_cfg.viewpoint_max_num = tracking_viewpoint_max_num_;
+    vrg_cfg.viewpoint_yaw_step_deg = tracking_viewpoint_yaw_step_deg_;
+    vrg_cfg.viewpoint_connect_dist = tracking_viewpoint_connect_dist_;
+    vrg_cfg.viewpoint_clearance = std::max(guide_min_clearance_, tracking_viewpoint_clearance_);
+    vrg_cfg.path_timeout = sfc_path_timeout_;
+    vrg_cfg.jps_jump_max_cells = jps_jump_max_cells_;
+    vrg_cfg.jps_near_obs_radius = jps_near_obs_radius_;
+    tracking_vrg_->setConfig(vrg_cfg);
+
     ploy_traj_opt_.reset(new PolyTrajOptimizer);
     ploy_traj_opt_->setParam(nh);
     ploy_traj_opt_->setEnvironment(grid_map_);
@@ -672,7 +686,7 @@ namespace ego_planner
 
     const double resolution = std::max(grid_map_->getResolution(), 1.0e-3);
     RayCaster ray_caster;
-    if (!ray_caster.setInput(from / resolution, to / resolution))
+    if (!ray_caster.setInput((from - low) / resolution, (to - low) / resolution))
     {
       return grid_map_->getInflateOccupancy(from) == 0 &&
              grid_map_->getInflateOccupancy(to) == 0;
@@ -681,7 +695,8 @@ namespace ego_planner
     Eigen::Vector3d ray_idx;
     while (ray_caster.step(ray_idx))
     {
-      const Eigen::Vector3d world_pt = (ray_idx.array() + 0.5).matrix() * resolution;
+      const Eigen::Vector3d world_pt =
+          low + (ray_idx.array() + 0.5).matrix() * resolution;
       if (grid_map_->getInflateOccupancy(world_pt) != 0)
       {
         return false;
@@ -1720,6 +1735,79 @@ namespace ego_planner
     return guide_path.size() >= 2;
   }
 
+  bool EGOPlannerManager::buildTrackingVisibleRegionGuide(
+      const cost_functional::TrackingReference &reference,
+      const Eigen::Vector3d &start_pt,
+      const Eigen::Vector3d &start_vel,
+      std::vector<Eigen::Vector3d> &target_samples,
+      std::vector<Eigen::Vector3d> &viewpoint_series,
+      std::vector<Eigen::Vector3d> &guide_path,
+      std::vector<Eigen::Vector3d> *viewpoint_target_vels,
+      std::vector<double> *viewpoint_times,
+      std::vector<Eigen::Vector3d> *candidate_points) const
+  {
+    target_samples.clear();
+    viewpoint_series.clear();
+    guide_path.clear();
+    if (viewpoint_target_vels != nullptr)
+    {
+      viewpoint_target_vels->clear();
+    }
+    if (viewpoint_times != nullptr)
+    {
+      viewpoint_times->clear();
+    }
+    if (candidate_points != nullptr)
+    {
+      candidate_points->clear();
+    }
+
+    if (!reference.valid() || !tracking_vrg_)
+    {
+      return false;
+    }
+
+    Eigen::Vector3d sticky_dir = have_tracking_anchor_dir_
+                                     ? last_tracking_anchor_dir_
+                                     : Eigen::Vector3d::UnitX();
+    sticky_dir.z() = 0.0;
+    if (sticky_dir.head<2>().norm() < 1.0e-3)
+    {
+      sticky_dir = Eigen::Vector3d::UnitX();
+    }
+    sticky_dir.normalize();
+
+    VisibleRegionGraph::Result vrg_result;
+    if (!tracking_vrg_->search(reference.t_ref,
+                               reference.p_ref,
+                               reference.v_ref,
+                               start_pt,
+                               start_vel,
+                               &sticky_dir,
+                               vrg_result))
+    {
+      return false;
+    }
+
+    target_samples = vrg_result.target_samples;
+    viewpoint_series = vrg_result.viewpoint_series;
+    guide_path = vrg_result.guide_path;
+    if (viewpoint_target_vels != nullptr)
+    {
+      *viewpoint_target_vels = vrg_result.viewpoint_target_vels;
+    }
+    if (viewpoint_times != nullptr)
+    {
+      *viewpoint_times = vrg_result.viewpoint_times;
+    }
+    if (candidate_points != nullptr)
+    {
+      *candidate_points = vrg_result.candidate_points;
+    }
+
+    return !viewpoint_series.empty() && guide_path.size() >= 2;
+  }
+
   bool EGOPlannerManager::planTrackingTask(
       const cost_functional::TrackingReference &reference,
       const Eigen::Vector3d &start_pt,
@@ -1766,126 +1854,120 @@ namespace ego_planner
     std::vector<Eigen::Vector3d> viewpoint_target_vels;
     std::vector<double> viewpoint_times;
     std::vector<Eigen::Vector3d> tracking_guide_path;
-    if (buildTrackingViewpointSeries(reference,
-                                     start_pt,
-                                     start_vel,
-                                     target_samples,
-                                     viewpoint_series,
-                                     &viewpoint_target_vels,
-                                     &viewpoint_times))
+    std::vector<Eigen::Vector3d> vrg_candidates;
+    if (buildTrackingVisibleRegionGuide(reference,
+                                        start_pt,
+                                        start_vel,
+                                        target_samples,
+                                        viewpoint_series,
+                                        tracking_guide_path,
+                                        &viewpoint_target_vels,
+                                        &viewpoint_times,
+                                        &vrg_candidates))
     {
-      std::vector<Eigen::Vector3d> tracking_waypoints;
-      tracking_waypoints.reserve(viewpoint_series.size() + 1);
-      tracking_waypoints.push_back(start_pt);
-      tracking_waypoints.insert(tracking_waypoints.end(),
-                                viewpoint_series.begin(),
-                                viewpoint_series.end());
-
-      if (buildGuidePathFromWaypoints(tracking_waypoints, tracking_guide_path))
+      if (viewpoint_series.empty() || viewpoint_times.empty() || tracking_guide_path.size() < 2)
       {
-        if (viewpoint_series.empty() || viewpoint_times.empty())
-        {
-          ROS_WARN("planTrackingTask: empty viewpoint sequence after viewpoint generation.");
-          return false;
-        }
-
-        cost_functional::TrackingReference planning_reference = reference;
-        planning_reference.t_view_ref = viewpoint_times;
-        planning_reference.p_view_ref = viewpoint_series;
-        fillReferenceVelocities(planning_reference.t_view_ref,
-                                planning_reference.p_view_ref,
-                                planning_reference.v_view_ref);
-        planning_reference.use_view_terminal = true;
-        planning_reference.has_terminal_ref = true;
-        planning_reference.p_term_ref = viewpoint_series.back();
-        planning_reference.v_term_ref =
-            planning_reference.v_view_ref.empty() ? Eigen::Vector3d::Zero()
-                                                  : planning_reference.v_view_ref.back();
-
-        if (visualization_)
-        {
-          visualization_->displayDebugPathList(target_samples,
-                                               0.10,
-                                               Eigen::Vector4d(1.0, 0.55, 0.05, 1.0),
-                                               8000);
-          visualization_->displayDebugPathList(viewpoint_series,
-                                               0.12,
-                                               Eigen::Vector4d(0.15, 0.75, 1.0, 1.0),
-                                               8001);
-          visualization_->displayDebugPathList(tracking_guide_path,
-                                               0.08,
-                                               Eigen::Vector4d(0.15, 1.0, 0.35, 1.0),
-                                               8002,
-                                               true);
-        }
-
-        const Eigen::Vector3d &tracking_anchor = viewpoint_series.back();
-        const double anchor_t =
-            viewpoint_times.empty() ? reference.t_ref.back() : viewpoint_times.back();
-        Eigen::Vector3d target_vel =
-            viewpoint_target_vels.empty() ? Eigen::Vector3d::Zero()
-                                          : viewpoint_target_vels.back();
-        if (viewpoint_target_vels.empty())
-        {
-          Eigen::Vector3d dummy_pos = Eigen::Vector3d::Zero();
-          cost_functional::sampleTrackingReference(reference, anchor_t, dummy_pos, target_vel);
-        }
-
-        ROS_INFO("planTrackingTask: ref_size=%zu viewpoint_count=%zu guide_pts=%zu view_ref=%s horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
-                 reference.t_ref.size(),
-                 viewpoint_series.size(),
-                 tracking_guide_path.size(),
-                 planning_reference.viewValid() ? "yes" : "no",
-                 reference.t_ref.back(),
-                 anchor_t,
-                 tracking_target.x(),
-                 tracking_target.y(),
-                 tracking_target.z(),
-                 tracking_anchor.x(),
-                 tracking_anchor.y(),
-                 tracking_anchor.z(),
-                 desired_dist);
-
-        if (reboundReplan(start_pt,
-                          start_vel,
-                          start_acc,
-                          tracking_anchor,
-                          target_vel,
-                          flag_polyInit,
-                          flag_randomPolyTraj,
-                          touch_goal,
-                          force_plain,
-                          &planning_reference,
-                          &tracking_guide_path))
-        {
-          Eigen::Vector3d success_dir = tracking_anchor - tracking_target;
-          success_dir.z() = 0.0;
-          if (success_dir.head<2>().norm() > 1.0e-3)
-          {
-            last_tracking_anchor_dir_ = success_dir.normalized();
-            have_tracking_anchor_dir_ = true;
-          }
-
-          const double yaw_dt = 0.05;
-          const double max_yaw_rate = 1.2;
-          auto yaw_plan = TrackingYawPlanner::planFacingTarget(
-              traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
-          planning_reference.t_yaw_ref = yaw_plan.t;
-          planning_reference.yaw_ref = yaw_plan.yaw;
-          traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
-          return true;
-        }
-
-        ROS_WARN("planTrackingTask: viewpoint-series init failed, fallback to anchor trials.");
+        ROS_WARN("planTrackingTask: visible-region graph returned empty viewpoint/guide path.");
+        return false;
       }
-      else
+
+      cost_functional::TrackingReference planning_reference = reference;
+      planning_reference.t_view_ref = viewpoint_times;
+      planning_reference.p_view_ref = viewpoint_series;
+      fillReferenceVelocities(planning_reference.t_view_ref,
+                              planning_reference.p_view_ref,
+                              planning_reference.v_view_ref);
+      planning_reference.use_view_terminal = true;
+      planning_reference.has_terminal_ref = true;
+      planning_reference.p_term_ref = viewpoint_series.back();
+      planning_reference.v_term_ref =
+          planning_reference.v_view_ref.empty() ? Eigen::Vector3d::Zero()
+                                                : planning_reference.v_view_ref.back();
+
+      if (visualization_)
       {
-        ROS_WARN("planTrackingTask: failed to build guide path from viewpoint series, fallback to anchor trials.");
+        visualization_->displayDebugPathList(target_samples,
+                                             0.10,
+                                             Eigen::Vector4d(1.0, 0.55, 0.05, 1.0),
+                                             8000);
+        visualization_->displayDebugPathList(vrg_candidates,
+                                             0.06,
+                                             Eigen::Vector4d(0.65, 0.65, 1.0, 0.9),
+                                             8003);
+        visualization_->displayDebugPathList(viewpoint_series,
+                                             0.12,
+                                             Eigen::Vector4d(0.15, 0.75, 1.0, 1.0),
+                                             8001);
+        visualization_->displayDebugPathList(tracking_guide_path,
+                                             0.08,
+                                             Eigen::Vector4d(0.15, 1.0, 0.35, 1.0),
+                                             8002,
+                                             true);
       }
+
+      const Eigen::Vector3d &tracking_anchor = viewpoint_series.back();
+      const double anchor_t =
+          viewpoint_times.empty() ? reference.t_ref.back() : viewpoint_times.back();
+      Eigen::Vector3d target_vel =
+          viewpoint_target_vels.empty() ? Eigen::Vector3d::Zero()
+                                        : viewpoint_target_vels.back();
+      if (viewpoint_target_vels.empty())
+      {
+        Eigen::Vector3d dummy_pos = Eigen::Vector3d::Zero();
+        cost_functional::sampleTrackingReference(reference, anchor_t, dummy_pos, target_vel);
+      }
+
+      ROS_INFO("planTrackingTask(VRG): ref_size=%zu viewpoint_count=%zu graph_candidates=%zu guide_pts=%zu view_ref=%s horizon_end_t=%.3f anchor_t=%.2f target_now=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] d*=%.2f",
+               reference.t_ref.size(),
+               viewpoint_series.size(),
+               vrg_candidates.size(),
+               tracking_guide_path.size(),
+               planning_reference.viewValid() ? "yes" : "no",
+               reference.t_ref.back(),
+               anchor_t,
+               tracking_target.x(),
+               tracking_target.y(),
+               tracking_target.z(),
+               tracking_anchor.x(),
+               tracking_anchor.y(),
+               tracking_anchor.z(),
+               desired_dist);
+
+      if (reboundReplan(start_pt,
+                        start_vel,
+                        start_acc,
+                        tracking_anchor,
+                        target_vel,
+                        flag_polyInit,
+                        flag_randomPolyTraj,
+                        touch_goal,
+                        force_plain,
+                        &planning_reference,
+                        &tracking_guide_path))
+      {
+        Eigen::Vector3d success_dir = tracking_anchor - tracking_target;
+        success_dir.z() = 0.0;
+        if (success_dir.head<2>().norm() > 1.0e-3)
+        {
+          last_tracking_anchor_dir_ = success_dir.normalized();
+          have_tracking_anchor_dir_ = true;
+        }
+
+        const double yaw_dt = 0.05;
+        const double max_yaw_rate = 1.2;
+        auto yaw_plan = TrackingYawPlanner::planFacingTarget(
+            traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
+        planning_reference.t_yaw_ref = yaw_plan.t;
+        planning_reference.yaw_ref = yaw_plan.yaw;
+        traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
+        return true;
+      }
+
+      ROS_WARN("planTrackingTask: visible-region graph init failed, fallback to anchor trials.");
     }
     else
     {
-      ROS_WARN("planTrackingTask: failed to build viewpoint series, fallback to anchor trials.");
+      ROS_WARN("planTrackingTask: failed to build visible-region graph guide path, fallback to anchor trials.");
     }
 
     std::vector<Eigen::Vector3d> anchor_candidates;

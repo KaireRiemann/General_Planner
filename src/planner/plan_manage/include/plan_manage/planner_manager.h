@@ -13,6 +13,7 @@
 #include <SpatialMap/CorridorInit.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
 #include <path_searching/jps_a_star.hpp>
+#include <path_searching/visible_region_graph.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
@@ -127,6 +128,15 @@ namespace ego_planner
                                       std::vector<Eigen::Vector3d> &viewpoint_series,
                                       std::vector<Eigen::Vector3d> *viewpoint_target_vels = nullptr,
                                       std::vector<double> *viewpoint_times = nullptr) const;
+    bool buildTrackingVisibleRegionGuide(const cost_functional::TrackingReference &reference,
+                                         const Eigen::Vector3d &start_pt,
+                                         const Eigen::Vector3d &start_vel,
+                                         std::vector<Eigen::Vector3d> &target_samples,
+                                         std::vector<Eigen::Vector3d> &viewpoint_series,
+                                         std::vector<Eigen::Vector3d> &guide_path,
+                                         std::vector<Eigen::Vector3d> *viewpoint_target_vels = nullptr,
+                                         std::vector<double> *viewpoint_times = nullptr,
+                                         std::vector<Eigen::Vector3d> *candidate_points = nullptr) const;
     bool buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
                                      std::vector<Eigen::Vector3d> &guide_path) const;
     bool buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
@@ -177,6 +187,7 @@ namespace ego_planner
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
     JPSAStar::Ptr jps_astar_;
+    mutable VisibleRegionGraph::Ptr tracking_vrg_;
     bool use_sfc_corridor_{false};
     bool use_esdf_{false};
     double sfc_path_timeout_{0.2};
