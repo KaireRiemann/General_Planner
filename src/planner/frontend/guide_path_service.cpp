@@ -27,6 +27,38 @@ bool mapWindowReady(const GridMap::Ptr &map)
 namespace ego_planner::frontend
 {
 
+bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &context,
+                                              const core::TaskDefinition &task_definition,
+                                              GuidePathArtifact &artifact) const
+{
+  artifact.points.clear();
+  artifact.times.clear();
+
+  const auto *guide_ref =
+      task_definition.findActiveReference(core::ReferenceSemanticType::GUIDE_PATH);
+  if (guide_ref == nullptr)
+  {
+    guide_ref =
+        task_definition.findActiveReference(core::ReferenceSemanticType::WAYPOINT_SEQUENCE);
+  }
+
+  if (guide_ref != nullptr && !guide_ref->points.empty())
+  {
+    if (!buildFromWaypoints(guide_ref->points, artifact))
+    {
+      return false;
+    }
+    if (guide_ref->times.size() == guide_ref->points.size())
+    {
+      artifact.times = guide_ref->times;
+    }
+    return artifact.valid();
+  }
+
+  core::TaskSpec compat_task = task_definition.toTaskSpec();
+  return buildStateToStateGuide(context, compat_task, artifact);
+}
+
 bool GuidePathService::sanitizePoint(const core::PlanningContext &context,
                                      const Eigen::Vector3d &raw,
                                      Eigen::Vector3d &safe) const

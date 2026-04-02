@@ -3,6 +3,110 @@
 #include <optimization/constraint_registry.hpp>
 #include <optimization/objective_registry.hpp>
 
+namespace
+{
+
+using ego_planner::core::ActiveSpaceModel;
+using ego_planner::core::SpaceModelPreference;
+using ego_planner::core::TaskDefinition;
+using ego_planner::core::TaskType;
+
+ActiveSpaceModel selectStateToStateSpaceModel(const TaskDefinition &task_definition,
+                                              const ego_planner::core::PlanningContext &context)
+{
+  const auto &policy = task_definition.space_model_policy;
+  if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
+  {
+    return ActiveSpaceModel::PLAIN;
+  }
+
+  if (policy.preferred == SpaceModelPreference::CORRIDOR &&
+      policy.allow_corridor && context.has_grid_map && context.has_jps)
+  {
+    return ActiveSpaceModel::CORRIDOR;
+  }
+
+  if (policy.preferred == SpaceModelPreference::ESDF &&
+      policy.allow_esdf && context.has_esdf)
+  {
+    return ActiveSpaceModel::ESDF;
+  }
+
+  if (policy.allow_corridor && context.has_grid_map && context.has_jps)
+  {
+    return ActiveSpaceModel::CORRIDOR;
+  }
+
+  if (policy.allow_esdf && context.has_esdf)
+  {
+    return ActiveSpaceModel::ESDF;
+  }
+
+  return ActiveSpaceModel::PLAIN;
+}
+
+ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
+                                        const ego_planner::core::PlanningContext &context)
+{
+  const auto &policy = task_definition.space_model_policy;
+  switch (task_definition.type)
+  {
+  case TaskType::STATE_TO_STATE:
+    return selectStateToStateSpaceModel(task_definition, context);
+  case TaskType::TRACKING:
+    if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
+    {
+      return ActiveSpaceModel::PLAIN;
+    }
+    return policy.allow_visible_region ? ActiveSpaceModel::VISIBLE_REGION
+                                       : ActiveSpaceModel::PLAIN;
+  case TaskType::PERCHING:
+    if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
+    {
+      return ActiveSpaceModel::PLAIN;
+    }
+    return policy.allow_terminal_manifold ? ActiveSpaceModel::TERMINAL_MANIFOLD
+                                          : ActiveSpaceModel::PLAIN;
+  case TaskType::UNKNOWN:
+  default:
+    return ActiveSpaceModel::PLAIN;
+  }
+}
+
+void applyDefaultObjectiveConstraintPolicy(const TaskDefinition &task_definition,
+                                          ego_planner::core::PlanningProblem &problem)
+{
+  problem.objective_mask =
+      ego_planner::optimization::OBJ_SMOOTHNESS |
+      ego_planner::optimization::OBJ_FEASIBILITY |
+      ego_planner::optimization::OBJ_OBSTACLE;
+  problem.constraint_mask =
+      ego_planner::optimization::CON_DYNAMICS |
+      ego_planner::optimization::CON_COLLISION;
+
+  if (problem.active_space_model == ActiveSpaceModel::CORRIDOR)
+  {
+    problem.objective_mask |= ego_planner::optimization::OBJ_CORRIDOR;
+    problem.constraint_mask |= ego_planner::optimization::CON_CORRIDOR;
+  }
+  if (problem.active_space_model == ActiveSpaceModel::VISIBLE_REGION ||
+      task_definition.type == TaskType::TRACKING)
+  {
+    problem.objective_mask |=
+        ego_planner::optimization::OBJ_TRACKING_DISTANCE |
+        ego_planner::optimization::OBJ_TRACKING_VIEW |
+        ego_planner::optimization::OBJ_TRACKING_VISIBILITY |
+        ego_planner::optimization::OBJ_TERMINAL_SOFT;
+    problem.constraint_mask |= ego_planner::optimization::CON_VISIBLE_REGION;
+  }
+  if (problem.active_space_model == ActiveSpaceModel::TERMINAL_MANIFOLD)
+  {
+    problem.objective_mask |= ego_planner::optimization::OBJ_TERMINAL_SOFT;
+  }
+}
+
+} // namespace
+
 namespace ego_planner::compiler
 {
 
@@ -10,55 +114,32 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
                               const core::TaskSpec &task,
                               core::PlanningProblem &problem) const
 {
+  return compile(context, core::TaskDefinition::fromTaskSpec(task), problem);
+}
+
+bool ProblemCompiler::compile(const core::PlanningContext &context,
+                              const core::TaskDefinition &task_definition,
+                              core::PlanningProblem &problem) const
+{
   problem = core::PlanningProblem{};
-  problem.problem_name = task.task_name;
+  problem.problem_name = task_definition.task_name;
   problem.context = context;
-  problem.task = task;
-  problem.prefer_legacy_fallback = (task.type != core::TaskType::STATE_TO_STATE);
+  problem.task_definition = task_definition;
+  problem.task = task_definition.toTaskSpec();
+  problem.prefer_legacy_fallback =
+      task_definition.runtime_policy.preserve_legacy_compatibility &&
+      (task_definition.type != core::TaskType::STATE_TO_STATE);
+  problem.active_space_model = selectActiveSpaceModel(task_definition, context);
 
-  // Single authoritative active-space-model selection.
-  switch (task.type)
-  {
-  case core::TaskType::STATE_TO_STATE:
-    if (task.force_plain)
-    {
-      problem.active_space_model = core::ActiveSpaceModel::PLAIN;
-    }
-    else if (task.prefer_corridor && context.has_grid_map && context.has_jps)
-    {
-      problem.active_space_model = core::ActiveSpaceModel::CORRIDOR;
-    }
-    else if (task.prefer_esdf && context.has_esdf)
-    {
-      problem.active_space_model = core::ActiveSpaceModel::ESDF;
-    }
-    else
-    {
-      problem.active_space_model = core::ActiveSpaceModel::PLAIN;
-    }
-    break;
-  case core::TaskType::TRACKING:
-    problem.active_space_model =
-        task.force_plain ? core::ActiveSpaceModel::PLAIN : core::ActiveSpaceModel::VISIBLE_REGION;
-    break;
-  case core::TaskType::PERCHING:
-    problem.active_space_model = core::ActiveSpaceModel::TERMINAL_MANIFOLD;
-    break;
-  case core::TaskType::UNKNOWN:
-  default:
-    problem.active_space_model = core::ActiveSpaceModel::PLAIN;
-    break;
-  }
-
-  if (!reference_builder_.build(context, task, problem))
+  if (!reference_builder_.build(context, task_definition, problem))
   {
     return false;
   }
-  if (!feasible_set_builder_.build(context, task, problem))
+  if (!feasible_set_builder_.build(context, task_definition, problem))
   {
     return false;
   }
-  if (!seed_builder_.build(context, task, problem))
+  if (!seed_builder_.build(context, task_definition, problem))
   {
     return false;
   }
@@ -80,38 +161,19 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
     }
   }
 
-  // Default objective/constraint masks are generic and task-agnostic at solver layer.
-  problem.objective_mask =
-      optimization::OBJ_SMOOTHNESS |
-      optimization::OBJ_FEASIBILITY |
-      optimization::OBJ_OBSTACLE;
-  problem.constraint_mask =
-      optimization::CON_DYNAMICS |
-      optimization::CON_COLLISION;
-
-  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+  if (task_definition.objective_constraint_policy.use_default_task_policy)
   {
-    problem.objective_mask |= optimization::OBJ_CORRIDOR;
-    problem.constraint_mask |= optimization::CON_CORRIDOR;
+    applyDefaultObjectiveConstraintPolicy(task_definition, problem);
   }
-  if (problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION ||
-      task.type == core::TaskType::TRACKING)
+  else
   {
-    problem.objective_mask |=
-        optimization::OBJ_TRACKING_DISTANCE |
-        optimization::OBJ_TRACKING_VIEW |
-        optimization::OBJ_TRACKING_VISIBILITY |
-        optimization::OBJ_TERMINAL_SOFT;
-    problem.constraint_mask |= optimization::CON_VISIBLE_REGION;
-  }
-  if (problem.active_space_model == core::ActiveSpaceModel::TERMINAL_MANIFOLD)
-  {
-    problem.objective_mask |= optimization::OBJ_TERMINAL_SOFT;
+    problem.objective_mask = task_definition.objective_constraint_policy.objective_mask;
+    problem.constraint_mask = task_definition.objective_constraint_policy.constraint_mask;
   }
 
   if (adapter_ != nullptr)
   {
-    switch (task.type)
+    switch (task_definition.type)
     {
     case core::TaskType::STATE_TO_STATE:
       problem.solve_callback =

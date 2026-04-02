@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <core/planning_context.hpp>
+#include <core/task_definition.hpp>
 #include <core/task_spec.hpp>
 
 namespace ego_planner::frontend
@@ -25,6 +26,10 @@ struct GuidePathArtifact
 class GuidePathService
 {
 public:
+  bool buildStateToStateGuide(const core::PlanningContext &context,
+                              const core::TaskDefinition &task_definition,
+                              GuidePathArtifact &artifact) const;
+
   bool buildStateToStateGuide(const core::PlanningContext &context,
                               const core::TaskSpec &task,
                               GuidePathArtifact &artifact) const;

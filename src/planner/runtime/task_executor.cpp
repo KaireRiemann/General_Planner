@@ -6,7 +6,7 @@ namespace ego_planner::runtime
 {
 
 bool TaskExecutor::execute(const core::PlanningContext &context,
-                           const core::TaskSpec &task,
+                           const core::TaskDefinition &task_definition,
                            core::PlanningSolution &solution)
 {
   if (planner_manager_ == nullptr)
@@ -15,8 +15,7 @@ bool TaskExecutor::execute(const core::PlanningContext &context,
     solution.message = "null planner manager";
     return false;
   }
-  return planner_manager_->solveTask(context, task, solution);
+  return planner_manager_->solveTask(context, task_definition, solution);
 }
 
 } // namespace ego_planner::runtime
-

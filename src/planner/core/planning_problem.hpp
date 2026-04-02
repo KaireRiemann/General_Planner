@@ -10,6 +10,7 @@
 
 #include <core/feasible_set_spec.hpp>
 #include <core/planning_context.hpp>
+#include <core/task_definition.hpp>
 #include <core/task_spec.hpp>
 
 namespace ego_planner::core
@@ -98,6 +99,7 @@ struct PlanningProblem
   bool valid{false};
 
   PlanningContext context;
+  TaskDefinition task_definition;
   TaskSpec task;
 
   std::vector<FeasibleSetSpec> feasible_sets;

@@ -17,6 +17,7 @@
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
 #include <core/planning_context.hpp>
+#include <core/task_definition.hpp>
 #include <core/task_spec.hpp>
 #include <core/planning_solution.hpp>
 #include <compiler/problem_compiler.hpp>
@@ -42,8 +43,12 @@ namespace ego_planner
     bool esdfModeEnabled();
 
     // This system is organized as:
-    // TaskSpec + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.
-    // Task-specific semantics belong in TaskSpec and ProblemCompiler, not in FSM or solver.
+    // TaskDefinition + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.
+    // planner_manager owns modules and orchestrates solving, but task semantics should live upstream.
+    bool solveTask(const core::PlanningContext &context,
+                   const core::TaskDefinition &task_definition,
+                   core::PlanningSolution &solution);
+
     bool solveTask(const core::PlanningContext &context,
                    const core::TaskSpec &task,
                    core::PlanningSolution &solution);

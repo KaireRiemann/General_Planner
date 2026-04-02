@@ -637,34 +637,34 @@ namespace ego_planner
           &planner_manager_->traj_.local_traj);
     }
 
-    // FSM only manages state transitions and runtime conditions.
-    // Task semantics are created by TaskFactory, then solved by TaskExecutor.
-    core::TaskSpec task_spec = tracking_active
-                                   ? tasks::TaskFactory::makeTrackingTask(
-                                         tracking_reference_,
-                                         start_pt_,
-                                         start_vel_,
-                                         start_acc_,
-                                         flag_use_poly_init,
-                                         flag_randomPolyTraj,
-                                         force_plain)
-                                   : tasks::TaskFactory::makeStateToStateTask(
-                                         start_pt_,
-                                         start_vel_,
-                                         start_acc_,
-                                         local_target_pt_,
-                                         local_target_vel_,
-                                         touch_goal_,
-                                         flag_use_poly_init,
-                                         flag_randomPolyTraj,
-                                         force_plain,
-                                         planner_manager_->corridorModeEnabled(),
-                                         planner_manager_->esdfModeEnabled());
+    // FSM only manages runtime state transitions.
+    // Task semantics come from TaskFactory, and the compiler owns problem construction.
+    core::TaskDefinition task_definition = tracking_active
+                                               ? tasks::TaskFactory::makeTrackingDefinition(
+                                                     tracking_reference_,
+                                                     start_pt_,
+                                                     start_vel_,
+                                                     start_acc_,
+                                                     flag_use_poly_init,
+                                                     flag_randomPolyTraj,
+                                                     force_plain)
+                                               : tasks::TaskFactory::makeStateToStateDefinition(
+                                                     start_pt_,
+                                                     start_vel_,
+                                                     start_acc_,
+                                                     local_target_pt_,
+                                                     local_target_vel_,
+                                                     touch_goal_,
+                                                     flag_use_poly_init,
+                                                     flag_randomPolyTraj,
+                                                     force_plain,
+                                                     planner_manager_->corridorModeEnabled(),
+                                                     planner_manager_->esdfModeEnabled());
 
     core::PlanningSolution planning_solution;
     const bool plan_success = task_executor_
-                                  ? task_executor_->execute(planning_context, task_spec, planning_solution)
-                                  : planner_manager_->solveTask(planning_context, task_spec, planning_solution);
+                                  ? task_executor_->execute(planning_context, task_definition, planning_solution)
+                                  : planner_manager_->solveTask(planning_context, task_definition, planning_solution);
 
     if (plan_success)
     {

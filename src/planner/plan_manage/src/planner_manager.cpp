@@ -259,7 +259,7 @@ namespace ego_planner
   EGOPlannerManager::~EGOPlannerManager() { std::cout << "des manager" << std::endl; }
 
   bool EGOPlannerManager::solveTask(const core::PlanningContext &context,
-                                    const core::TaskSpec &task,
+                                    const core::TaskDefinition &task_definition,
                                     core::PlanningSolution &solution)
   {
     if (!problem_compiler_)
@@ -273,7 +273,7 @@ namespace ego_planner
     }
 
     core::PlanningProblem problem;
-    if (!problem_compiler_->compile(context, task, problem))
+    if (!problem_compiler_->compile(context, task_definition, problem))
     {
       solution.success = false;
       solution.message = "problem compiler rejected task";
@@ -284,6 +284,13 @@ namespace ego_planner
     const bool ok = backend_solver_->solve(problem, solution);
     solution.solve_time_ms = (ros::Time::now() - solve_start).toSec() * 1.0e3;
     return ok;
+  }
+
+  bool EGOPlannerManager::solveTask(const core::PlanningContext &context,
+                                    const core::TaskSpec &task,
+                                    core::PlanningSolution &solution)
+  {
+    return solveTask(context, core::TaskDefinition::fromTaskSpec(task), solution);
   }
 
   bool EGOPlannerManager::solveCompatibility(const core::PlanningProblem &problem,
@@ -412,6 +419,7 @@ namespace ego_planner
       return solveStateToStateLegacy(problem.task, solution);
     }
 
+    const core::TaskDefinition &task_definition = problem.task_definition;
     const core::TaskSpec &task = problem.task;
     const Eigen::Vector3d start_pt = problem.start_boundary.position;
     const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
@@ -428,7 +436,7 @@ namespace ego_planner
 
     bool compiled_use_corridor = false;
     bool compiled_use_esdf = false;
-    bool compiled_force_plain = task.force_plain;
+    bool compiled_force_plain = task_definition.space_model_policy.force_plain || task.force_plain;
     const char *mode_str = "PLAIN";
 
     switch (problem.active_space_model)
@@ -473,9 +481,9 @@ namespace ego_planner
                                        start_acc,
                                        goal_pt,
                                        goal_vel,
-                                       task.flag_poly_init,
-                                       task.flag_random_poly_traj,
-                                       task.touch_goal,
+                                       task_definition.runtime_policy.flag_poly_init,
+                                       task_definition.runtime_policy.flag_random_poly_traj,
+                                       task_definition.runtime_policy.touch_goal,
                                        compiled_force_plain,
                                        nullptr,
                                        guide_path.size() >= 2 ? &guide_path : nullptr,
@@ -523,7 +531,7 @@ namespace ego_planner
 
     solution.success = true;
     solution.used_legacy_adapter = false;
-    solution.touch_goal = task.touch_goal;
+    solution.touch_goal = task_definition.runtime_policy.touch_goal;
     solution.message = "compiled state-to-state solve success";
     solution.trajectory = traj_.local_traj.traj;
     if (traj_.local_traj.has_yaw_ref)

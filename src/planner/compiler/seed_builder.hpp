@@ -11,7 +11,7 @@ class SeedBuilder
 {
 public:
   bool build(const core::PlanningContext &context,
-             const core::TaskSpec &task,
+             const core::TaskDefinition &task_definition,
              core::PlanningProblem &problem) const;
 
 private:

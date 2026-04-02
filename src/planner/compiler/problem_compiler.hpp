@@ -5,6 +5,7 @@
 #include <compiler/reference_builder.hpp>
 #include <compiler/seed_builder.hpp>
 #include <optimization/problem_adapter.hpp>
+#include <core/task_definition.hpp>
 
 namespace ego_planner::compiler
 {
@@ -16,6 +17,10 @@ public:
   {
     adapter_ = adapter;
   }
+
+  bool compile(const core::PlanningContext &context,
+               const core::TaskDefinition &task_definition,
+               core::PlanningProblem &problem) const;
 
   bool compile(const core::PlanningContext &context,
                const core::TaskSpec &task,
@@ -31,4 +36,3 @@ private:
 } // namespace ego_planner::compiler
 
 #endif // PLANNER_COMPILER_PROBLEM_COMPILER_HPP_
-

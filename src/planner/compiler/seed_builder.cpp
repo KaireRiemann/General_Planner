@@ -80,7 +80,7 @@ bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
 }
 
 bool SeedBuilder::build(const core::PlanningContext &context,
-                        const core::TaskSpec &task,
+                        const core::TaskDefinition &task_definition,
                         core::PlanningProblem &problem) const
 {
   problem.seed = core::SeedSpec{};
@@ -129,8 +129,7 @@ bool SeedBuilder::build(const core::PlanningContext &context,
       std::max(0, problem.variable_layout.piece_num - 1);
   problem.variable_layout.boundary_derivative_num = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
 
-  (void)task;
-  return problem.seed.valid || task.type != core::TaskType::STATE_TO_STATE;
+  return problem.seed.valid || task_definition.type != core::TaskType::STATE_TO_STATE;
 }
 
 } // namespace ego_planner::compiler

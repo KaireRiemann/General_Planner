@@ -13,18 +13,18 @@ class FeasibleSetBuilder
 {
 public:
   bool build(const core::PlanningContext &context,
-             const core::TaskSpec &task,
+             const core::TaskDefinition &task_definition,
              core::PlanningProblem &problem) const;
 
 private:
   bool buildTransitFeasibleSets(const core::PlanningContext &context,
-                                const core::TaskSpec &task,
+                                const core::TaskDefinition &task_definition,
                                 core::PlanningProblem &problem) const;
   bool buildTrackingFeasibleSets(const core::PlanningContext &context,
-                                 const core::TaskSpec &task,
+                                 const core::TaskDefinition &task_definition,
                                  core::PlanningProblem &problem) const;
   bool buildPerchingFeasibleSets(const core::PlanningContext &context,
-                                 const core::TaskSpec &task,
+                                 const core::TaskDefinition &task_definition,
                                  core::PlanningProblem &problem) const;
 
   frontend::GuidePathService guide_path_service_;
