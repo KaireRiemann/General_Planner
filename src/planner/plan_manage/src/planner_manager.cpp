@@ -233,20 +233,6 @@ namespace ego_planner
       return rotated;
     }
 
-    double wrapAngle(double angle_rad)
-    {
-      constexpr double kTwoPi = 2.0 * M_PI;
-      while (angle_rad > M_PI)
-      {
-        angle_rad -= kTwoPi;
-      }
-      while (angle_rad < -M_PI)
-      {
-        angle_rad += kTwoPi;
-      }
-      return angle_rad;
-    }
-
     void fillReferenceVelocities(const std::vector<double> &times,
                                  const std::vector<Eigen::Vector3d> &positions,
                                  std::vector<Eigen::Vector3d> &velocities)
@@ -1352,30 +1338,50 @@ namespace ego_planner
                                    { return std::abs(a - b) < 1.0e-3; }),
                        sample_times.end());
 
-    Eigen::Vector3d seed_dir = Eigen::Vector3d::Zero();
+    struct ViewpointCandidate
+    {
+      Eigen::Vector3d viewpoint{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d target{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d target_vel{Eigen::Vector3d::Zero()};
+      double t{0.0};
+      double base_score{-std::numeric_limits<double>::infinity()};
+      double dp_score{-std::numeric_limits<double>::infinity()};
+      int parent{-1};
+    };
+
+    Eigen::Vector3d sticky_dir = have_tracking_anchor_dir_
+                                     ? last_tracking_anchor_dir_
+                                     : Eigen::Vector3d::UnitX();
+    sticky_dir.z() = 0.0;
+    if (sticky_dir.head<2>().norm() < 1.0e-3)
+    {
+      sticky_dir = Eigen::Vector3d::UnitX();
+    }
+    sticky_dir.normalize();
+
+    Eigen::Vector3d init_seed_dir = Eigen::Vector3d::Zero();
     Eigen::Vector3d initial_target = Eigen::Vector3d::Zero();
     Eigen::Vector3d initial_target_vel = Eigen::Vector3d::Zero();
     if (cost_functional::sampleTrackingReference(reference, sample_times.front(), initial_target, initial_target_vel))
     {
-      seed_dir = start_pt - initial_target;
+      init_seed_dir = start_pt - initial_target;
     }
-    seed_dir.z() = 0.0;
-    if (seed_dir.head<2>().norm() < 0.3)
+    init_seed_dir.z() = 0.0;
+    if (init_seed_dir.head<2>().norm() < 0.3)
     {
-      seed_dir = -initial_target_vel;
-      seed_dir.z() = 0.0;
+      init_seed_dir = -initial_target_vel;
+      init_seed_dir.z() = 0.0;
     }
-    if (seed_dir.head<2>().norm() < 0.3)
+    if (init_seed_dir.head<2>().norm() < 0.3)
     {
-      seed_dir = -start_vel;
-      seed_dir.z() = 0.0;
+      init_seed_dir = -start_vel;
+      init_seed_dir.z() = 0.0;
     }
-    if (seed_dir.head<2>().norm() < 1.0e-3)
+    if (init_seed_dir.head<2>().norm() < 1.0e-3)
     {
-      seed_dir = have_tracking_anchor_dir_ ? last_tracking_anchor_dir_ : Eigen::Vector3d::UnitX();
+      init_seed_dir = sticky_dir;
     }
-    seed_dir.z() = 0.0;
-    seed_dir.normalize();
+    init_seed_dir.normalize();
 
     const double yaw_step_rad = tracking_viewpoint_yaw_step_deg_ * M_PI / 180.0;
     const int max_ring_id = std::max(4, static_cast<int>(std::ceil(M_PI / yaw_step_rad)));
@@ -1386,10 +1392,14 @@ namespace ego_planner
     const double resolution = grid_map_ ? std::max(grid_map_->getResolution(), 1.0e-3) : 0.1;
     const double probe_radius =
         std::max(tracking_viewpoint_clearance_, 2.0 * resolution);
-    Eigen::Vector3d prev_viewpoint = start_pt;
 
-    for (const double t_query : sample_times)
+    std::vector<std::vector<ViewpointCandidate>> candidate_layers;
+    candidate_layers.reserve(sample_times.size());
+
+    Eigen::Vector3d prev_target = initial_target;
+    for (std::size_t layer_idx = 0; layer_idx < sample_times.size(); ++layer_idx)
     {
+      const double t_query = sample_times[layer_idx];
       Eigen::Vector3d ref_pos = Eigen::Vector3d::Zero();
       Eigen::Vector3d ref_vel = Eigen::Vector3d::Zero();
       if (!cost_functional::sampleTrackingReference(reference, t_query, ref_pos, ref_vel))
@@ -1397,11 +1407,8 @@ namespace ego_planner
         continue;
       }
 
-      if (!viewpoint_series.empty())
-      {
-        seed_dir = viewpoint_series.back() - ref_pos;
-        seed_dir.z() = 0.0;
-      }
+      Eigen::Vector3d seed_dir = (layer_idx == 0) ? init_seed_dir : (candidate_layers.back().front().viewpoint - ref_pos);
+      seed_dir.z() = 0.0;
       if (seed_dir.head<2>().norm() < 0.3)
       {
         seed_dir = -ref_vel;
@@ -1409,19 +1416,18 @@ namespace ego_planner
       }
       if (seed_dir.head<2>().norm() < 0.3)
       {
-        seed_dir = prev_viewpoint - ref_pos;
+        seed_dir = start_pt - ref_pos;
         seed_dir.z() = 0.0;
       }
       if (seed_dir.head<2>().norm() < 1.0e-3)
       {
-        seed_dir = Eigen::Vector3d::UnitX();
+        seed_dir = sticky_dir;
       }
       seed_dir.normalize();
 
       const double seed_yaw = std::atan2(seed_dir.y(), seed_dir.x());
-      double best_score = -std::numeric_limits<double>::infinity();
-      Eigen::Vector3d best_viewpoint = Eigen::Vector3d::Zero();
-      bool found = false;
+      std::vector<ViewpointCandidate> layer_candidates;
+      layer_candidates.reserve(static_cast<std::size_t>(angle_sample_num));
 
       for (int sample_id = 0; sample_id < angle_sample_num; ++sample_id)
       {
@@ -1454,57 +1460,152 @@ namespace ego_planner
           continue;
         }
 
-        const double clearance =
-            estimateObstacleClearance(safe_candidate, probe_radius, nullptr);
-        const double radial_err = std::abs(radial_dist - desired_dist);
-        const double align =
-            std::cos(wrapAngle(std::atan2(rel.y(), rel.x()) - seed_yaw));
-        const double connect_bonus =
-            lineOfSightFree(prev_viewpoint, safe_candidate, tracking_viewpoint_connect_dist_) ? 0.4 : 0.0;
-        const double score =
-            2.0 * align +
-            0.8 * clearance +
-            connect_bonus -
-            0.6 * radial_err -
-            0.12 * (safe_candidate - prev_viewpoint).head<2>().norm();
-
-        if (!found || score > best_score)
+        bool duplicate = false;
+        for (const auto &existing : layer_candidates)
         {
-          best_score = score;
-          best_viewpoint = safe_candidate;
-          found = true;
+          if ((existing.viewpoint - safe_candidate).norm() < std::max(0.25, 1.5 * resolution))
+          {
+            duplicate = true;
+            break;
+          }
+        }
+        if (duplicate)
+        {
+          continue;
+        }
+
+        const double clearance = estimateObstacleClearance(safe_candidate, probe_radius, nullptr);
+        const double radial_err = std::abs(radial_dist - desired_dist);
+        const Eigen::Vector3d rel_dir = rel.normalized();
+        const double sticky_align = rel_dir.dot(sticky_dir);
+        const double motion_align =
+            (layer_idx == 0 || (ref_pos - prev_target).head<2>().norm() < 1.0e-3)
+                ? 0.0
+                : rel_dir.head<2>().dot((ref_pos - prev_target).head<2>().normalized());
+
+        ViewpointCandidate vp;
+        vp.viewpoint = safe_candidate;
+        vp.target = ref_pos;
+        vp.target_vel = ref_vel;
+        vp.t = t_query;
+        vp.base_score =
+            1.1 * clearance -
+            0.8 * radial_err +
+            0.55 * sticky_align +
+            0.25 * motion_align;
+        layer_candidates.push_back(vp);
+      }
+
+      if (!layer_candidates.empty())
+      {
+        std::sort(layer_candidates.begin(),
+                  layer_candidates.end(),
+                  [](const ViewpointCandidate &lhs, const ViewpointCandidate &rhs)
+                  { return lhs.base_score > rhs.base_score; });
+        if (layer_candidates.size() > 7)
+        {
+          layer_candidates.resize(7);
+        }
+        candidate_layers.push_back(layer_candidates);
+        prev_target = ref_pos;
+      }
+    }
+
+    if (candidate_layers.empty())
+    {
+      return false;
+    }
+
+    for (std::size_t layer_idx = 0; layer_idx < candidate_layers.size(); ++layer_idx)
+    {
+      auto &layer = candidate_layers[layer_idx];
+      if (layer_idx == 0)
+      {
+        for (auto &candidate : layer)
+        {
+          const double continuity =
+              -0.10 * (candidate.viewpoint - start_pt).head<2>().norm();
+          const double connect_bonus =
+              lineOfSightFree(start_pt, candidate.viewpoint, tracking_viewpoint_connect_dist_) ? 0.35 : -0.25;
+          candidate.dp_score = candidate.base_score + continuity + connect_bonus;
+          candidate.parent = -1;
+        }
+        continue;
+      }
+
+      const auto &prev_layer = candidate_layers[layer_idx - 1];
+      for (auto &candidate : layer)
+      {
+        for (int prev_idx = 0; prev_idx < static_cast<int>(prev_layer.size()); ++prev_idx)
+        {
+          const auto &prev_candidate = prev_layer[static_cast<std::size_t>(prev_idx)];
+          const Eigen::Vector3d prev_rel = prev_candidate.viewpoint - prev_candidate.target;
+          const Eigen::Vector3d curr_rel = candidate.viewpoint - candidate.target;
+          const double rel_align =
+              (prev_rel.head<2>().norm() < 1.0e-3 || curr_rel.head<2>().norm() < 1.0e-3)
+                  ? 0.0
+                  : prev_rel.head<2>().normalized().dot(curr_rel.head<2>().normalized());
+          const double continuity =
+              -0.12 * (candidate.viewpoint - prev_candidate.viewpoint).head<2>().norm();
+          const double connect_bonus =
+              lineOfSightFree(prev_candidate.viewpoint, candidate.viewpoint, tracking_viewpoint_connect_dist_) ? 0.45 : -0.35;
+          const double transition_score =
+              prev_candidate.dp_score + candidate.base_score + continuity + connect_bonus + 0.7 * rel_align;
+          if (transition_score > candidate.dp_score)
+          {
+            candidate.dp_score = transition_score;
+            candidate.parent = prev_idx;
+          }
         }
       }
+    }
 
-      if (!found)
+    int best_layer_idx = static_cast<int>(candidate_layers.size()) - 1;
+    int best_candidate_idx = -1;
+    double best_score = -std::numeric_limits<double>::infinity();
+    for (int i = 0; i < static_cast<int>(candidate_layers.back().size()); ++i)
+    {
+      const double score = candidate_layers.back()[static_cast<std::size_t>(i)].dp_score;
+      if (score > best_score)
       {
-        continue;
+        best_score = score;
+        best_candidate_idx = i;
       }
+    }
+    if (best_candidate_idx < 0)
+    {
+      return false;
+    }
 
+    std::vector<ViewpointCandidate> best_sequence;
+    while (best_layer_idx >= 0 && best_candidate_idx >= 0)
+    {
+      const auto &candidate = candidate_layers[static_cast<std::size_t>(best_layer_idx)][static_cast<std::size_t>(best_candidate_idx)];
+      best_sequence.push_back(candidate);
+      best_candidate_idx = candidate.parent;
+      --best_layer_idx;
+    }
+    std::reverse(best_sequence.begin(), best_sequence.end());
+
+    for (std::size_t i = 0; i < best_sequence.size(); ++i)
+    {
+      const auto &candidate = best_sequence[i];
       if (!viewpoint_series.empty() &&
-          (best_viewpoint - viewpoint_series.back()).norm() < std::max(0.3, 2.0 * resolution) &&
-          (t_query + 1.0e-3 < horizon_end))
+          (candidate.viewpoint - viewpoint_series.back()).norm() < std::max(0.3, 2.0 * resolution) &&
+          i + 1 < best_sequence.size())
       {
         continue;
       }
 
-      target_samples.push_back(ref_pos);
-      viewpoint_series.push_back(best_viewpoint);
+      target_samples.push_back(candidate.target);
+      viewpoint_series.push_back(candidate.viewpoint);
       if (viewpoint_target_vels != nullptr)
       {
-        viewpoint_target_vels->push_back(ref_vel);
+        viewpoint_target_vels->push_back(candidate.target_vel);
       }
       if (viewpoint_times != nullptr)
       {
-        viewpoint_times->push_back(t_query);
-      }
-
-      prev_viewpoint = best_viewpoint;
-      seed_dir = best_viewpoint - ref_pos;
-      seed_dir.z() = 0.0;
-      if (seed_dir.head<2>().norm() > 1.0e-3)
-      {
-        seed_dir.normalize();
+        viewpoint_times->push_back(candidate.t);
       }
     }
 

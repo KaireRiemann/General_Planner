@@ -39,9 +39,34 @@ namespace ego_planner
     double end_time;   // world time
     Eigen::Vector3d start_pos;
     double des_clearance;
-    std::vector<double> yaw_t;
+    std::vector<double> yaw_time;
     std::vector<double> yaw_ref;
     bool has_tracking_yaw{false};
+
+    double sampleYaw(double t_local) const
+    {
+      if (!has_tracking_yaw || yaw_time.empty() || yaw_ref.empty() || yaw_time.size() != yaw_ref.size())
+      {
+        return 0.0;
+      }
+
+      if (t_local <= yaw_time.front())
+      {
+        return yaw_ref.front();
+      }
+      if (t_local >= yaw_time.back())
+      {
+        return yaw_ref.back();
+      }
+
+      const auto upper = std::upper_bound(yaw_time.begin(), yaw_time.end(), t_local);
+      const std::size_t idx1 = static_cast<std::size_t>(std::distance(yaw_time.begin(), upper));
+      const std::size_t idx0 = idx1 - 1;
+      const double t0 = yaw_time[idx0];
+      const double t1 = yaw_time[idx1];
+      const double alpha = (t_local - t0) / std::max(1.0e-6, t1 - t0);
+      return (1.0 - alpha) * yaw_ref[idx0] + alpha * yaw_ref[idx1];
+    }
   };
 
   typedef std::vector<LocalTrajData> SwarmTrajData;
@@ -81,7 +106,7 @@ namespace ego_planner
       
       local_traj.start_time = world_time;
       local_traj.traj = trajectory;
-      local_traj.yaw_t.clear();
+      local_traj.yaw_time.clear();
       local_traj.yaw_ref.clear();
       local_traj.has_tracking_yaw = false;
     }
@@ -89,11 +114,11 @@ namespace ego_planner
     void setLocalYawRef(const std::vector<double> &t_ref,
                         const std::vector<double> &yaw_ref)
     {
-      local_traj.yaw_t = t_ref;
+      local_traj.yaw_time = t_ref;
       local_traj.yaw_ref = yaw_ref;
       local_traj.has_tracking_yaw =
-          !local_traj.yaw_t.empty() &&
-          local_traj.yaw_t.size() == local_traj.yaw_ref.size();
+          !local_traj.yaw_time.empty() &&
+          local_traj.yaw_time.size() == local_traj.yaw_ref.size();
     }
   };
 

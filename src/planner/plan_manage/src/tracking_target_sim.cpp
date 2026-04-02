@@ -6,6 +6,7 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <std_msgs/Float64.h>
 #include <visualization_msgs/Marker.h>
 
 #include <quadrotor_msgs/GoalSet.h>
@@ -42,6 +43,7 @@ namespace ego_planner
       pnh_.param("publish_goal_with_id", publish_goal_with_id_, false);
       pnh_.param("use_external_goal", use_external_goal_, true);
       pnh_.param("lock_external_goal_height", lock_external_goal_height_, true);
+      pnh_.param("reference_mode", reference_mode_, std::string("oracle_reference_mode"));
 
       pnh_.param("sim_dt", sim_dt_, 0.02);
       pnh_.param("replan_period", replan_period_, 0.5);
@@ -52,9 +54,16 @@ namespace ego_planner
       pnh_.param("goal_reach_tolerance", goal_reach_tolerance_, 0.25);
       pnh_.param("horizon_time", horizon_time_, 4.0);
       pnh_.param("horizon_dt", horizon_dt_, 0.2);
+      pnh_.param("reference_noise_std", reference_noise_std_, 0.08);
+      pnh_.param("reference_velocity_noise_std", reference_velocity_noise_std_, 0.05);
+      pnh_.param("reference_lag_sec", reference_lag_sec_, 0.20);
       pnh_.param("target_box_size", target_box_size_, 0.45);
       pnh_.param("min_init_separation", min_init_separation_, 2.5);
       pnh_.param("external_goal_min_separation", external_goal_min_separation_, 1.2);
+      pnh_.param("tracking_eval_distance_min", tracking_eval_distance_min_, 1.5);
+      pnh_.param("tracking_eval_distance_max", tracking_eval_distance_max_, 4.0);
+      pnh_.param("tracking_eval_height_tolerance", tracking_eval_height_tolerance_, 0.4);
+      pnh_.param("tracking_eval_los_clearance", tracking_eval_los_clearance_, 0.15);
 
       pnh_.param("init_offset_x", init_offset_.x(), 3.0);
       pnh_.param("init_offset_y", init_offset_.y(), 0.0);
@@ -68,6 +77,10 @@ namespace ego_planner
       odom_pub_ = nh_.advertise<nav_msgs::Odometry>(target_odom_topic_, 1);
       ref_pub_ = nh_.advertise<nav_msgs::Path>(reference_topic_, 1);
       path_pub_ = nh_.advertise<nav_msgs::Path>(target_path_topic_, 1);
+      distance_violation_pub_ = nh_.advertise<std_msgs::Float64>("/tracking/metrics/distance_violation_ratio", 1);
+      los_blocked_pub_ = nh_.advertise<std_msgs::Float64>("/tracking/metrics/los_blocked_ratio", 1);
+      yaw_alignment_pub_ = nh_.advertise<std_msgs::Float64>("/tracking/metrics/yaw_alignment_error", 1);
+      reference_available_pub_ = nh_.advertise<std_msgs::Float64>("/tracking/metrics/reference_available_ratio", 1);
       if (publish_goal_with_id_)
       {
         goal_pub_ = nh_.advertise<quadrotor_msgs::GoalSet>(goal_topic_, 1);
@@ -95,6 +108,7 @@ namespace ego_planner
       ROS_INFO("TrackingTargetSim ready. reference_topic=%s use_jps=%s",
                reference_topic_.c_str(),
                use_jps_ ? "yes" : "no");
+      ROS_INFO("TrackingTargetSim reference_mode=%s", reference_mode_.c_str());
       if (use_external_goal_)
       {
         ROS_INFO("TrackingTargetSim external-goal mode enabled, waiting goal on: %s", external_goal_topic_.c_str());
@@ -521,26 +535,177 @@ namespace ego_planner
       return samples;
     }
 
+    static double wrapAngle(double angle)
+    {
+      while (angle > M_PI)
+      {
+        angle -= 2.0 * M_PI;
+      }
+      while (angle < -M_PI)
+      {
+        angle += 2.0 * M_PI;
+      }
+      return angle;
+    }
+
+    bool lineOfSightBlocked(const Eigen::Vector3d &from,
+                            const Eigen::Vector3d &to,
+                            const double clearance) const
+    {
+      if (!grid_map_ || !mapWindowReady())
+      {
+        return false;
+      }
+
+      const Eigen::Vector3d ray = to - from;
+      const double ray_len = ray.norm();
+      if (ray_len < 1.0e-4)
+      {
+        return false;
+      }
+
+      const double res = std::max(grid_map_->getResolution(), 0.05);
+      const int sample_num = std::max(4, static_cast<int>(std::ceil(ray_len / res)));
+      for (int i = 1; i < sample_num; ++i)
+      {
+        const double alpha = static_cast<double>(i) / static_cast<double>(sample_num);
+        const Eigen::Vector3d q = (1.0 - alpha) * from + alpha * to;
+        if (grid_map_->esdfEnabled())
+        {
+          if (grid_map_->getDistance(q) < clearance)
+          {
+            return true;
+          }
+        }
+        else if (grid_map_->getInflateOccupancy(q) != 0)
+        {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    void applyReferenceMode(std::vector<Eigen::Vector3d> &future)
+    {
+      if (reference_mode_ == "oracle_reference_mode")
+      {
+        return;
+      }
+
+      if (reference_mode_ == "odom_only_mode")
+      {
+        future.clear();
+        return;
+      }
+
+      if (reference_mode_ != "noisy_reference_mode" || future.empty())
+      {
+        return;
+      }
+
+      const int lag_steps = std::max(0, static_cast<int>(std::round(reference_lag_sec_ / std::max(horizon_dt_, 0.05))));
+      std::normal_distribution<double> pos_noise(0.0, std::max(0.0, reference_noise_std_));
+      std::normal_distribution<double> vel_noise(0.0, std::max(0.0, reference_velocity_noise_std_));
+
+      const std::vector<Eigen::Vector3d> oracle = future;
+      for (std::size_t i = 0; i < future.size(); ++i)
+      {
+        const std::size_t lag_idx = (i < static_cast<std::size_t>(lag_steps)) ? 0 : (i - static_cast<std::size_t>(lag_steps));
+        future[i] = oracle[lag_idx];
+
+        Eigen::Vector3d local_vel = Eigen::Vector3d::Zero();
+        if (lag_idx + 1 < oracle.size())
+        {
+          local_vel = (oracle[lag_idx + 1] - oracle[lag_idx]) / std::max(horizon_dt_, 0.05);
+        }
+
+        future[i].x() += pos_noise(rng_);
+        future[i].y() += pos_noise(rng_);
+        future[i].z() += 0.35 * pos_noise(rng_);
+        future[i] += 0.15 * std::max(horizon_dt_, 0.05) *
+                     Eigen::Vector3d(vel_noise(rng_), vel_noise(rng_), 0.35 * vel_noise(rng_));
+      }
+    }
+
+    void updateMetrics(const bool reference_available)
+    {
+      if (!have_ego_odom_)
+      {
+        return;
+      }
+
+      metric_sample_count_ += 1.0;
+      metric_reference_available_count_ += reference_available ? 1.0 : 0.0;
+
+      const Eigen::Vector3d delta = target_pos_ - ego_pos_;
+      const double planar_dist = delta.head<2>().norm();
+      const bool distance_ok =
+          planar_dist >= tracking_eval_distance_min_ &&
+          planar_dist <= tracking_eval_distance_max_ &&
+          std::abs(delta.z()) <= tracking_eval_height_tolerance_;
+      metric_distance_violation_count_ += distance_ok ? 0.0 : 1.0;
+      metric_los_blocked_count_ += lineOfSightBlocked(ego_pos_, target_pos_, tracking_eval_los_clearance_) ? 1.0 : 0.0;
+
+      if (ego_vel_.head<2>().norm() > 0.2 && delta.head<2>().norm() > 0.2)
+      {
+        const double yaw_ego = std::atan2(ego_vel_.y(), ego_vel_.x());
+        const double yaw_target = std::atan2(delta.y(), delta.x());
+        metric_yaw_alignment_sum_ += std::abs(wrapAngle(yaw_target - yaw_ego));
+        metric_yaw_alignment_count_ += 1.0;
+      }
+    }
+
+    void publishMetrics()
+    {
+      const double inv_count = (metric_sample_count_ > 1.0e-6) ? 1.0 / metric_sample_count_ : 0.0;
+      std_msgs::Float64 msg;
+
+      msg.data = metric_distance_violation_count_ * inv_count;
+      distance_violation_pub_.publish(msg);
+
+      msg.data = metric_los_blocked_count_ * inv_count;
+      los_blocked_pub_.publish(msg);
+
+      msg.data = (metric_yaw_alignment_count_ > 1.0e-6) ? (metric_yaw_alignment_sum_ / metric_yaw_alignment_count_) : 0.0;
+      yaw_alignment_pub_.publish(msg);
+
+      msg.data = metric_reference_available_count_ * inv_count;
+      reference_available_pub_.publish(msg);
+
+      ROS_INFO_THROTTLE(1.0,
+                        "TrackingTargetSim metrics: dist_violation=%.2f los_blocked=%.2f yaw_err=%.2f ref_avail=%.2f mode=%s",
+                        metric_distance_violation_count_ * inv_count,
+                        metric_los_blocked_count_ * inv_count,
+                        (metric_yaw_alignment_count_ > 1.0e-6) ? (metric_yaw_alignment_sum_ / metric_yaw_alignment_count_) : 0.0,
+                        metric_reference_available_count_ * inv_count,
+                        reference_mode_.c_str());
+    }
+
     void publishReferenceAndPath()
     {
       const ros::Time now = ros::Time::now();
-      const auto future = sampleFutureReference();
+      auto future = sampleFutureReference();
+      applyReferenceMode(future);
+      const bool reference_available = future.size() >= 2;
 
       nav_msgs::Path ref_msg;
       ref_msg.header.stamp = now;
       ref_msg.header.frame_id = frame_id_;
-      for (std::size_t i = 0; i < future.size(); ++i)
+      if (reference_available)
       {
-        geometry_msgs::PoseStamped ps;
-        ps.header = ref_msg.header;
-        ps.header.stamp = now + ros::Duration(static_cast<double>(i) * std::max(0.05, horizon_dt_));
-        ps.pose.position.x = future[i].x();
-        ps.pose.position.y = future[i].y();
-        ps.pose.position.z = future[i].z();
-        ps.pose.orientation.w = 1.0;
-        ref_msg.poses.push_back(ps);
+        for (std::size_t i = 0; i < future.size(); ++i)
+        {
+          geometry_msgs::PoseStamped ps;
+          ps.header = ref_msg.header;
+          ps.header.stamp = now + ros::Duration(static_cast<double>(i) * std::max(0.05, horizon_dt_));
+          ps.pose.position.x = future[i].x();
+          ps.pose.position.y = future[i].y();
+          ps.pose.position.z = future[i].z();
+          ps.pose.orientation.w = 1.0;
+          ref_msg.poses.push_back(ps);
+        }
+        ref_pub_.publish(ref_msg);
       }
-      ref_pub_.publish(ref_msg);
 
       nav_msgs::Path path_msg;
       path_msg.header = ref_msg.header;
@@ -560,12 +725,15 @@ namespace ego_planner
       {
         quadrotor_msgs::GoalSet goal_msg;
         goal_msg.drone_id = static_cast<int16_t>(drone_id_);
-        const Eigen::Vector3d goal = future.back();
+        const Eigen::Vector3d goal = future.empty() ? target_pos_ : future.back();
         goal_msg.goal[0] = static_cast<float>(goal.x());
         goal_msg.goal[1] = static_cast<float>(goal.y());
         goal_msg.goal[2] = static_cast<float>(goal.z());
         goal_pub_.publish(goal_msg);
       }
+
+      updateMetrics(reference_available);
+      publishMetrics();
     }
 
     void simCallback(const ros::TimerEvent &)
@@ -653,6 +821,10 @@ namespace ego_planner
     ros::Publisher ref_pub_;
     ros::Publisher path_pub_;
     ros::Publisher goal_pub_;
+    ros::Publisher distance_violation_pub_;
+    ros::Publisher los_blocked_pub_;
+    ros::Publisher yaw_alignment_pub_;
+    ros::Publisher reference_available_pub_;
     ros::Subscriber ego_odom_sub_;
     ros::Subscriber external_goal_sub_;
     ros::Timer sim_timer_;
@@ -666,6 +838,7 @@ namespace ego_planner
     std::string target_path_topic_;
     std::string goal_topic_;
     std::string external_goal_topic_;
+    std::string reference_mode_;
 
     int drone_id_{0};
     bool use_jps_{true};
@@ -685,12 +858,25 @@ namespace ego_planner
     double goal_reach_tolerance_{0.25};
     double horizon_time_{4.0};
     double horizon_dt_{0.2};
+    double reference_noise_std_{0.08};
+    double reference_velocity_noise_std_{0.05};
+    double reference_lag_sec_{0.20};
     double target_box_size_{0.45};
     double min_init_separation_{2.5};
     double external_goal_min_separation_{1.2};
+    double tracking_eval_distance_min_{1.5};
+    double tracking_eval_distance_max_{4.0};
+    double tracking_eval_height_tolerance_{0.4};
+    double tracking_eval_los_clearance_{0.15};
     double jps_timeout_{0.08};
     int jps_jump_max_cells_{6};
     int jps_near_obs_radius_{1};
+    double metric_sample_count_{0.0};
+    double metric_distance_violation_count_{0.0};
+    double metric_los_blocked_count_{0.0};
+    double metric_reference_available_count_{0.0};
+    double metric_yaw_alignment_sum_{0.0};
+    double metric_yaw_alignment_count_{0.0};
 
     Eigen::Vector3d init_offset_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d ego_pos_{Eigen::Vector3d::Zero()};
