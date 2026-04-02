@@ -1,0 +1,26 @@
+#ifndef PLANNER_COMPILER_FEASIBLE_SET_BUILDER_HPP_
+#define PLANNER_COMPILER_FEASIBLE_SET_BUILDER_HPP_
+
+#include <core/planning_problem.hpp>
+#include <frontend/corridor_service.hpp>
+#include <frontend/visible_region_service.hpp>
+
+namespace ego_planner::compiler
+{
+
+class FeasibleSetBuilder
+{
+public:
+  bool build(const core::PlanningContext &context,
+             const core::TaskSpec &task,
+             core::PlanningProblem &problem) const;
+
+private:
+  frontend::CorridorService corridor_service_;
+  frontend::VisibleRegionService visible_region_service_;
+};
+
+} // namespace ego_planner::compiler
+
+#endif // PLANNER_COMPILER_FEASIBLE_SET_BUILDER_HPP_
+

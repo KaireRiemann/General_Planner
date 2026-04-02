@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <nav_msgs/Path.h>
 #include <sensor_msgs/Imu.h>
 #include <ros/ros.h>
@@ -22,6 +23,13 @@
 #include <traj_utils/planning_visualization.h>
 #include <traj_utils/PolyTraj.h>
 #include <CostFunctionalManager/TrackingTypes.hpp>
+#include <core/planning_context.hpp>
+#include <core/planning_solution.hpp>
+#include <tasks/task_factory.hpp>
+#include <runtime/context_builder.hpp>
+#include <runtime/task_executor.hpp>
+#include <runtime/plan_monitor.hpp>
+#include <runtime/replan_trigger.hpp>
 
 using std::vector;
 using std::string;
@@ -65,6 +73,10 @@ namespace ego_planner
     EGOPlannerManager::Ptr planner_manager_;
     PlanningVisualization::Ptr visualization_;
     traj_utils::DataDisp data_disp_;
+    std::unique_ptr<runtime::ContextBuilder> context_builder_;
+    std::unique_ptr<runtime::TaskExecutor> task_executor_;
+    std::unique_ptr<runtime::PlanMonitor> plan_monitor_;
+    std::unique_ptr<runtime::ReplanTrigger> replan_trigger_;
 
     /* parameters */
     int target_type_; // 1 mannual select, 2 hard code

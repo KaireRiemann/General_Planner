@@ -73,6 +73,10 @@ namespace ego_planner
     visualization_.reset(new PlanningVisualization(nh));
     planner_manager_.reset(new EGOPlannerManager);
     planner_manager_->initPlanModules(nh, visualization_);
+    context_builder_.reset(new runtime::ContextBuilder());
+    task_executor_.reset(new runtime::TaskExecutor(planner_manager_.get()));
+    plan_monitor_.reset(new runtime::PlanMonitor());
+    replan_trigger_.reset(new runtime::ReplanTrigger());
 
     have_trigger_ = use_tracking_task_ ? true : !flag_realworld_experiment_;
     no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
@@ -294,7 +298,8 @@ namespace ego_planner
       }
       const double now = ros::Time::now().toSec();
       const bool replan_allowed =
-          (last_replan_time_ < 0.0) || (now - last_replan_time_ > min_replan_interval_);
+          replan_trigger_ ? replan_trigger_->allowReplan(now, last_replan_time_, min_replan_interval_)
+                          : ((last_replan_time_ < 0.0) || (now - last_replan_time_ > min_replan_interval_));
 
       const bool near_goal = tracking_active ? false :
           ((final_goal_ - pos).norm() < near_goal_replan_radius_ || touch_the_goal);
@@ -605,20 +610,49 @@ namespace ego_planner
 
     const bool force_plain = shouldForcePlainReplan();
 
-    const bool plan_success = tracking_active ?
-        planner_manager_->planTrackingTask(
-            tracking_reference_,
-            start_pt_,
-            start_vel_,
-            start_acc_,
-            flag_use_poly_init,
-            flag_randomPolyTraj,
-            force_plain) :
-        planner_manager_->reboundReplan(
-            start_pt_, start_vel_, start_acc_,
-            local_target_pt_, local_target_vel_,
-            flag_use_poly_init, flag_randomPolyTraj, touch_goal_,
-            force_plain);
+    core::PlanningContext planning_context;
+    if (context_builder_)
+    {
+      planning_context = context_builder_->build(
+          planner_manager_->pp_.drone_id,
+          planner_manager_->grid_map_ != nullptr,
+          planner_manager_->corridorModeEnabled(),
+          planner_manager_->grid_map_ != nullptr && planner_manager_->grid_map_->esdfEnabled(),
+          odom_pos_,
+          odom_vel_,
+          Eigen::Vector3d::Zero(),
+          final_goal_,
+          local_target_pt_,
+          local_target_vel_,
+          &planner_manager_->traj_.local_traj);
+    }
+
+    // FSM only manages state transitions and runtime conditions.
+    // Task semantics are created by TaskFactory, then solved by TaskExecutor.
+    core::TaskSpec task_spec = tracking_active
+                                   ? tasks::TaskFactory::makeTrackingTask(
+                                         tracking_reference_,
+                                         start_pt_,
+                                         start_vel_,
+                                         start_acc_,
+                                         flag_use_poly_init,
+                                         flag_randomPolyTraj,
+                                         force_plain)
+                                   : tasks::TaskFactory::makeStateToStateTask(
+                                         start_pt_,
+                                         start_vel_,
+                                         start_acc_,
+                                         local_target_pt_,
+                                         local_target_vel_,
+                                         touch_goal_,
+                                         flag_use_poly_init,
+                                         flag_randomPolyTraj,
+                                         force_plain);
+
+    core::PlanningSolution planning_solution;
+    const bool plan_success = task_executor_
+                                  ? task_executor_->execute(planning_context, task_spec, planning_solution)
+                                  : planner_manager_->solveTask(planning_context, task_spec, planning_solution);
 
     if (plan_success)
     {
@@ -1012,6 +1046,10 @@ namespace ego_planner
   {
     refreshTrackingReference();
     if (!use_tracking_task_ || !have_tracking_ref_ || !tracking_reference_.valid() || info == nullptr)
+    {
+      return false;
+    }
+    if (plan_monitor_ && !plan_monitor_->hasValidLocalTraj(*info))
     {
       return false;
     }

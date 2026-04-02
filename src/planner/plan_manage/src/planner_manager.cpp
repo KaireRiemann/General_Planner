@@ -12,6 +12,8 @@
 #include <sstream>
 #include <set>
 
+#include <core/planning_problem.hpp>
+
 namespace ego_planner
 {
   namespace
@@ -256,6 +258,106 @@ namespace ego_planner
   EGOPlannerManager::EGOPlannerManager() {}
   EGOPlannerManager::~EGOPlannerManager() { std::cout << "des manager" << std::endl; }
 
+  bool EGOPlannerManager::solveTask(const core::PlanningContext &context,
+                                    const core::TaskSpec &task,
+                                    core::PlanningSolution &solution)
+  {
+    if (!problem_compiler_)
+    {
+      problem_compiler_.reset(new compiler::ProblemCompiler());
+      problem_compiler_->setProblemAdapter(this);
+    }
+    if (!backend_solver_)
+    {
+      backend_solver_.reset(new optimization::CompatibilityBackendSolver());
+    }
+
+    core::PlanningProblem problem;
+    if (!problem_compiler_->compile(context, task, problem))
+    {
+      solution.success = false;
+      solution.message = "problem compiler rejected task";
+      return false;
+    }
+
+    const ros::Time solve_start = ros::Time::now();
+    const bool ok = backend_solver_->solve(problem, solution);
+    solution.solve_time_ms = (ros::Time::now() - solve_start).toSec() * 1.0e3;
+    return ok;
+  }
+
+  bool EGOPlannerManager::solveCompatibility(const core::PlanningProblem &problem,
+                                             core::PlanningSolution &solution)
+  {
+    const core::TaskSpec &task = problem.task;
+    bool success = false;
+
+    switch (task.type)
+    {
+    case core::TaskType::TRACKING:
+      success = planTrackingTask(task.tracking_reference,
+                                 task.start_pt,
+                                 task.start_vel,
+                                 task.start_acc,
+                                 task.flag_poly_init,
+                                 task.flag_random_poly_traj,
+                                 task.force_plain);
+      break;
+
+    case core::TaskType::PERCHING:
+      success = reboundReplan(task.start_pt,
+                              task.start_vel,
+                              task.start_acc,
+                              task.goal_pt,
+                              task.goal_vel,
+                              task.flag_poly_init,
+                              task.flag_random_poly_traj,
+                              true,
+                              task.force_plain,
+                              nullptr,
+                              task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
+                              nullptr);
+      break;
+
+    case core::TaskType::STATE_TO_STATE:
+    default:
+      success = reboundReplan(task.start_pt,
+                              task.start_vel,
+                              task.start_acc,
+                              task.goal_pt,
+                              task.goal_vel,
+                              task.flag_poly_init,
+                              task.flag_random_poly_traj,
+                              task.touch_goal,
+                              task.force_plain,
+                              nullptr,
+                              task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
+                              nullptr);
+      break;
+    }
+
+    solution.success = success;
+    solution.used_legacy_adapter = true;
+    solution.touch_goal = task.touch_goal;
+    solution.message = success ? "legacy compatibility solve success" : "legacy compatibility solve failed";
+    if (success)
+    {
+      solution.trajectory = traj_.local_traj.traj;
+      if (traj_.local_traj.has_yaw_ref)
+      {
+        solution.has_yaw_ref = true;
+        solution.yaw_time = traj_.local_traj.yaw_time;
+        solution.yaw_ref = traj_.local_traj.yaw_ref;
+      }
+      if (have_active_tracking_semantic_guide_)
+      {
+        solution.has_tracking_semantic_guide = true;
+        solution.tracking_semantic_guide = active_tracking_semantic_guide_;
+      }
+    }
+    return success;
+  }
+
   void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis)
   {
     nh.param("manager/max_vel", pp_.max_vel_, -1.0);
@@ -338,6 +440,16 @@ namespace ego_planner
 
     ploy_traj_opt_->setSwarmTrajs(&traj_.swarm_traj);
     ploy_traj_opt_->setDroneId(pp_.drone_id);
+
+    if (!problem_compiler_)
+    {
+      problem_compiler_.reset(new compiler::ProblemCompiler());
+      problem_compiler_->setProblemAdapter(this);
+    }
+    if (!backend_solver_)
+    {
+      backend_solver_.reset(new optimization::CompatibilityBackendSolver());
+    }
   }
 
   bool EGOPlannerManager::mapWindowReady() const

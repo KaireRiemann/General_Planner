@@ -34,6 +34,7 @@ catkin_package(
 
 include_directories(
   include
+  ${CMAKE_CURRENT_SOURCE_DIR}/..
   SYSTEM
   ${catkin_INCLUDE_DIRS} ${PROJECT_SOURCE_DIR}/include
   ${EIGEN3_INCLUDE_DIR}
@@ -45,6 +46,23 @@ add_executable(ego_planner_node
   src/ego_planner_node.cpp 
   src/ego_replan_fsm.cpp
   src/planner_manager.cpp
+  ../tasks/task_factory.cpp
+  ../tasks/state_to_state_task.cpp
+  ../tasks/tracking_task.cpp
+  ../tasks/perching_task.cpp
+  ../compiler/problem_compiler.cpp
+  ../compiler/reference_builder.cpp
+  ../compiler/feasible_set_builder.cpp
+  ../compiler/seed_builder.cpp
+  ../frontend/guide_path_service.cpp
+  ../frontend/corridor_service.cpp
+  ../frontend/visible_region_service.cpp
+  ../frontend/terminal_manifold_service.cpp
+  ../frontend/warm_start_service.cpp
+  ../runtime/task_executor.cpp
+  ../runtime/plan_monitor.cpp
+  ../runtime/replan_trigger.cpp
+  ../runtime/context_builder.cpp
   )
 target_link_libraries(ego_planner_node 
   ${catkin_LIBRARIES}

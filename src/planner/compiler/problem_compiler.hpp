@@ -1,0 +1,34 @@
+#ifndef PLANNER_COMPILER_PROBLEM_COMPILER_HPP_
+#define PLANNER_COMPILER_PROBLEM_COMPILER_HPP_
+
+#include <compiler/feasible_set_builder.hpp>
+#include <compiler/reference_builder.hpp>
+#include <compiler/seed_builder.hpp>
+#include <optimization/problem_adapter.hpp>
+
+namespace ego_planner::compiler
+{
+
+class ProblemCompiler
+{
+public:
+  void setProblemAdapter(optimization::ProblemAdapter *adapter)
+  {
+    adapter_ = adapter;
+  }
+
+  bool compile(const core::PlanningContext &context,
+               const core::TaskSpec &task,
+               core::PlanningProblem &problem) const;
+
+private:
+  optimization::ProblemAdapter *adapter_{nullptr};
+  ReferenceBuilder reference_builder_;
+  FeasibleSetBuilder feasible_set_builder_;
+  SeedBuilder seed_builder_;
+};
+
+} // namespace ego_planner::compiler
+
+#endif // PLANNER_COMPILER_PROBLEM_COMPILER_HPP_
+

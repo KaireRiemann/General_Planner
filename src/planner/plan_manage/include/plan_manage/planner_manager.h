@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <ros/ros.h>
 #include <thread>
+#include <memory>
 #include <optimizer/poly_traj_optimizer.h>
 #include <traj_utils/plan_container.hpp>
 #include <traj_utils/planning_visualization.h>
@@ -15,11 +16,17 @@
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
+#include <core/planning_context.hpp>
+#include <core/task_spec.hpp>
+#include <core/planning_solution.hpp>
+#include <compiler/problem_compiler.hpp>
+#include <optimization/backend_solver.hpp>
+#include <optimization/problem_adapter.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
 {
-  class EGOPlannerManager
+  class EGOPlannerManager : public optimization::ProblemAdapter
   {
     // SECTION stable
   public:
@@ -32,6 +39,16 @@ namespace ego_planner
     void initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis = NULL);
 
     bool corridorModeEnabled();
+
+    // This system is organized as:
+    // TaskSpec + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.
+    // Task-specific semantics belong in TaskSpec and ProblemCompiler, not in FSM or solver.
+    bool solveTask(const core::PlanningContext &context,
+                   const core::TaskSpec &task,
+                   core::PlanningSolution &solution);
+
+    bool solveCompatibility(const core::PlanningProblem &problem,
+                            core::PlanningSolution &solution) override;
 
     enum CorridorFailureType
     {
@@ -51,7 +68,8 @@ namespace ego_planner
         const bool flag_randomPolyTraj, const double &ts,
         MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
         MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState);
-        
+
+    // Legacy compatibility path. New callers should prefer solveTask(...).
     bool reboundReplan(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
@@ -62,6 +80,7 @@ namespace ego_planner
         const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr,
         const cost_functional::TrackingSemanticGuide *tracking_semantic_guide = nullptr);
 
+    // Legacy compatibility path. New callers should prefer solveTask(...).
     bool planTrackingTask(
         const cost_functional::TrackingReference &reference,
         const Eigen::Vector3d &start_pt,
@@ -240,6 +259,9 @@ namespace ego_planner
     mutable cost_functional::TrackingSemanticGuide active_tracking_semantic_guide_;
     mutable spatial_map::PolyhedraH active_tracking_corridor_;
     mutable bool have_active_tracking_semantic_guide_{false};
+
+    std::unique_ptr<compiler::ProblemCompiler> problem_compiler_;
+    std::unique_ptr<optimization::BackendSolver> backend_solver_;
 
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};
