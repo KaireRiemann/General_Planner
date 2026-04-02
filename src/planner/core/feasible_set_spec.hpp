@@ -2,6 +2,7 @@
 #define PLANNER_CORE_FEASIBLE_SET_SPEC_HPP_
 
 #include <Eigen/Core>
+#include <Eigen/Dense>
 
 #include <string>
 #include <vector>
@@ -26,6 +27,9 @@ struct FeasibleSetSpec
   std::string label;
 
   spatial_map::PolyhedraH corridor;
+  Eigen::VectorXi corridor_piece_idx;
+  std::vector<Eigen::Vector3d> corridor_seed_path;
+  std::vector<double> corridor_seed_times;
   std::vector<cost_functional::VisibleFanRegion> visible_regions;
 
   Eigen::VectorXd manifold_params;
@@ -35,4 +39,3 @@ struct FeasibleSetSpec
 } // namespace ego_planner::core
 
 #endif // PLANNER_CORE_FEASIBLE_SET_SPEC_HPP_
-

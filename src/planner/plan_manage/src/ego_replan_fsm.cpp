@@ -618,12 +618,21 @@ namespace ego_planner
           planner_manager_->grid_map_ != nullptr,
           planner_manager_->corridorModeEnabled(),
           planner_manager_->grid_map_ != nullptr && planner_manager_->grid_map_->esdfEnabled(),
+          planner_manager_->grid_map_,
+          planner_manager_->getJpsAstar(),
           odom_pos_,
           odom_vel_,
           Eigen::Vector3d::Zero(),
           final_goal_,
           local_target_pt_,
           local_target_vel_,
+          planner_manager_->pp_.max_vel_,
+          planner_manager_->pp_.max_acc_,
+          planner_manager_->pp_.polyTraj_piece_length,
+          planner_manager_->getGuideMinClearance(),
+          planner_manager_->getSfcProgress(),
+          planner_manager_->getSfcRange(),
+          planner_manager_->getSfcCorridorMargin(),
           &planner_manager_->traj_.local_traj);
     }
 

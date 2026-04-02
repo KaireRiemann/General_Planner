@@ -1,20 +1,99 @@
 #include <compiler/seed_builder.hpp>
 
+#include <algorithm>
+#include <traj_utils/minco_types.hpp>
+
 namespace ego_planner::compiler
 {
+
+bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
+                                     const core::PlanningProblem &problem,
+                                     core::SeedSpec &seed) const
+{
+  if (problem.references.guide_path.size() < 2)
+  {
+    return false;
+  }
+
+  seed = core::SeedSpec{};
+  seed.valid = true;
+  seed.anchor_points = problem.references.guide_path;
+  seed.kind = core::SeedSpec::Kind::GUIDE_PATH;
+
+  const int piece_num = static_cast<int>(seed.anchor_points.size()) - 1;
+  seed.durations.resize(piece_num);
+  for (int i = 0; i < piece_num; ++i)
+  {
+    const double seg_len =
+        (seed.anchor_points[static_cast<std::size_t>(i + 1)] -
+         seed.anchor_points[static_cast<std::size_t>(i)]).norm();
+    seed.durations(i) = std::max(seg_len / std::max(0.1, context.max_vel), 0.2);
+  }
+
+  if (problem.references.guide_times.size() == seed.anchor_points.size())
+  {
+    for (int i = 0; i < piece_num; ++i)
+    {
+      const double dt = std::max(
+          0.05,
+          problem.references.guide_times[static_cast<std::size_t>(i + 1)] -
+              problem.references.guide_times[static_cast<std::size_t>(i)]);
+      seed.durations(i) = 0.5 * seed.durations(i) + 0.5 * dt;
+    }
+  }
+
+  const bool has_corridor = std::any_of(problem.feasible_sets.begin(),
+                                        problem.feasible_sets.end(),
+                                        [](const core::FeasibleSetSpec &set)
+                                        {
+                                          return set.enabled &&
+                                                 set.type == core::FeasibleSetType::CORRIDOR_POLYTOPE &&
+                                                 !set.corridor.empty();
+                                        });
+  if (has_corridor)
+  {
+    seed.kind = core::SeedSpec::Kind::CORRIDOR_AWARE;
+    seed.corridor_aware = true;
+  }
+
+  return seed.valid;
+}
 
 bool SeedBuilder::build(const core::PlanningContext &context,
                         const core::TaskSpec &task,
                         core::PlanningProblem &problem) const
 {
-  (void)task;
-  core::WarmStartCache warm_start;
-  if (warm_start_service_.fetch(context, warm_start))
+  problem.seed = core::SeedSpec{};
+
+  core::SeedSpec guide_seed;
+  if (buildSeedFromGuide(context, problem, guide_seed))
   {
-    problem.context.warm_start = warm_start;
+    problem.seed = guide_seed;
   }
-  return true;
+
+  if (context.allow_warm_start)
+  {
+    core::WarmStartCache warm_start;
+    if (warm_start_service_.fetch(context, warm_start))
+    {
+      problem.context.warm_start = warm_start;
+      if (problem.seed.valid && warm_start.durations.size() == problem.seed.durations.size())
+      {
+        problem.seed.kind = core::SeedSpec::Kind::WARM_START;
+        problem.seed.durations = 0.65 * warm_start.durations.cwiseMax(0.03) +
+                                 0.35 * problem.seed.durations.cwiseMax(0.03);
+      }
+    }
+  }
+
+  problem.variable_layout.piece_num =
+      problem.seed.valid ? static_cast<int>(problem.seed.anchor_points.size()) - 1 : 0;
+  problem.variable_layout.inner_point_num =
+      std::max(0, problem.variable_layout.piece_num - 1);
+  problem.variable_layout.boundary_derivative_num = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
+
+  (void)task;
+  return problem.seed.valid || task.type != core::TaskType::STATE_TO_STATE;
 }
 
 } // namespace ego_planner::compiler
-

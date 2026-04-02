@@ -15,10 +15,13 @@ public:
              core::PlanningProblem &problem) const;
 
 private:
+  bool buildSeedFromGuide(const core::PlanningContext &context,
+                          const core::PlanningProblem &problem,
+                          core::SeedSpec &seed) const;
+
   frontend::WarmStartService warm_start_service_;
 };
 
 } // namespace ego_planner::compiler
 
 #endif // PLANNER_COMPILER_SEED_BUILDER_HPP_
-

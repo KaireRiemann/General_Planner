@@ -289,57 +289,70 @@ namespace ego_planner
   bool EGOPlannerManager::solveCompatibility(const core::PlanningProblem &problem,
                                              core::PlanningSolution &solution)
   {
-    const core::TaskSpec &task = problem.task;
-    bool success = false;
-
-    switch (task.type)
+    switch (problem.task.type)
     {
-    case core::TaskType::TRACKING:
-      success = planTrackingTask(task.tracking_reference,
-                                 task.start_pt,
-                                 task.start_vel,
-                                 task.start_acc,
-                                 task.flag_poly_init,
-                                 task.flag_random_poly_traj,
-                                 task.force_plain);
-      break;
-
-    case core::TaskType::PERCHING:
-      success = reboundReplan(task.start_pt,
-                              task.start_vel,
-                              task.start_acc,
-                              task.goal_pt,
-                              task.goal_vel,
-                              task.flag_poly_init,
-                              task.flag_random_poly_traj,
-                              true,
-                              task.force_plain,
-                              nullptr,
-                              task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
-                              nullptr);
-      break;
-
     case core::TaskType::STATE_TO_STATE:
+      return solveStateToStateLegacy(problem.task, solution);
+    case core::TaskType::TRACKING:
+      return solveTrackingLegacyTask(problem.task, solution);
+    case core::TaskType::PERCHING:
+      return solvePerchingLegacyTask(problem.task, solution);
+    case core::TaskType::UNKNOWN:
     default:
-      success = reboundReplan(task.start_pt,
-                              task.start_vel,
-                              task.start_acc,
-                              task.goal_pt,
-                              task.goal_vel,
-                              task.flag_poly_init,
-                              task.flag_random_poly_traj,
-                              task.touch_goal,
-                              task.force_plain,
-                              nullptr,
-                              task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
-                              nullptr);
-      break;
+      solution.success = false;
+      solution.used_legacy_adapter = true;
+      solution.message = "legacy compatibility rejected unknown task type";
+      return false;
     }
+  }
+
+  bool EGOPlannerManager::solveStateToStateLegacy(const core::TaskSpec &task,
+                                                  core::PlanningSolution &solution)
+  {
+    const bool success = reboundReplan(task.start_pt,
+                                       task.start_vel,
+                                       task.start_acc,
+                                       task.goal_pt,
+                                       task.goal_vel,
+                                       task.flag_poly_init,
+                                       task.flag_random_poly_traj,
+                                       task.touch_goal,
+                                       task.force_plain,
+                                       nullptr,
+                                       task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
+                                       nullptr);
 
     solution.success = success;
     solution.used_legacy_adapter = true;
     solution.touch_goal = task.touch_goal;
-    solution.message = success ? "legacy compatibility solve success" : "legacy compatibility solve failed";
+    solution.message = success ? "legacy state-to-state solve success" : "legacy state-to-state solve failed";
+    if (success)
+    {
+      solution.trajectory = traj_.local_traj.traj;
+      if (traj_.local_traj.has_yaw_ref)
+      {
+        solution.has_yaw_ref = true;
+        solution.yaw_time = traj_.local_traj.yaw_time;
+        solution.yaw_ref = traj_.local_traj.yaw_ref;
+      }
+    }
+    return success;
+  }
+
+  bool EGOPlannerManager::solveTrackingLegacyTask(const core::TaskSpec &task,
+                                                  core::PlanningSolution &solution)
+  {
+    const bool success = planTrackingTask(task.tracking_reference,
+                                          task.start_pt,
+                                          task.start_vel,
+                                          task.start_acc,
+                                          task.flag_poly_init,
+                                          task.flag_random_poly_traj,
+                                          task.force_plain);
+    solution.success = success;
+    solution.used_legacy_adapter = true;
+    solution.touch_goal = false;
+    solution.message = success ? "legacy tracking solve success" : "legacy tracking solve failed";
     if (success)
     {
       solution.trajectory = traj_.local_traj.traj;
@@ -356,6 +369,212 @@ namespace ego_planner
       }
     }
     return success;
+  }
+
+  bool EGOPlannerManager::solvePerchingLegacyTask(const core::TaskSpec &task,
+                                                  core::PlanningSolution &solution)
+  {
+    const bool success = reboundReplan(task.start_pt,
+                                       task.start_vel,
+                                       task.start_acc,
+                                       task.goal_pt,
+                                       task.goal_vel,
+                                       task.flag_poly_init,
+                                       task.flag_random_poly_traj,
+                                       true,
+                                       task.force_plain,
+                                       nullptr,
+                                       task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
+                                       nullptr);
+    solution.success = success;
+    solution.used_legacy_adapter = true;
+    solution.touch_goal = true;
+    solution.message = success ? "legacy perching solve success" : "legacy perching solve failed";
+    if (success)
+    {
+      solution.trajectory = traj_.local_traj.traj;
+    }
+    return success;
+  }
+
+  bool EGOPlannerManager::solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
+                                                           core::PlanningSolution &solution)
+  {
+    if (!enable_compiled_state2state_)
+    {
+      return solveStateToStateLegacy(problem.task, solution);
+    }
+
+    if (problem.representation != core::RepresentationKind::MINCO ||
+        !problem.start_boundary.valid ||
+        !problem.terminal_boundary.valid)
+    {
+      return solveStateToStateLegacy(problem.task, solution);
+    }
+
+    const core::TaskSpec &task = problem.task;
+    const Eigen::Vector3d start_pt = problem.start_boundary.position;
+    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
+    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
+    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
+    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+
+    std::vector<Eigen::Vector3d> guide_path = problem.references.guide_path;
+    if (guide_path.size() < 2)
+    {
+      guide_path = {start_pt, goal_pt};
+    }
+    guide_path.front() = start_pt;
+    guide_path.back() = goal_pt;
+
+    MINCOBoundaryState3D head_state = makeBoundaryState(start_pt, start_vel, start_acc);
+    MINCOBoundaryState3D tail_state = makeBoundaryState(goal_pt, goal_vel, Eigen::Vector3d::Zero());
+    Eigen::MatrixXd inner_pts;
+    Eigen::VectorXd durations;
+    MINCOTraj3D init_traj;
+
+    bool init_ok = false;
+    if (problem.seed.valid && problem.seed.anchor_points.size() >= 2)
+    {
+      std::vector<Eigen::Vector3d> anchors = problem.seed.anchor_points;
+      anchors.front() = start_pt;
+      anchors.back() = goal_pt;
+      init_ok = assembleInitialGuessFromAnchors(anchors, inner_pts, durations, nullptr);
+      if (init_ok &&
+          problem.seed.durations.size() == durations.size() &&
+          problem.seed.durations.allFinite())
+      {
+        durations = problem.seed.durations.cwiseMax(0.03);
+      }
+      if (init_ok)
+      {
+        init_ok = init_traj.generate(inner_pts, head_state, tail_state, durations);
+      }
+    }
+
+    if (!init_ok)
+    {
+      init_ok = buildInitStateFromGuidePath(start_pt,
+                                            start_vel,
+                                            start_acc,
+                                            goal_pt,
+                                            goal_vel,
+                                            guide_path,
+                                            init_traj,
+                                            inner_pts,
+                                            durations,
+                                            head_state,
+                                            tail_state);
+    }
+    if (!init_ok)
+    {
+      ROS_WARN("Compiled state-to-state solve: init generation failed, fallback to legacy.");
+      return solveStateToStateLegacy(task, solution);
+    }
+
+    const bool use_corridor = problem.context.use_corridor && !task.force_plain;
+    const bool use_esdf = problem.context.use_esdf && !use_corridor && !task.force_plain;
+    double final_cost = std::numeric_limits<double>::infinity();
+    bool opt_success = false;
+    ploy_traj_opt_->setIfTouchGoal(task.touch_goal);
+
+    if (use_corridor)
+    {
+      spatial_map::PolyhedraH corridor_hpolys;
+      Eigen::VectorXi corridor_piece_idx;
+      for (const auto &set : problem.feasible_sets)
+      {
+        if (set.enabled &&
+            set.type == core::FeasibleSetType::CORRIDOR_POLYTOPE &&
+            !set.corridor.empty())
+        {
+          corridor_hpolys = set.corridor;
+          corridor_piece_idx = set.corridor_piece_idx;
+          break;
+        }
+      }
+      if (corridor_hpolys.empty())
+      {
+        if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
+        {
+          ROS_WARN("Compiled state-to-state solve: corridor missing, fallback to legacy.");
+          return solveStateToStateLegacy(task, solution);
+        }
+      }
+
+      const Eigen::VectorXi *piece_idx_ptr =
+          (corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()) &&
+           corridor_piece_idx.sum() == durations.size())
+              ? &corridor_piece_idx
+              : nullptr;
+      opt_success = ploy_traj_opt_->optimizeTrajectory(head_state,
+                                                       tail_state,
+                                                       inner_pts,
+                                                       durations,
+                                                       corridor_hpolys,
+                                                       piece_idx_ptr,
+                                                       final_cost);
+    }
+    else if (use_esdf)
+    {
+      opt_success = ploy_traj_opt_->optimizeTrajectoryWithDistanceField(head_state,
+                                                                        tail_state,
+                                                                        inner_pts,
+                                                                        durations,
+                                                                        final_cost);
+    }
+    else
+    {
+      opt_success = ploy_traj_opt_->optimizeTrajectory(head_state,
+                                                       tail_state,
+                                                       inner_pts,
+                                                       durations,
+                                                       final_cost);
+    }
+
+    if (!opt_success)
+    {
+      ROS_WARN("Compiled state-to-state solve: optimizer failed, fallback to legacy.");
+      return solveStateToStateLegacy(task, solution);
+    }
+
+    const MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
+    if (!setLocalTrajFromOpt(opt_traj, task.touch_goal))
+    {
+      ROS_WARN("Compiled state-to-state solve: failed to set local traj, fallback to legacy.");
+      return solveStateToStateLegacy(task, solution);
+    }
+
+    solution.success = true;
+    solution.used_legacy_adapter = false;
+    solution.touch_goal = task.touch_goal;
+    solution.message = "compiled state-to-state solve success";
+    solution.trajectory = traj_.local_traj.traj;
+    if (traj_.local_traj.has_yaw_ref)
+    {
+      solution.has_yaw_ref = true;
+      solution.yaw_time = traj_.local_traj.yaw_time;
+      solution.yaw_ref = traj_.local_traj.yaw_ref;
+    }
+    return true;
+  }
+
+  bool EGOPlannerManager::solveStateToStateCompiled(const core::PlanningProblem &problem,
+                                                    core::PlanningSolution &solution)
+  {
+    return solveStateToStateCompiledProblem(problem, solution);
+  }
+
+  bool EGOPlannerManager::solveTrackingLegacy(const core::PlanningProblem &problem,
+                                              core::PlanningSolution &solution)
+  {
+    return solveTrackingLegacyTask(problem.task, solution);
+  }
+
+  bool EGOPlannerManager::solvePerchingLegacy(const core::PlanningProblem &problem,
+                                              core::PlanningSolution &solution)
+  {
+    return solvePerchingLegacyTask(problem.task, solution);
   }
 
   void EGOPlannerManager::initPlanModules(ros::NodeHandle &nh, PlanningVisualization::Ptr vis)
@@ -394,6 +613,7 @@ namespace ego_planner
     nh.param("manager/tracking_time_align_alpha", tracking_time_align_alpha_, 0.55);
     nh.param("manager/tracking_visible_yaw_half_span_deg", tracking_visible_yaw_half_span_deg_, 35.0);
     nh.param("manager/tracking_visible_z_half_span", tracking_visible_z_half_span_, 0.50);
+    nh.param("manager/enable_compiled_state2state", enable_compiled_state2state_, false);
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_anchor_future_time_ = std::max(0.0, tracking_anchor_future_time_);

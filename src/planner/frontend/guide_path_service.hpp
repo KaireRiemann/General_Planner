@@ -5,6 +5,9 @@
 
 #include <vector>
 
+#include <core/planning_context.hpp>
+#include <core/task_spec.hpp>
+
 namespace ego_planner::frontend
 {
 
@@ -22,11 +25,19 @@ struct GuidePathArtifact
 class GuidePathService
 {
 public:
+  bool buildStateToStateGuide(const core::PlanningContext &context,
+                              const core::TaskSpec &task,
+                              GuidePathArtifact &artifact) const;
+
   bool buildFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
                           GuidePathArtifact &artifact) const;
+
+private:
+  bool sanitizePoint(const core::PlanningContext &context,
+                     const Eigen::Vector3d &raw,
+                     Eigen::Vector3d &safe) const;
 };
 
 } // namespace ego_planner::frontend
 
 #endif // PLANNER_FRONTEND_GUIDE_PATH_SERVICE_HPP_
-

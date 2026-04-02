@@ -14,16 +14,24 @@ public:
                               bool map_ready,
                               bool use_corridor,
                               bool use_esdf,
+                              const GridMap::Ptr &grid_map,
+                              JPSAStar *jps_astar,
                               const Eigen::Vector3d &odom_pos,
                               const Eigen::Vector3d &odom_vel,
                               const Eigen::Vector3d &odom_acc,
                               const Eigen::Vector3d &global_goal,
                               const Eigen::Vector3d &local_target,
                               const Eigen::Vector3d &local_target_vel,
+                              double max_vel,
+                              double max_acc,
+                              double poly_piece_length,
+                              double guide_min_clearance,
+                              double sfc_progress,
+                              double sfc_range,
+                              double sfc_corridor_margin,
                               const LocalTrajData *local_traj) const;
 };
 
 } // namespace ego_planner::runtime
 
 #endif // PLANNER_RUNTIME_CONTEXT_BUILDER_HPP_
-

@@ -49,6 +49,12 @@ namespace ego_planner
 
     bool solveCompatibility(const core::PlanningProblem &problem,
                             core::PlanningSolution &solution) override;
+    bool solveStateToStateCompiled(const core::PlanningProblem &problem,
+                                   core::PlanningSolution &solution) override;
+    bool solveTrackingLegacy(const core::PlanningProblem &problem,
+                             core::PlanningSolution &solution) override;
+    bool solvePerchingLegacy(const core::PlanningProblem &problem,
+                             core::PlanningSolution &solution) override;
 
     enum CorridorFailureType
     {
@@ -126,12 +132,26 @@ namespace ego_planner
     inline int getCpsNumPrePiece(void) { return ploy_traj_opt_->get_cps_num_prePiece_(); }
     inline CorridorFailureType getLastCorridorFailureType(void) const { return last_corridor_failure_type_; }
     inline const std::string &getLastCorridorFailureTag(void) const { return last_corridor_failure_tag_; }
+    inline JPSAStar *getJpsAstar(void) const { return jps_astar_.get(); }
+    inline double getGuideMinClearance(void) const { return guide_min_clearance_; }
+    inline double getSfcProgress(void) const { return sfc_progress_; }
+    inline double getSfcRange(void) const { return sfc_range_; }
+    inline double getSfcCorridorMargin(void) const { return sfc_corridor_margin_; }
 
     PlanParameters pp_;
     GridMap::Ptr grid_map_;
     TrajContainer traj_;
 
   private:
+    bool solveStateToStateLegacy(const core::TaskSpec &task,
+                                 core::PlanningSolution &solution);
+    bool solveTrackingLegacyTask(const core::TaskSpec &task,
+                                 core::PlanningSolution &solution);
+    bool solvePerchingLegacyTask(const core::TaskSpec &task,
+                                 core::PlanningSolution &solution);
+    bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
+                                          core::PlanningSolution &solution);
+
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
                              Eigen::Vector3d &safe_target) const;
     bool mapWindowReady() const;
@@ -254,6 +274,7 @@ namespace ego_planner
     double tracking_time_align_alpha_{0.55};
     double tracking_visible_yaw_half_span_deg_{35.0};
     double tracking_visible_z_half_span_{0.50};
+    bool enable_compiled_state2state_{false};
     mutable bool have_tracking_anchor_dir_{false};
     mutable Eigen::Vector3d last_tracking_anchor_dir_{Eigen::Vector3d::UnitX()};
     mutable cost_functional::TrackingSemanticGuide active_tracking_semantic_guide_;

@@ -3,27 +3,48 @@
 namespace ego_planner::compiler
 {
 
-bool FeasibleSetBuilder::build(const core::PlanningContext &context,
-                               const core::TaskSpec &task,
-                               core::PlanningProblem &problem) const
+bool FeasibleSetBuilder::buildTransitFeasibleSets(const core::PlanningContext &context,
+                                                  const core::TaskSpec &task,
+                                                  core::PlanningProblem &problem) const
 {
-  (void)context;
-  problem.feasible_sets.clear();
-
-  if (!task.preferred_guide_path.empty())
+  frontend::GuidePathArtifact guide_artifact;
+  if (!guide_path_service_.buildStateToStateGuide(context, task, guide_artifact))
   {
-    frontend::GuidePathArtifact guide;
-    guide.points = task.preferred_guide_path;
-    guide.times.resize(guide.points.size(), 0.0);
-    for (std::size_t i = 1; i < guide.points.size(); ++i)
-    {
-      guide.times[i] = guide.times[i - 1] + (guide.points[i] - guide.points[i - 1]).norm();
-    }
+    return false;
+  }
+  problem.references.guide_path = guide_artifact.points;
+  problem.references.guide_times = guide_artifact.times;
 
-    core::FeasibleSetSpec corridor;
-    if (corridor_service_.buildFromGuidePath(guide, corridor))
+  if (context.use_corridor && !task.force_plain)
+  {
+    core::FeasibleSetSpec corridor_set;
+    if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
     {
-      problem.feasible_sets.push_back(corridor);
+      problem.feasible_sets.push_back(corridor_set);
+    }
+  }
+  return true;
+}
+
+bool FeasibleSetBuilder::buildTrackingFeasibleSets(const core::PlanningContext &context,
+                                                   const core::TaskSpec &task,
+                                                   core::PlanningProblem &problem) const
+{
+  // Tracking preserves compatibility path for optimization internals.
+  // This builder still compiles explicit guide/corridor artifacts when available.
+  frontend::GuidePathArtifact guide_artifact;
+  if (!task.preferred_guide_path.empty() &&
+      guide_path_service_.buildFromWaypoints(task.preferred_guide_path, guide_artifact))
+  {
+    problem.references.guide_path = guide_artifact.points;
+    problem.references.guide_times = guide_artifact.times;
+    if (context.use_corridor && !task.force_plain)
+    {
+      core::FeasibleSetSpec corridor_set;
+      if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
+      {
+        problem.feasible_sets.push_back(corridor_set);
+      }
     }
   }
 
@@ -37,4 +58,40 @@ bool FeasibleSetBuilder::build(const core::PlanningContext &context,
   return true;
 }
 
+bool FeasibleSetBuilder::buildPerchingFeasibleSets(const core::PlanningContext &context,
+                                                   const core::TaskSpec &task,
+                                                   core::PlanningProblem &problem) const
+{
+  (void)context;
+  // Perching is still partial: keep phase-provided manifold/corridor structures.
+  for (const auto &phase : task.phases)
+  {
+    for (const auto &set : phase.feasible_sets)
+    {
+      problem.feasible_sets.push_back(set);
+    }
+  }
+  return true;
+}
+
+bool FeasibleSetBuilder::build(const core::PlanningContext &context,
+                               const core::TaskSpec &task,
+                               core::PlanningProblem &problem) const
+{
+  problem.feasible_sets.clear();
+  switch (task.type)
+  {
+  case core::TaskType::STATE_TO_STATE:
+    return buildTransitFeasibleSets(context, task, problem);
+  case core::TaskType::TRACKING:
+    return buildTrackingFeasibleSets(context, task, problem);
+  case core::TaskType::PERCHING:
+    return buildPerchingFeasibleSets(context, task, problem);
+  case core::TaskType::UNKNOWN:
+  default:
+    return false;
+  }
+}
+
 } // namespace ego_planner::compiler
+

@@ -14,6 +14,7 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
   problem.problem_name = task.task_name;
   problem.context = context;
   problem.task = task;
+  problem.prefer_legacy_fallback = (task.type != core::TaskType::STATE_TO_STATE);
 
   if (!reference_builder_.build(context, task, problem))
   {
@@ -28,6 +29,23 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
     return false;
   }
 
+  if (!problem.phase_specs.empty())
+  {
+    std::vector<int> all_set_indices;
+    all_set_indices.reserve(problem.feasible_sets.size());
+    for (int i = 0; i < static_cast<int>(problem.feasible_sets.size()); ++i)
+    {
+      all_set_indices.push_back(i);
+    }
+    for (auto &phase : problem.phase_specs)
+    {
+      if (phase.feasible_set_indices.empty())
+      {
+        phase.feasible_set_indices = all_set_indices;
+      }
+    }
+  }
+
   // Default objective/constraint masks are generic and task-agnostic at solver layer.
   problem.objective_mask =
       optimization::OBJ_SMOOTHNESS |
@@ -37,13 +55,54 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
       optimization::CON_DYNAMICS |
       optimization::CON_COLLISION;
 
+  if (context.use_corridor && !task.force_plain)
+  {
+    problem.objective_mask |= optimization::OBJ_CORRIDOR;
+    problem.constraint_mask |= optimization::CON_CORRIDOR;
+  }
+  if (task.type == core::TaskType::TRACKING)
+  {
+    problem.objective_mask |=
+        optimization::OBJ_TRACKING_DISTANCE |
+        optimization::OBJ_TRACKING_VIEW |
+        optimization::OBJ_TRACKING_VISIBILITY |
+        optimization::OBJ_TERMINAL_SOFT;
+  }
+
   if (adapter_ != nullptr)
   {
-    problem.solve_callback =
-        [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
+    switch (task.type)
     {
-      return adapter->solveCompatibility(p, s);
-    };
+    case core::TaskType::STATE_TO_STATE:
+      problem.solve_callback =
+          [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
+      {
+        return adapter->solveStateToStateCompiled(p, s);
+      };
+      break;
+    case core::TaskType::TRACKING:
+      problem.solve_callback =
+          [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
+      {
+        return adapter->solveTrackingLegacy(p, s);
+      };
+      break;
+    case core::TaskType::PERCHING:
+      problem.solve_callback =
+          [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
+      {
+        return adapter->solvePerchingLegacy(p, s);
+      };
+      break;
+    case core::TaskType::UNKNOWN:
+    default:
+      problem.solve_callback =
+          [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
+      {
+        return adapter->solveCompatibility(p, s);
+      };
+      break;
+    }
   }
 
   problem.valid = static_cast<bool>(problem.solve_callback);
@@ -51,4 +110,3 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
 }
 
 } // namespace ego_planner::compiler
-
