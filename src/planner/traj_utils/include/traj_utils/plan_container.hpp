@@ -41,11 +41,11 @@ namespace ego_planner
     double des_clearance;
     std::vector<double> yaw_time;
     std::vector<double> yaw_ref;
-    bool has_tracking_yaw{false};
+    bool has_yaw_ref{false};
 
     double sampleYaw(double t_local) const
     {
-      if (!has_tracking_yaw || yaw_time.empty() || yaw_ref.empty() || yaw_time.size() != yaw_ref.size())
+      if (!has_yaw_ref || yaw_time.empty() || yaw_ref.empty() || yaw_time.size() != yaw_ref.size())
       {
         return 0.0;
       }
@@ -105,10 +105,11 @@ namespace ego_planner
       local_traj.start_pos = trajectory.evaluate(0.0, 0); 
       
       local_traj.start_time = world_time;
+      local_traj.end_time = world_time + local_traj.duration;
       local_traj.traj = trajectory;
       local_traj.yaw_time.clear();
       local_traj.yaw_ref.clear();
-      local_traj.has_tracking_yaw = false;
+      local_traj.has_yaw_ref = false;
     }
 
     void setLocalYawRef(const std::vector<double> &t_ref,
@@ -116,7 +117,7 @@ namespace ego_planner
     {
       local_traj.yaw_time = t_ref;
       local_traj.yaw_ref = yaw_ref;
-      local_traj.has_tracking_yaw =
+      local_traj.has_yaw_ref =
           !local_traj.yaw_time.empty() &&
           local_traj.yaw_time.size() == local_traj.yaw_ref.size();
     }

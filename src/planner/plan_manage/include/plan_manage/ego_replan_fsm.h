@@ -78,7 +78,12 @@ namespace ego_planner
     double corridor_disable_duration_{1.0};
     bool use_tracking_task_{false};
     std::string tracking_reference_topic_{"/tracking/reference"};
+    std::string tracking_target_odom_topic_{"/tracking/target_odom"};
     double tracking_reference_dt_{0.2};
+    double tracking_reference_timeout_{0.6};
+    double tracking_prediction_horizon_{4.0};
+    double tracking_prediction_dt_{0.2};
+    double tracking_prediction_max_speed_{2.0};
     bool tracking_relay_goal_{true};
     std::string tracking_target_goal_topic_{"/tracking/target_goal"};
     double tracking_distance_min_{1.5};
@@ -97,10 +102,15 @@ namespace ego_planner
     double tracking_replan_height_buffer_{0.30};
     bool tracking_wait_for_motion_{false};
     bool tracking_target_moving_{true};
+    bool have_tracking_target_odom_{false};
     bool have_planned_tracking_target_now_{false};
     bool have_planned_tracking_ref_end_{false};
+    double last_tracking_ref_recv_time_{-1.0};
+    double last_tracking_target_odom_recv_time_{-1.0};
     Eigen::Vector3d tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d tracking_target_vel_now_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d tracking_target_odom_pos_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d tracking_target_odom_vel_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
 
@@ -131,7 +141,7 @@ namespace ego_planner
     /* ROS utils */
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
-    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, tracking_ref_sub_;
+    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, tracking_ref_sub_, tracking_target_odom_sub_;
     ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_, tracking_target_goal_pub_;
 
     /* state machine functions */
@@ -166,6 +176,9 @@ namespace ego_planner
     void odometryCallback(const nav_msgs::OdometryConstPtr &msg);
     void triggerCallback(const geometry_msgs::PoseStampedPtr &msg);
     void trackingReferenceCallback(const nav_msgs::PathConstPtr &msg);
+    void trackingTargetOdomCallback(const nav_msgs::OdometryConstPtr &msg);
+    bool synthesizeTrackingReferenceFromOdom();
+    bool refreshTrackingReference();
     bool trackingDistanceSatisfied(const Eigen::Vector3d &ego_pos,
                                    const Eigen::Vector3d &target_pos,
                                    double planar_buffer,

@@ -2,6 +2,7 @@
 #include "SFCGenerator/geo_utils.hpp"
 
 #include <limits>
+#include <vector>
 
 using namespace std;
 
@@ -329,9 +330,14 @@ namespace ego_planner
 
     Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
+    if (variable_num_ <= 0)
+    {
+      ROS_ERROR("Plain optimize rejected: empty optimizer variable vector.");
+      return false;
+    }
 
-    double x_init[variable_num_];
-    memcpy(x_init, x0.data(), variable_num_ * sizeof(double));
+    std::vector<double> x_init(static_cast<std::size_t>(variable_num_));
+    memcpy(x_init.data(), x0.data(), variable_num_ * sizeof(double));
 
     min_ellip_dist2_.resize(swarm_trajs_ ? swarm_trajs_->size() : 0);
 
@@ -363,7 +369,7 @@ namespace ego_planner
       t1 = ros::Time::now();
       int result = lbfgs::lbfgs_optimize(
           variable_num_,
-          x_init,
+          x_init.data(),
           &final_cost,
           PolyTrajOptimizer::costFunctionCallback,
           NULL,
@@ -568,9 +574,14 @@ namespace ego_planner
 
     Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
+    if (variable_num_ <= 0)
+    {
+      ROS_ERROR("ESDF optimize rejected: empty optimizer variable vector.");
+      return false;
+    }
 
-    double x_init[variable_num_];
-    memcpy(x_init, x0.data(), variable_num_ * sizeof(double));
+    std::vector<double> x_init(static_cast<std::size_t>(variable_num_));
+    memcpy(x_init.data(), x0.data(), variable_num_ * sizeof(double));
 
     min_ellip_dist2_.resize(swarm_trajs_ ? swarm_trajs_->size() : 0);
 
@@ -617,7 +628,7 @@ namespace ego_planner
 
       const int result = lbfgs::lbfgs_optimize(
           variable_num_,
-          x_init,
+          x_init.data(),
           &final_cost,
           PolyTrajOptimizer::costFunctionCallback,
           NULL,
@@ -952,9 +963,14 @@ namespace ego_planner
 
     Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess();
     variable_num_ = x0.size();
+    if (variable_num_ <= 0)
+    {
+      ROS_ERROR("Corridor optimize rejected: empty optimizer variable vector.");
+      return false;
+    }
 
-    double x_init[variable_num_];
-    memcpy(x_init, x0.data(), variable_num_ * sizeof(double));
+    std::vector<double> x_init(static_cast<std::size_t>(variable_num_));
+    memcpy(x_init.data(), x0.data(), variable_num_ * sizeof(double));
 
     min_ellip_dist2_.resize(swarm_trajs_ ? swarm_trajs_->size() : 0);
 
@@ -993,7 +1009,7 @@ namespace ego_planner
 
       const int result = lbfgs::lbfgs_optimize(
           variable_num_,
-          x_init,
+          x_init.data(),
           &final_cost,
           PolyTrajOptimizer::costFunctionCallback,
           NULL,
@@ -1097,7 +1113,7 @@ namespace ego_planner
 
     if (flag_success)
     {
-      Eigen::Map<const Eigen::VectorXd> x_final(x_init, variable_num_);
+      Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
       corridorMincoOpt_.setWarmStartGuess(x_final);
     }
     return flag_success;

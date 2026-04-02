@@ -21,6 +21,10 @@ namespace cost_functional
         {
             return 0.0;
         }
+        if (!drone_pos.allFinite() || !target_pos.allFinite())
+        {
+            return 0.0;
+        }
 
         const Types::Vec3 ray = target_pos - drone_pos;
         const double ray_len = ray.norm();

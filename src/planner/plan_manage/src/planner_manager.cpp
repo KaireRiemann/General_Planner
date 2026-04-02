@@ -393,11 +393,26 @@ namespace ego_planner
       return true;
     }
 
+    if (!mapWindowReady())
+    {
+      safe_target = raw_target;
+      return true;
+    }
+
     const double resolution = std::max(grid_map_->getResolution(), 1.0e-3);
+    const Eigen::Vector3d map_low = grid_map_->getUpdatedBoxLow();
+    const Eigen::Vector3d map_high = grid_map_->getUpdatedBoxHigh();
+    if (!map_low.allFinite() || !map_high.allFinite() ||
+        (map_high.array() <= map_low.array()).any())
+    {
+      safe_target = raw_target;
+      return true;
+    }
+
     const Eigen::Vector3d clamp_low =
-        grid_map_->getUpdatedBoxLow() + Eigen::Vector3d::Constant(2.0 * resolution);
+        map_low + Eigen::Vector3d::Constant(2.0 * resolution);
     const Eigen::Vector3d clamp_high =
-        grid_map_->getUpdatedBoxHigh() - Eigen::Vector3d::Constant(2.0 * resolution);
+        map_high - Eigen::Vector3d::Constant(2.0 * resolution);
 
     safe_target = raw_target.cwiseMax(clamp_low).cwiseMin(clamp_high);
     if (grid_map_->getInflateOccupancy(safe_target) == 0)
@@ -541,7 +556,7 @@ namespace ego_planner
                                                       double search_radius,
                                                       Eigen::Vector3d *push_dir) const
   {
-    if (!grid_map_)
+    if (!grid_map_ || !mapWindowReady())
     {
       if (push_dir != nullptr)
       {
@@ -1185,6 +1200,10 @@ namespace ego_planner
                                    [](double a, double b)
                                    { return std::abs(a - b) < 1.0e-3; }),
                        sample_times.end());
+    if (sample_times.empty())
+    {
+      return false;
+    }
 
     Eigen::Vector3d sticky_dir = have_tracking_anchor_dir_
                                      ? last_tracking_anchor_dir_
@@ -1397,6 +1416,8 @@ namespace ego_planner
     candidate_layers.reserve(sample_times.size());
 
     Eigen::Vector3d prev_target = initial_target;
+    Eigen::Vector3d prev_seed_viewpoint = start_pt;
+    bool have_prev_seed_viewpoint = true;
     for (std::size_t layer_idx = 0; layer_idx < sample_times.size(); ++layer_idx)
     {
       const double t_query = sample_times[layer_idx];
@@ -1407,7 +1428,8 @@ namespace ego_planner
         continue;
       }
 
-      Eigen::Vector3d seed_dir = (layer_idx == 0) ? init_seed_dir : (candidate_layers.back().front().viewpoint - ref_pos);
+      Eigen::Vector3d seed_dir =
+          (layer_idx == 0 || !have_prev_seed_viewpoint) ? init_seed_dir : (prev_seed_viewpoint - ref_pos);
       seed_dir.z() = 0.0;
       if (seed_dir.head<2>().norm() < 0.3)
       {
@@ -1506,6 +1528,8 @@ namespace ego_planner
         {
           layer_candidates.resize(7);
         }
+        prev_seed_viewpoint = layer_candidates.front().viewpoint;
+        have_prev_seed_viewpoint = true;
         candidate_layers.push_back(layer_candidates);
         prev_target = ref_pos;
       }
@@ -1652,6 +1676,47 @@ namespace ego_planner
       }
     }
 
+    if (guide_path.size() < 2)
+    {
+      return false;
+    }
+
+    std::vector<Eigen::Vector3d> shortcut_path;
+    shortcut_path.reserve(guide_path.size());
+    std::size_t anchor_idx = 0;
+    shortcut_path.push_back(guide_path.front());
+    while (anchor_idx + 1 < guide_path.size())
+    {
+      std::size_t next_idx = anchor_idx + 1;
+      for (std::size_t cand = guide_path.size(); cand-- > anchor_idx + 1;)
+      {
+        if (lineOfSightFree(guide_path[anchor_idx], guide_path[cand]))
+        {
+          next_idx = cand;
+          break;
+        }
+      }
+
+      if ((guide_path[next_idx] - shortcut_path.back()).norm() > 1.0e-3)
+      {
+        shortcut_path.push_back(guide_path[next_idx]);
+      }
+      anchor_idx = next_idx;
+    }
+
+    if (shortcut_path.size() >= 2)
+    {
+      std::vector<Eigen::Vector3d> sparse_path;
+      if (sparsifyGuidePath(shortcut_path, sparse_path))
+      {
+        guide_path = sparse_path;
+      }
+      else
+      {
+        guide_path = shortcut_path;
+      }
+    }
+
     return guide_path.size() >= 2;
   }
 
@@ -1670,9 +1735,31 @@ namespace ego_planner
       return false;
     }
 
-    const Eigen::Vector3d tracking_target = reference.p_ref.front();
+    Eigen::Vector3d tracking_target = reference.p_ref.front();
+    Eigen::Vector3d tracking_target_vel_now = reference.v_ref.empty() ? Eigen::Vector3d::Zero()
+                                                                       : reference.v_ref.front();
+    cost_functional::sampleTrackingReference(reference, 0.0, tracking_target, tracking_target_vel_now);
     const bool touch_goal = false;
     const double desired_dist = 0.5 * (tracking_distance_min_ + tracking_distance_max_);
+    const auto computeYaw0 = [&]() -> double
+    {
+      const double t_local_now = std::max(0.0, ros::Time::now().toSec() - traj_.local_traj.start_time);
+      if (traj_.local_traj.has_yaw_ref)
+      {
+        return traj_.local_traj.sampleYaw(t_local_now);
+      }
+      if (start_vel.head<2>().norm() > 0.15)
+      {
+        return std::atan2(start_vel.y(), start_vel.x());
+      }
+      const Eigen::Vector3d rel = tracking_target - start_pt;
+      if (rel.head<2>().norm() > 0.15)
+      {
+        return std::atan2(rel.y(), rel.x());
+      }
+      return 0.0;
+    };
+    const double yaw0 = computeYaw0();
 
     std::vector<Eigen::Vector3d> target_samples;
     std::vector<Eigen::Vector3d> viewpoint_series;
@@ -1696,6 +1783,12 @@ namespace ego_planner
 
       if (buildGuidePathFromWaypoints(tracking_waypoints, tracking_guide_path))
       {
+        if (viewpoint_series.empty() || viewpoint_times.empty())
+        {
+          ROS_WARN("planTrackingTask: empty viewpoint sequence after viewpoint generation.");
+          return false;
+        }
+
         cost_functional::TrackingReference planning_reference = reference;
         planning_reference.t_view_ref = viewpoint_times;
         planning_reference.p_view_ref = viewpoint_series;
@@ -1775,10 +1868,10 @@ namespace ego_planner
 
           const double yaw_dt = 0.05;
           const double max_yaw_rate = 1.2;
-          const double yaw0 = 0.0;        
-
           auto yaw_plan = TrackingYawPlanner::planFacingTarget(
               traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
+          planning_reference.t_yaw_ref = yaw_plan.t;
+          planning_reference.yaw_ref = yaw_plan.yaw;
           traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
           return true;
         }
@@ -1855,9 +1948,10 @@ namespace ego_planner
         }
         const double yaw_dt = 0.05;
         const double max_yaw_rate = 1.2;
-        const double yaw0 = 0.0;
         auto yaw_plan = TrackingYawPlanner::planFacingTarget(
             traj_.local_traj.traj, planning_reference, yaw_dt, max_yaw_rate, yaw0);
+        planning_reference.t_yaw_ref = yaw_plan.t;
+        planning_reference.yaw_ref = yaw_plan.yaw;
         traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
         return true;
       }
@@ -2173,7 +2267,10 @@ namespace ego_planner
     std::vector<Eigen::Vector3d> point_set;
     for (int i = 0; i < cstr_pts.cols(); ++i)
       point_set.push_back(cstr_pts.col(i));
-    visualization_->displayInitPathList(point_set, 0.2, 0);
+    if (visualization_)
+    {
+      visualization_->displayInitPathList(point_set, 0.2, 0);
+    }
 
     t_start = ros::Time::now();
 
@@ -2212,7 +2309,10 @@ namespace ego_planner
                  ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
         setLocalTrajFromOpt(opt_traj, touch_goal);
         cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
-        visualization_->displayOptimalList(cstr_pts, 0);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
       }
       else
       {
@@ -2253,7 +2353,10 @@ namespace ego_planner
                   esdf_free ? "yes" : "no", esdf_tol);
         setLocalTrajFromOpt(opt_traj, touch_goal);
         cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
-        visualization_->displayOptimalList(cstr_pts, 0);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
       }
       else
       {
@@ -2305,13 +2408,19 @@ namespace ego_planner
                   << " Success:fail=" << success.sum() << ":" << success.size() - success.sum() << std::endl;
       }
 
-      visualization_->displayMultiOptimalPathList(vis_trajs, 0.1);
+      if (visualization_)
+      {
+        visualization_->displayMultiOptimalPathList(vis_trajs, 0.1);
+      }
 
       if (flag_success)
       {
         setLocalTrajFromOpt(best_traj, touch_goal);
         cstr_pts = best_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
-        visualization_->displayOptimalList(cstr_pts, 0);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
       }
     }
     else
@@ -2338,7 +2447,10 @@ namespace ego_planner
         setLocalTrajFromOpt(opt_traj, touch_goal);
         
         cstr_pts = opt_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
-        visualization_->displayOptimalList(cstr_pts, 0);
+        if (visualization_)
+        {
+          visualization_->displayOptimalList(cstr_pts, 0);
+        }
       }
     }
 
@@ -2366,7 +2478,10 @@ namespace ego_planner
       {
         cstr_pts = fail_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
       }
-      visualization_->displayFailedList(cstr_pts, 0);
+      if (visualization_)
+      {
+        visualization_->displayFailedList(cstr_pts, 0);
+      }
 
       continous_failures_count_++;
     }

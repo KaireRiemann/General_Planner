@@ -46,6 +46,21 @@ namespace cost_functional
                     return false;
                 }
             }
+            for (std::size_t i = 0; i < p_ref.size(); ++i)
+            {
+                if (!p_ref[i].allFinite())
+                {
+                    return false;
+                }
+                if (!v_ref.empty() && !v_ref[i].allFinite())
+                {
+                    return false;
+                }
+                if (!std::isfinite(t_ref[i]))
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
@@ -66,13 +81,42 @@ namespace cost_functional
                     return false;
                 }
             }
+            for (std::size_t i = 0; i < p_view_ref.size(); ++i)
+            {
+                if (!p_view_ref[i].allFinite())
+                {
+                    return false;
+                }
+                if (!v_view_ref.empty() && !v_view_ref[i].allFinite())
+                {
+                    return false;
+                }
+                if (!std::isfinite(t_view_ref[i]))
+                {
+                    return false;
+                }
+            }
             return true;
         }
 
         bool yawValid() const
         {
-            return !t_yaw_ref.empty() &&
-                   t_yaw_ref.size() == yaw_ref.size();
+            if (t_yaw_ref.empty() || t_yaw_ref.size() != yaw_ref.size())
+            {
+                return false;
+            }
+            for (std::size_t i = 0; i < t_yaw_ref.size(); ++i)
+            {
+                if (!std::isfinite(t_yaw_ref[i]) || !std::isfinite(yaw_ref[i]))
+                {
+                    return false;
+                }
+                if (i > 0 && t_yaw_ref[i] + 1.0e-9 < t_yaw_ref[i - 1])
+                {
+                    return false;
+                }
+            }
+            return true;
         }
     };
 
@@ -208,7 +252,9 @@ namespace cost_functional
                                                 Eigen::Vector3d &p_out,
                                                 Eigen::Vector3d &v_out)
     {
-        if (ref.has_terminal_ref)
+        if (ref.has_terminal_ref &&
+            ref.p_term_ref.allFinite() &&
+            ref.v_term_ref.allFinite())
         {
             p_out = ref.p_term_ref;
             v_out = ref.v_term_ref;
@@ -218,7 +264,7 @@ namespace cost_functional
         if (ref.use_view_terminal && ref.viewValid())
         {
             p_out = ref.p_view_ref.back();
-            if (!ref.v_view_ref.empty())
+            if (!ref.v_view_ref.empty() && ref.v_view_ref.back().allFinite())
             {
                 v_out = ref.v_view_ref.back();
             }
@@ -232,7 +278,7 @@ namespace cost_functional
         if (ref.valid())
         {
             p_out = ref.p_ref.back();
-            if (!ref.v_ref.empty())
+            if (!ref.v_ref.empty() && ref.v_ref.back().allFinite())
             {
                 v_out = ref.v_ref.back();
             }

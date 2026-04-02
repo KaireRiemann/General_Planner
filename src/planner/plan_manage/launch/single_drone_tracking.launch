@@ -14,9 +14,9 @@
     <arg name="init_y" default="0.0"/>
     <arg name="init_z" default="1.0"/>
 
-    <arg name="use_esdf" default="true"/>
-    <arg name="use_sfc_corridor" default="false"/>
-    <arg name="enable_esdf" default="true"/>
+    <arg name="use_esdf" default="false"/>
+    <arg name="use_sfc_corridor" default="true"/>
+    <arg name="enable_esdf" default="false"/>
     <arg name="tracking_reference_mode" default="oracle_reference_mode"/>
     <arg name="tracking_reference_noise_std" default="0.08"/>
     <arg name="tracking_reference_velocity_noise_std" default="0.05"/>

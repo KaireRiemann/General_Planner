@@ -8,6 +8,7 @@ namespace ego_planner
     exec_state_ = FSM_EXEC_STATE::INIT;
     have_target_ = false;
     have_tracking_ref_ = false;
+    have_tracking_target_odom_ = false;
     have_odom_ = false;
     have_recv_pre_agent_ = false;
     flag_escape_emergency_ = true;
@@ -29,7 +30,12 @@ namespace ego_planner
     nh.param("fsm/corridor_disable_duration", corridor_disable_duration_, 1.0);
     nh.param("fsm/use_tracking_task", use_tracking_task_, false);
     nh.param("fsm/tracking_reference_topic", tracking_reference_topic_, std::string("/tracking/reference"));
+    nh.param("fsm/tracking_target_odom_topic", tracking_target_odom_topic_, std::string("/tracking/target_odom"));
     nh.param("fsm/tracking_reference_dt", tracking_reference_dt_, 0.2);
+    nh.param("fsm/tracking_reference_timeout", tracking_reference_timeout_, 0.6);
+    nh.param("fsm/tracking_prediction_horizon", tracking_prediction_horizon_, 4.0);
+    nh.param("fsm/tracking_prediction_dt", tracking_prediction_dt_, 0.2);
+    nh.param("fsm/tracking_prediction_max_speed", tracking_prediction_max_speed_, 2.0);
     nh.param("fsm/tracking_relay_goal", tracking_relay_goal_, true);
     nh.param("fsm/tracking_target_goal_topic", tracking_target_goal_topic_, std::string("/tracking/target_goal"));
     nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
@@ -96,12 +102,18 @@ namespace ego_planner
           1,
           &EGOReplanFSM::trackingReferenceCallback,
           this);
+      tracking_target_odom_sub_ = nh.subscribe<nav_msgs::Odometry>(
+          tracking_target_odom_topic_,
+          1,
+          &EGOReplanFSM::trackingTargetOdomCallback,
+          this);
       if (tracking_relay_goal_)
       {
         waypoint_sub_ = nh.subscribe("/goal", 1, &EGOReplanFSM::waypointCallback, this);
         tracking_target_goal_pub_ = nh.advertise<quadrotor_msgs::GoalSet>(tracking_target_goal_topic_, 1);
       }
       ROS_INFO("Tracking task enabled. Waiting tracking reference on: %s", tracking_reference_topic_.c_str());
+      ROS_INFO("Tracking target odom fallback enabled on: %s", tracking_target_odom_topic_.c_str());
       if (tracking_relay_goal_)
       {
         ROS_INFO("Tracking task goal relay enabled: /goal -> %s", tracking_target_goal_topic_.c_str());
@@ -141,6 +153,11 @@ namespace ego_planner
     {
       fsm_num = 0;
       printFSMExecState();
+    }
+
+    if (use_tracking_task_)
+    {
+      refreshTrackingReference();
     }
 
     switch (exec_state_)
@@ -562,6 +579,11 @@ namespace ego_planner
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
+    if (use_tracking_task_)
+    {
+      refreshTrackingReference();
+    }
+
     const bool tracking_active =
         use_tracking_task_ &&
         have_tracking_ref_ &&
@@ -851,6 +873,124 @@ namespace ego_planner
            std::abs(delta.z()) <= z_tol;
   }
 
+  void EGOReplanFSM::trackingTargetOdomCallback(const nav_msgs::OdometryConstPtr &msg)
+  {
+    if (!msg)
+    {
+      return;
+    }
+
+    tracking_target_odom_pos_.x() = msg->pose.pose.position.x;
+    tracking_target_odom_pos_.y() = msg->pose.pose.position.y;
+    tracking_target_odom_pos_.z() = msg->pose.pose.position.z;
+    tracking_target_odom_vel_.x() = msg->twist.twist.linear.x;
+    tracking_target_odom_vel_.y() = msg->twist.twist.linear.y;
+    tracking_target_odom_vel_.z() = msg->twist.twist.linear.z;
+    tracking_target_pos_now_ = tracking_target_odom_pos_;
+    tracking_target_vel_now_ = tracking_target_odom_vel_;
+    have_tracking_target_odom_ = true;
+    last_tracking_target_odom_recv_time_ = ros::Time::now().toSec();
+
+    const double clamped_speed =
+        std::min(tracking_target_odom_vel_.norm(), std::max(0.0, tracking_prediction_max_speed_));
+    tracking_target_moving_ =
+        clamped_speed > tracking_resume_target_vel_thresh_;
+  }
+
+  bool EGOReplanFSM::synthesizeTrackingReferenceFromOdom()
+  {
+    if (!have_tracking_target_odom_)
+    {
+      return false;
+    }
+
+    cost_functional::TrackingReference ref;
+    const double horizon = std::max(0.2, tracking_prediction_horizon_);
+    const double dt = std::max(0.05, tracking_prediction_dt_);
+    const int sample_num =
+        std::max(2, static_cast<int>(std::ceil(horizon / dt)) + 1);
+
+    Eigen::Vector3d pred_vel = tracking_target_odom_vel_;
+    const double speed = pred_vel.norm();
+    if (speed > std::max(0.1, tracking_prediction_max_speed_))
+    {
+      pred_vel *= tracking_prediction_max_speed_ / speed;
+    }
+
+    ref.t_ref.reserve(static_cast<std::size_t>(sample_num));
+    ref.p_ref.reserve(static_cast<std::size_t>(sample_num));
+    ref.v_ref.reserve(static_cast<std::size_t>(sample_num));
+
+    for (int i = 0; i < sample_num; ++i)
+    {
+      const double t = std::min(horizon, static_cast<double>(i) * dt);
+      ref.t_ref.push_back(t);
+      ref.p_ref.push_back(tracking_target_odom_pos_ + pred_vel * t);
+      ref.v_ref.push_back(pred_vel);
+    }
+
+    if (!ref.valid())
+    {
+      return false;
+    }
+
+    tracking_reference_ = ref;
+    have_tracking_ref_ = true;
+    have_target_ = true;
+    have_new_target_ = true;
+    have_trigger_ = true;
+    tracking_target_pos_now_ = tracking_target_odom_pos_;
+    tracking_target_vel_now_ = tracking_target_odom_vel_;
+    final_goal_ = tracking_target_pos_now_;
+    local_target_pt_ = tracking_target_pos_now_;
+    local_target_vel_ = tracking_target_vel_now_;
+    if (have_odom_)
+    {
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
+    }
+    return true;
+  }
+
+  bool EGOReplanFSM::refreshTrackingReference()
+  {
+    if (!use_tracking_task_)
+    {
+      return false;
+    }
+
+    const double now = ros::Time::now().toSec();
+    const bool ref_recent =
+        have_tracking_ref_ &&
+        tracking_reference_.valid() &&
+        last_tracking_ref_recv_time_ > 0.0 &&
+        (now - last_tracking_ref_recv_time_) <= std::max(0.1, tracking_reference_timeout_);
+
+    if (ref_recent)
+    {
+      return true;
+    }
+
+    const bool odom_recent =
+        have_tracking_target_odom_ &&
+        last_tracking_target_odom_recv_time_ > 0.0 &&
+        (now - last_tracking_target_odom_recv_time_) <= std::max(0.1, tracking_reference_timeout_);
+
+    if (!odom_recent)
+    {
+      return have_tracking_ref_ && tracking_reference_.valid();
+    }
+
+    const bool ok = synthesizeTrackingReferenceFromOdom();
+    if (ok)
+    {
+      ROS_INFO_THROTTLE(1.0,
+                        "Tracking reference fallback: synthesize short-horizon reference from target odom.");
+    }
+    return ok;
+  }
+
   bool EGOReplanFSM::trackingShouldEnterWaitTarget() const
   {
     if (!use_tracking_task_ || !have_tracking_ref_ || !tracking_reference_.valid())
@@ -870,6 +1010,7 @@ namespace ego_planner
 
   bool EGOReplanFSM::trackingCanKeepCurrentTraj(const LocalTrajData *info, double t_cur)
   {
+    refreshTrackingReference();
     if (!use_tracking_task_ || !have_tracking_ref_ || !tracking_reference_.valid() || info == nullptr)
     {
       return false;
@@ -994,6 +1135,7 @@ namespace ego_planner
 
     tracking_reference_ = ref;
     have_tracking_ref_ = true;
+    last_tracking_ref_recv_time_ = ros::Time::now().toSec();
     have_target_ = true;
     have_new_target_ = true;
     have_trigger_ = true;
