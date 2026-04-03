@@ -102,42 +102,14 @@ bool FeasibleSetBuilder::buildCorridorFeasibleSets(const core::PlanningContext &
                                                    const core::TaskDefinition &task_definition,
                                                    core::PlanningProblem &problem) const
 {
+  // For state-to-state corridor mode, compiler only preserves optional guide hints.
+  // The authoritative corridor construction happens in solver-side stable helpers.
   if (!ensureTransitGuidePath(context, task_definition, problem))
   {
     problem.compile_message.clear();
     problem.references.guide_path.clear();
     problem.references.guide_times.clear();
-    return true;
   }
-
-  frontend::GuidePathArtifact guide_artifact;
-  guide_artifact.points = problem.references.guide_path;
-  guide_artifact.times = problem.references.guide_times;
-  core::FeasibleSetSpec corridor_set;
-
-  if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
-  {
-    problem.feasible_sets.push_back(corridor_set);
-    return true;
-  }
-
-  std::vector<Eigen::Vector3d> dense_path;
-  if (!guide_path_service_.searchStateToStateDensePath(context, task_definition, dense_path))
-  {
-    return true;
-  }
-
-  frontend::GuidePathArtifact dense_artifact;
-  if (!guide_path_service_.buildFromWaypoints(dense_path, dense_artifact) ||
-      !corridor_service_.buildFromGuidePath(context, dense_artifact, corridor_set))
-  {
-    return true;
-  }
-
-  // When sparse-path inflation fails, keep the dense path as the compiled corridor seed.
-  problem.references.guide_path = dense_artifact.points;
-  problem.references.guide_times = dense_artifact.times;
-  problem.feasible_sets.push_back(corridor_set);
   return true;
 }
 

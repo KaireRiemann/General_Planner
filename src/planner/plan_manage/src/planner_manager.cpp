@@ -529,12 +529,14 @@ namespace ego_planner
       spatial_map::PolyhedraH &corridor_hpolys,
       Eigen::VectorXi &corridor_piece_idx,
       std::vector<Eigen::Vector3d> &guide_path,
+      std::vector<Eigen::Vector3d> &display_path,
       std::string &init_source,
       std::string &failure_reason)
   {
     init_source = "stable_helper";
     failure_reason.clear();
     guide_path.clear();
+    display_path.clear();
     corridor_hpolys.clear();
     corridor_piece_idx.resize(0);
     innerPts.resize(3, 0);
@@ -561,153 +563,239 @@ namespace ego_planner
     if (compiled_use_corridor)
     {
       reportCorridorFailure(FAIL_NONE, "");
-      std::vector<Eigen::Vector3d> transition_points;
-      std::vector<double> inner_clearances;
       const auto *corridor_set = findCorridorFeasibleSet(problem);
-      bool corridor_ready = false;
+      const auto tryCorridorInitialization =
+          [&](const std::vector<Eigen::Vector3d> &candidate_guide_path,
+              const spatial_map::PolyhedraH &candidate_corridor,
+              const Eigen::VectorXi &candidate_piece_idx,
+              const std::string &candidate_source,
+              bool authoritative_failure,
+              std::string *attempt_reason) -> bool
+      {
+        std::vector<Eigen::Vector3d> transition_points;
+        std::vector<double> inner_clearances;
+        Eigen::MatrixXd candidate_inner_pts;
+        Eigen::VectorXd candidate_durations;
+        Eigen::VectorXi candidate_alloc = candidate_piece_idx;
+        MINCOTraj3D candidate_traj;
+        std::vector<Eigen::Vector3d> adjusted_guide_path = candidate_guide_path;
+        if (adjusted_guide_path.size() >= 2)
+        {
+          adjusted_guide_path.front() = start_pt;
+          adjusted_guide_path.back() = safe_target_pt;
+        }
+
+        if (!buildCorridorAwareInitialGuess(start_pt,
+                                            start_vel,
+                                            safe_target_pt,
+                                            candidate_corridor,
+                                            candidate_inner_pts,
+                                            candidate_durations,
+                                            candidate_alloc,
+                                            transition_points,
+                                            inner_clearances))
+        {
+          if (attempt_reason != nullptr)
+          {
+            *attempt_reason = "failed to build GCOPTER-style corridor initial guess";
+          }
+          if (authoritative_failure)
+          {
+            reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                                  "failed to build GCOPTER-style corridor initial guess");
+          }
+          return false;
+        }
+
+        bool corridor_warm_timing_used = false;
+        if (!task.flag_poly_init)
+        {
+          MINCOTraj3D warm_traj;
+          Eigen::MatrixXd warm_inner_pts;
+          Eigen::VectorXd warm_durations;
+          MINCOBoundaryState3D warm_head, warm_tail;
+
+          const bool warm_ok = computeInitState(start_pt,
+                                                start_vel,
+                                                start_acc,
+                                                safe_target_pt,
+                                                goal_vel,
+                                                false,
+                                                false,
+                                                ts,
+                                                warm_traj,
+                                                warm_inner_pts,
+                                                warm_durations,
+                                                warm_head,
+                                                warm_tail);
+          if (warm_ok && applyWarmStartTimingProfile(warm_durations, candidate_durations))
+          {
+            corridor_warm_timing_used = true;
+          }
+        }
+
+        if (!candidate_traj.generate(candidate_inner_pts, headState, tailState, candidate_durations) ||
+            candidate_traj.getTotalDuration() <= 1.0e-6)
+        {
+          if (attempt_reason != nullptr)
+          {
+            *attempt_reason = "failed to generate corridor-seeded MINCO trajectory";
+          }
+          if (authoritative_failure)
+          {
+            reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                                  "failed to generate corridor-seeded MINCO trajectory");
+          }
+          return false;
+        }
+
+        const bool init_seed_feasible = improveCorridorSeedByTimeScaling(ploy_traj_opt_.get(),
+                                                                         headState,
+                                                                         tailState,
+                                                                         candidate_inner_pts,
+                                                                         candidate_durations,
+                                                                         candidate_corridor,
+                                                                         candidate_traj);
+        const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(candidate_traj);
+        const bool seed_inside_corridor =
+            ploy_traj_opt_->isTrajectoryInsideCorridor(candidate_traj, candidate_corridor, 0.0);
+
+        ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
+                 seed_collision_free ? "yes" : "no",
+                 computeTrajectoryMinSdf(candidate_traj),
+                 seed_inside_corridor ? "yes" : "no");
+        ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
+                 corridor_warm_timing_used ? "yes" : "no",
+                 init_seed_feasible ? "yes" : "no");
+
+        if (!seed_collision_free || !seed_inside_corridor)
+        {
+          if (attempt_reason != nullptr)
+          {
+            *attempt_reason = "corridor seed remains infeasible after conservative timing/scaling";
+          }
+          if (authoritative_failure)
+          {
+            reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                                  "corridor seed remains infeasible after conservative timing/scaling");
+          }
+          return false;
+        }
+
+        init_source = candidate_source;
+        guide_path = adjusted_guide_path;
+        display_path = adjusted_guide_path;
+        corridor_hpolys = candidate_corridor;
+        corridor_piece_idx = candidate_alloc;
+        innerPts = candidate_inner_pts;
+        durations = candidate_durations;
+        initTraj = candidate_traj;
+        return true;
+      };
+
+      bool compiler_hint_used = false;
+      bool compiler_hint_init_ok = false;
+      std::string compiler_hint_reason;
+
+      std::vector<Eigen::Vector3d> hint_guide_path;
+      spatial_map::PolyhedraH hint_corridor;
+      Eigen::VectorXi hint_piece_idx;
+      std::string hint_source = "compiled_hint";
 
       if (corridor_set != nullptr && !corridor_set->corridor.empty())
       {
-        init_source = "compiled_hint";
-        corridor_hpolys = corridor_set->corridor;
-        if (corridor_set->corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()))
-        {
-          corridor_piece_idx = corridor_set->corridor_piece_idx;
-        }
+        compiler_hint_used = true;
+        hint_corridor = corridor_set->corridor;
+        hint_piece_idx = corridor_set->corridor_piece_idx;
         if (corridor_set->corridor_seed_path.size() >= 2)
         {
-          guide_path = corridor_set->corridor_seed_path;
+          hint_guide_path = corridor_set->corridor_seed_path;
         }
         else if (problem.references.guide_path.size() >= 2)
         {
-          guide_path = problem.references.guide_path;
+          hint_guide_path = problem.references.guide_path;
         }
-
-        if (guide_path.size() >= 2)
-        {
-          guide_path.front() = start_pt;
-          guide_path.back() = safe_target_pt;
-        }
-        corridor_ready = true;
       }
-
-      if (!corridor_ready && problem.references.guide_path.size() >= 2)
+      else if (problem.references.guide_path.size() >= 2)
       {
-        init_source = "mixed";
-        guide_path = problem.references.guide_path;
-        guide_path.front() = start_pt;
-        guide_path.back() = safe_target_pt;
+        compiler_hint_used = true;
+        hint_source = "mixed";
+        hint_guide_path = problem.references.guide_path;
 
-        std::vector<Eigen::Vector3d> sparse_guide_path;
-        if (sparsifyGuidePath(guide_path, sparse_guide_path) &&
-            generateSafeFlightCorridor(sparse_guide_path, corridor_hpolys))
+        std::vector<Eigen::Vector3d> sparse_hint_guide = hint_guide_path;
+        sparse_hint_guide.front() = start_pt;
+        sparse_hint_guide.back() = safe_target_pt;
+        if (sparsifyGuidePath(sparse_hint_guide, sparse_hint_guide) &&
+            generateSafeFlightCorridor(sparse_hint_guide, hint_corridor))
         {
-          guide_path = sparse_guide_path;
-          corridor_ready = true;
+          hint_guide_path = sparse_hint_guide;
         }
-        else if (generateSafeFlightCorridor(guide_path, corridor_hpolys))
+        else
         {
-          corridor_ready = true;
+          hint_corridor.clear();
+          if (generateSafeFlightCorridor(problem.references.guide_path, hint_corridor))
+          {
+            hint_guide_path = problem.references.guide_path;
+          }
         }
       }
 
-      if (!corridor_ready &&
-          !prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
+      if (compiler_hint_used && hint_guide_path.size() >= 2 && !hint_corridor.empty())
+      {
+        ROS_INFO("[CompiledS2SInit] active_mode=CORRIDOR trying compiler corridor hint route");
+        compiler_hint_init_ok = tryCorridorInitialization(hint_guide_path,
+                                                          hint_corridor,
+                                                          hint_piece_idx,
+                                                          hint_source,
+                                                          false,
+                                                          &compiler_hint_reason);
+        if (!compiler_hint_init_ok)
+        {
+          ROS_WARN("[CompiledS2SInit] compiler corridor hint init failed: %s",
+                   compiler_hint_reason.c_str());
+        }
+      }
+
+      if (compiler_hint_init_ok)
+      {
+        return true;
+      }
+
+      ROS_WARN("[CompiledS2SInit] retry stable corridor helper initialization");
+      guide_path.clear();
+      display_path.clear();
+      corridor_hpolys.clear();
+      corridor_piece_idx.resize(0);
+      innerPts.resize(3, 0);
+      durations.resize(0);
+
+      if (!prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
       {
         failure_reason = last_corridor_failure_tag_.empty()
                              ? "failed to build corridor guide/corridor from stable helper"
                              : last_corridor_failure_tag_;
-        return false;
-      }
-      if (corridor_ready && init_source == "compiled_hint" && guide_path.size() < 2)
-      {
-        init_source = "mixed";
-      }
-
-      if (!buildCorridorAwareInitialGuess(start_pt,
-                                          start_vel,
-                                          safe_target_pt,
-                                          corridor_hpolys,
-                                          innerPts,
-                                          durations,
-                                          corridor_piece_idx,
-                                          transition_points,
-                                          inner_clearances))
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                              "failed to build GCOPTER-style corridor initial guess");
-        failure_reason = last_corridor_failure_tag_.empty()
-                             ? "failed to build stable corridor-aware initial guess"
-                             : last_corridor_failure_tag_;
+        ROS_WARN("[CompiledS2SInit] stable corridor helper failed: %s",
+                 failure_reason.c_str());
         return false;
       }
 
-      bool corridor_warm_timing_used = false;
-      if (!task.flag_poly_init)
+      display_path = guide_path;
+      std::string stable_reason;
+      const bool stable_ok = tryCorridorInitialization(guide_path,
+                                                       corridor_hpolys,
+                                                       corridor_piece_idx,
+                                                       compiler_hint_used ? "mixed" : "stable_helper",
+                                                       true,
+                                                       &stable_reason);
+      if (!stable_ok)
       {
-        MINCOTraj3D warm_traj;
-        Eigen::MatrixXd warm_inner_pts;
-        Eigen::VectorXd warm_durations;
-        MINCOBoundaryState3D warm_head, warm_tail;
-
-        const bool warm_ok = computeInitState(start_pt,
-                                              start_vel,
-                                              start_acc,
-                                              safe_target_pt,
-                                              goal_vel,
-                                              false,
-                                              false,
-                                              ts,
-                                              warm_traj,
-                                              warm_inner_pts,
-                                              warm_durations,
-                                              warm_head,
-                                              warm_tail);
-        if (warm_ok && applyWarmStartTimingProfile(warm_durations, durations))
-        {
-          corridor_warm_timing_used = true;
-        }
-      }
-
-      if (!initTraj.generate(innerPts, headState, tailState, durations) ||
-          initTraj.getTotalDuration() <= 1.0e-6)
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                              "failed to generate corridor-seeded MINCO trajectory");
-        failure_reason = last_corridor_failure_tag_.empty()
-                             ? "failed to generate corridor MINCO init trajectory"
-                             : last_corridor_failure_tag_;
+        failure_reason = last_corridor_failure_tag_.empty() ? stable_reason : last_corridor_failure_tag_;
+        ROS_WARN("[CompiledS2SInit] stable corridor helper init failed: %s",
+                 failure_reason.c_str());
         return false;
       }
 
-      const bool init_seed_feasible = improveCorridorSeedByTimeScaling(ploy_traj_opt_.get(),
-                                                                       headState,
-                                                                       tailState,
-                                                                       innerPts,
-                                                                       durations,
-                                                                       corridor_hpolys,
-                                                                       initTraj);
-      const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(initTraj);
-      const bool seed_inside_corridor =
-          ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0);
-      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
-               seed_collision_free ? "yes" : "no",
-               computeTrajectoryMinSdf(initTraj),
-               seed_inside_corridor ? "yes" : "no");
-      ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
-               corridor_warm_timing_used ? "yes" : "no",
-               init_seed_feasible ? "yes" : "no");
-
-      if (!seed_collision_free || !seed_inside_corridor)
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                              "corridor seed remains infeasible after conservative timing/scaling");
-        failure_reason = last_corridor_failure_tag_.empty()
-                             ? "compiled corridor seed remains infeasible after stable initialization"
-                             : last_corridor_failure_tag_;
-        return false;
-      }
-
+      ROS_INFO("[CompiledS2SInit] stable corridor helper succeeded");
       return true;
     }
 
@@ -727,6 +815,8 @@ namespace ego_planner
         failure_reason = "failed to prepare local A* path for ESDF init";
         return false;
       }
+
+      display_path = dense_path;
 
       if (!sparsifyGuidePath(dense_path, guide_path))
       {
@@ -841,10 +931,12 @@ namespace ego_planner
 
     init_source = "stable_helper";
     guide_path = problem.references.guide_path;
+    display_path = guide_path;
     if (guide_path.size() >= 2)
     {
       guide_path.front() = start_pt;
       guide_path.back() = safe_target_pt;
+      display_path = guide_path;
     }
     return initTraj.getTotalDuration() > 1.0e-6;
   }
@@ -998,6 +1090,7 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     std::vector<Eigen::Vector3d> active_guide_path = problem.references.guide_path;
+    std::vector<Eigen::Vector3d> display_path;
     std::string solver_init_source;
     std::string init_failure_reason;
     if (!buildCompiledStateToStateInitialization(problem,
@@ -1011,6 +1104,7 @@ namespace ego_planner
                                                  corridor_hpolys,
                                                  corridor_piece_idx,
                                                  active_guide_path,
+                                                 display_path,
                                                  solver_init_source,
                                                  init_failure_reason))
     {
@@ -1056,8 +1150,8 @@ namespace ego_planner
              mode_str,
              solver_init_source.c_str(),
              active_guide_path.size(),
-             static_cast<long>(durations.size()),
-             corridor_hpolys.size());
+             corridor_hpolys.size(),
+             static_cast<long>(durations.size()));
 
     ploy_traj_opt_->setIfTouchGoal(task_definition.runtime_policy.touch_goal);
 
@@ -1079,6 +1173,37 @@ namespace ego_planner
     for (int i = 0; i < cstr_pts.cols(); ++i)
     {
       point_set.push_back(cstr_pts.col(i));
+    }
+    if (visualization_)
+    {
+      if (compiled_use_esdf)
+      {
+        if (!display_path.empty())
+        {
+          visualization_->displayGlobalPathList(display_path, 0.08, 1);
+        }
+        if (!active_guide_path.empty())
+        {
+          visualization_->displayFrontendList(active_guide_path, 0.10, 1);
+        }
+      }
+      else if (compiled_use_corridor)
+      {
+        if (!display_path.empty())
+        {
+          visualization_->displayGlobalPathList(display_path, 0.08, 0);
+        }
+        if (!active_guide_path.empty())
+        {
+          visualization_->displayFrontendList(active_guide_path, 0.12, 0);
+        }
+        if (!corridor_hpolys.empty())
+        {
+          std::vector<Eigen::Vector3d> tri, edges;
+          buildCorridorVisualization(corridor_hpolys, tri, edges);
+          visualization_->displayCorridor(tri, edges, 0);
+        }
+      }
     }
     if (visualization_)
     {
