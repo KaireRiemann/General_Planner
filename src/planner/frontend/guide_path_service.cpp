@@ -145,6 +145,11 @@ bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &
   }
 
   core::TaskSpec compat_task = task_definition.toTaskSpec();
+  if (!task_definition.space_model_policy.force_plain &&
+      task_definition.space_model_policy.preferred == core::SpaceModelPreference::CORRIDOR)
+  {
+    compat_task.prefer_corridor = true;
+  }
   return searchStateToStateDensePath(context, compat_task, path);
 }
 
@@ -176,6 +181,10 @@ bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &
 
   if (!search_ok)
   {
+    if (task.prefer_corridor && !task.force_plain)
+    {
+      return false;
+    }
     path.clear();
     path.push_back(safe_start);
     path.push_back(safe_goal);

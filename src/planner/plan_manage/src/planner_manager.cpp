@@ -529,8 +529,10 @@ namespace ego_planner
       spatial_map::PolyhedraH &corridor_hpolys,
       Eigen::VectorXi &corridor_piece_idx,
       std::vector<Eigen::Vector3d> &guide_path,
+      std::string &init_source,
       std::string &failure_reason)
   {
+    init_source = "stable_helper";
     failure_reason.clear();
     guide_path.clear();
     corridor_hpolys.clear();
@@ -566,6 +568,7 @@ namespace ego_planner
 
       if (corridor_set != nullptr && !corridor_set->corridor.empty())
       {
+        init_source = "compiled_hint";
         corridor_hpolys = corridor_set->corridor;
         if (corridor_set->corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()))
         {
@@ -590,6 +593,7 @@ namespace ego_planner
 
       if (!corridor_ready && problem.references.guide_path.size() >= 2)
       {
+        init_source = "mixed";
         guide_path = problem.references.guide_path;
         guide_path.front() = start_pt;
         guide_path.back() = safe_target_pt;
@@ -614,6 +618,10 @@ namespace ego_planner
                              ? "failed to build corridor guide/corridor from stable helper"
                              : last_corridor_failure_tag_;
         return false;
+      }
+      if (corridor_ready && init_source == "compiled_hint" && guide_path.size() < 2)
+      {
+        init_source = "mixed";
       }
 
       if (!buildCorridorAwareInitialGuess(start_pt,
@@ -709,6 +717,7 @@ namespace ego_planner
       Eigen::Vector3d safe_goal = safe_target_pt;
       if (problem.references.guide_path.size() >= 2)
       {
+        init_source = "compiled_hint";
         dense_path = problem.references.guide_path;
         dense_path.front() = start_pt;
         dense_path.back() = safe_goal;
@@ -791,6 +800,10 @@ namespace ego_planner
               durations = warm_durations;
               initTraj = mixed_init_traj;
               warm_start_used = true;
+              if (init_source == "compiled_hint")
+              {
+                init_source = "mixed";
+              }
             }
           }
         }
@@ -826,6 +839,7 @@ namespace ego_planner
       return false;
     }
 
+    init_source = "stable_helper";
     guide_path = problem.references.guide_path;
     if (guide_path.size() >= 2)
     {
@@ -984,6 +998,7 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     std::vector<Eigen::Vector3d> active_guide_path = problem.references.guide_path;
+    std::string solver_init_source;
     std::string init_failure_reason;
     if (!buildCompiledStateToStateInitialization(problem,
                                                  compiled_use_corridor,
@@ -996,6 +1011,7 @@ namespace ego_planner
                                                  corridor_hpolys,
                                                  corridor_piece_idx,
                                                  active_guide_path,
+                                                 solver_init_source,
                                                  init_failure_reason))
     {
       return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_failure_reason,
@@ -1032,8 +1048,13 @@ namespace ego_planner
       }
     }
 
-    ROS_INFO("[CompiledS2SInit] active_mode=%s guide_pts=%zu init_pieces=%ld corridor_polys=%zu",
+    ROS_INFO("[CompiledS2S] compiler_hint_guide_pts=%zu compiler_hint_corridor_sets=%d compiler_hint_seed_kind=%s",
+             problem.references.guide_path.size(),
+             corridor_set_count,
+             seedKindString(problem.seed.kind));
+    ROS_INFO("[CompiledS2SInit] active_mode=%s solver_init_source=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
              mode_str,
+             solver_init_source.c_str(),
              active_guide_path.size(),
              static_cast<long>(durations.size()),
              corridor_hpolys.size());

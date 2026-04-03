@@ -58,14 +58,44 @@ bool FeasibleSetBuilder::buildPlainFeasibleSets(const core::PlanningContext &con
                                                 const core::TaskDefinition &task_definition,
                                                 core::PlanningProblem &problem) const
 {
-  return ensureTransitGuidePath(context, task_definition, problem);
+  (void)context;
+  (void)task_definition;
+  (void)problem;
+  return true;
 }
 
 bool FeasibleSetBuilder::buildEsdfFeasibleSets(const core::PlanningContext &context,
                                                const core::TaskDefinition &task_definition,
                                                core::PlanningProblem &problem) const
 {
-  return ensureTransitGuidePath(context, task_definition, problem);
+  if (problem.references.guide_path.size() >= 2)
+  {
+    frontend::GuidePathArtifact guide_artifact;
+    guide_artifact.points = problem.references.guide_path;
+    if (problem.references.guide_times.size() == problem.references.guide_path.size())
+    {
+      guide_artifact.times = problem.references.guide_times;
+    }
+    else
+    {
+      guide_path_service_.buildFromWaypoints(problem.references.guide_path, guide_artifact);
+    }
+    if (guide_artifact.valid())
+    {
+      problem.references.guide_path = guide_artifact.points;
+      problem.references.guide_times = guide_artifact.times;
+    }
+    return true;
+  }
+
+  frontend::GuidePathArtifact guide_artifact;
+  if (guide_path_service_.buildStateToStateGuide(context, task_definition, guide_artifact) &&
+      guide_artifact.valid())
+  {
+    problem.references.guide_path = guide_artifact.points;
+    problem.references.guide_times = guide_artifact.times;
+  }
+  return true;
 }
 
 bool FeasibleSetBuilder::buildCorridorFeasibleSets(const core::PlanningContext &context,
@@ -74,7 +104,10 @@ bool FeasibleSetBuilder::buildCorridorFeasibleSets(const core::PlanningContext &
 {
   if (!ensureTransitGuidePath(context, task_definition, problem))
   {
-    return false;
+    problem.compile_message.clear();
+    problem.references.guide_path.clear();
+    problem.references.guide_times.clear();
+    return true;
   }
 
   frontend::GuidePathArtifact guide_artifact;
@@ -91,16 +124,14 @@ bool FeasibleSetBuilder::buildCorridorFeasibleSets(const core::PlanningContext &
   std::vector<Eigen::Vector3d> dense_path;
   if (!guide_path_service_.searchStateToStateDensePath(context, task_definition, dense_path))
   {
-    problem.compile_message = "failed to build corridor feasible set from sparse guide path, and dense guide search also failed";
-    return false;
+    return true;
   }
 
   frontend::GuidePathArtifact dense_artifact;
   if (!guide_path_service_.buildFromWaypoints(dense_path, dense_artifact) ||
       !corridor_service_.buildFromGuidePath(context, dense_artifact, corridor_set))
   {
-    problem.compile_message = "failed to build corridor feasible set from both sparse and dense guide paths";
-    return false;
+    return true;
   }
 
   // When sparse-path inflation fails, keep the dense path as the compiled corridor seed.

@@ -7,9 +7,7 @@ namespace
 {
 
 using ego_planner::core::ActiveSpaceModel;
-using ego_planner::core::FeasibleSetType;
 using ego_planner::core::PlanningProblem;
-using ego_planner::core::SeedSpec;
 using ego_planner::core::SpaceModelPreference;
 using ego_planner::core::TaskDefinition;
 using ego_planner::core::TaskType;
@@ -76,20 +74,6 @@ ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
   }
 }
 
-int countEnabledFeasibleSets(const PlanningProblem &problem,
-                             const FeasibleSetType type)
-{
-  int count = 0;
-  for (const auto &set : problem.feasible_sets)
-  {
-    if (set.enabled && set.type == type)
-    {
-      ++count;
-    }
-  }
-  return count;
-}
-
 bool validateCompiledProblem(PlanningProblem &problem)
 {
   if (problem.representation != ego_planner::core::RepresentationKind::MINCO)
@@ -111,34 +95,8 @@ bool validateCompiledProblem(PlanningProblem &problem)
   {
     return true;
   }
-
-  if (!problem.seed.valid)
-  {
-    if (problem.compile_message.empty())
-    {
-      problem.compile_message = "compiled state-to-state problem is missing a valid seed";
-    }
-    return false;
-  }
-
-  if (problem.active_space_model == ActiveSpaceModel::CORRIDOR)
-  {
-    if (problem.references.guide_path.size() < 2)
-    {
-      problem.compile_message = "corridor mode requires a guide path with at least 2 points";
-      return false;
-    }
-    if (countEnabledFeasibleSets(problem, FeasibleSetType::CORRIDOR_POLYTOPE) <= 0)
-    {
-      problem.compile_message = "corridor mode requires at least one enabled corridor feasible set";
-      return false;
-    }
-    if (!(problem.seed.corridor_aware || problem.seed.kind == SeedSpec::Kind::CORRIDOR_INIT))
-    {
-      problem.compile_message = "corridor mode requires a corridor-aware seed";
-      return false;
-    }
-  }
+  // For state-to-state, guide/corridor/seed are solver-owned initialization artifacts.
+  // The compiler only needs to provide valid semantics plus optional hints.
   return true;
 }
 

@@ -178,6 +178,7 @@ namespace ego_planner
                                                  spatial_map::PolyhedraH &corridor_hpolys,
                                                  Eigen::VectorXi &corridor_piece_idx,
                                                  std::vector<Eigen::Vector3d> &guide_path,
+                                                 std::string &init_source,
                                                  std::string &failure_reason);
 
     // Frontend / seed helpers that still back the legacy replan path.
