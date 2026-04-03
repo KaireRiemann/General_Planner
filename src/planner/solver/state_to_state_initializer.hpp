@@ -155,7 +155,8 @@ private:
                         Eigen::MatrixXd &outInnerPts,
                         Eigen::VectorXd &outDurations,
                         MINCOBoundaryState3D &headState,
-                        MINCOBoundaryState3D &tailState) const;
+                        MINCOBoundaryState3D &tailState,
+                        const core::PlanningContext *planning_context = nullptr) const;
   bool improveCorridorSeedByTimeScaling(const MINCOBoundaryState3D &head_state,
                                         const MINCOBoundaryState3D &tail_state,
                                         const Eigen::MatrixXd &inner_pts,

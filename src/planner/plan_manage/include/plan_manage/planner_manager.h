@@ -16,19 +16,19 @@
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
-#include <core/planning_context.hpp>
-#include <core/task_definition.hpp>
-#include <core/task_spec.hpp>
-#include <core/planning_solution.hpp>
-#include <compiler/problem_compiler.hpp>
-#include <optimization/backend_solver.hpp>
-#include <optimization/problem_adapter.hpp>
-#include <solver/state_to_state_initializer.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
 {
-  class EGOPlannerManager : public optimization::ProblemAdapter
+  namespace engine
+  {
+    class PlannerEngine;
+  }
+
+  // planner_manager is now a resource/module host.
+  // Unified task solving is owned by engine::PlannerEngine:
+  // TaskDefinition + PlanningContext -> ProblemCompiler -> PlanningProblem -> solveProblem -> PlanningSolution.
+  class EGOPlannerManager
   {
     // SECTION stable
   public:
@@ -42,31 +42,6 @@ namespace ego_planner
 
     bool corridorModeEnabled();
     bool esdfModeEnabled();
-
-    // This system is organized as:
-    // TaskDefinition + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.
-    // planner_manager owns modules and orchestrates solving, but task semantics should live upstream.
-    bool solveTask(const core::PlanningContext &context,
-                   const core::TaskDefinition &task_definition,
-                   core::PlanningSolution &solution);
-
-    // Unified solver-facing entry: callers that already compiled a PlanningProblem
-    // should solve it here rather than rebuilding task semantics in planner_manager.
-    bool solveProblem(const core::PlanningProblem &problem,
-                      core::PlanningSolution &solution);
-
-    bool solveTask(const core::PlanningContext &context,
-                   const core::TaskSpec &task,
-                   core::PlanningSolution &solution);
-
-    bool solveCompatibility(const core::PlanningProblem &problem,
-                            core::PlanningSolution &solution) override;
-    bool solveStateToStateCompiled(const core::PlanningProblem &problem,
-                                   core::PlanningSolution &solution) override;
-    bool solveTrackingLegacy(const core::PlanningProblem &problem,
-                             core::PlanningSolution &solution) override;
-    bool solvePerchingLegacy(const core::PlanningProblem &problem,
-                             core::PlanningSolution &solution) override;
 
     enum CorridorFailureType
     {
@@ -158,17 +133,6 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
-    // Orchestration bridge: state-to-state compiled solving should consume
-    // PlanningProblem directly, while the helpers below remain for legacy paths.
-    bool solveStateToStateLegacy(const core::TaskSpec &task,
-                                 core::PlanningSolution &solution);
-    bool solveTrackingLegacyTask(const core::TaskSpec &task,
-                                 core::PlanningSolution &solution);
-    bool solvePerchingLegacyTask(const core::TaskSpec &task,
-                                 core::PlanningSolution &solution);
-    bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
-                                          core::PlanningSolution &solution);
-
     // Frontend / seed helpers that still back the legacy replan path.
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
                              Eigen::Vector3d &safe_target) const;
@@ -300,10 +264,6 @@ namespace ego_planner
     mutable spatial_map::PolyhedraH active_tracking_corridor_;
     mutable bool have_active_tracking_semantic_guide_{false};
 
-    std::unique_ptr<compiler::ProblemCompiler> problem_compiler_;
-    std::unique_ptr<optimization::BackendSolver> backend_solver_;
-    std::unique_ptr<solver::StateToStateInitializer> state_to_state_initializer_;
-
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};
     std::string last_corridor_failure_tag_{"NONE"};
@@ -314,6 +274,7 @@ namespace ego_planner
     typedef std::unique_ptr<EGOPlannerManager> Ptr;
 
     // !SECTION
+    friend class engine::PlannerEngine;
   };
 } // namespace ego_planner
 

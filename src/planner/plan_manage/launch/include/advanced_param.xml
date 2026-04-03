@@ -73,6 +73,11 @@
         <param name="fsm/state2state_keep_lookahead" value="0.80" type="double"/>
         <param name="fsm/state2state_min_rest_time" value="0.80" type="double"/>
         <param name="fsm/state2state_replan_target_shift_thresh" value="0.60" type="double"/>
+        <param name="fsm/state2state_successor_lead_time" value="0.80" type="double"/>
+        <param name="fsm/state2state_successor_min_progress" value="0.55" type="double"/>
+        <param name="fsm/state2state_successor_target_shift_thresh" value="0.35" type="double"/>
+        <param name="fsm/state2state_successor_horizon_ratio" value="0.65" type="double"/>
+        <param name="fsm/state2state_successor_near_goal_hold_radius" value="0.50" type="double"/>
         <param name="fsm/state2state_space_model_preference" value="auto" type="str"/>
         <param name="fsm/use_tracking_task" value="$(arg use_tracking_task)" type="bool"/>
         <param name="fsm/tracking_reference_topic" value="$(arg tracking_reference_topic)" type="str"/>

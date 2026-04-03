@@ -40,6 +40,9 @@ struct PlanningContext
   Eigen::Vector3d global_goal{Eigen::Vector3d::Zero()};
   Eigen::Vector3d local_target{Eigen::Vector3d::Zero()};
   Eigen::Vector3d local_target_vel{Eigen::Vector3d::Zero()};
+  bool has_local_target_progress_preview{false};
+  double preview_glb_t_of_lc_tgt{0.0};
+  double preview_last_glb_t_of_lc_tgt{-1.0};
 
   double max_vel{1.0};
   double max_acc{1.0};

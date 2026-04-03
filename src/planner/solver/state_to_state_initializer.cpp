@@ -759,7 +759,8 @@ bool StateToStateInitializer::computeInitState(const Eigen::Vector3d &start_pt,
                                                Eigen::MatrixXd &outInnerPts,
                                                Eigen::VectorXd &outDurations,
                                                MINCOBoundaryState3D &headState,
-                                               MINCOBoundaryState3D &tailState) const
+                                               MINCOBoundaryState3D &tailState,
+                                               const core::PlanningContext *planning_context) const
 {
   if (resources_.traj_container == nullptr || resources_.plan_params == nullptr)
   {
@@ -828,7 +829,16 @@ bool StateToStateInitializer::computeInitState(const Eigen::Vector3d &start_pt,
   }
   else
   {
-    if (resources_.traj_container->global_traj.last_glb_t_of_lc_tgt < 0.0)
+    const double current_glb_t =
+        (planning_context != nullptr && planning_context->has_local_target_progress_preview)
+            ? planning_context->preview_glb_t_of_lc_tgt
+            : resources_.traj_container->global_traj.glb_t_of_lc_tgt;
+    const double previous_glb_t =
+        (planning_context != nullptr && planning_context->has_local_target_progress_preview)
+            ? planning_context->preview_last_glb_t_of_lc_tgt
+            : resources_.traj_container->global_traj.last_glb_t_of_lc_tgt;
+
+    if (previous_glb_t < 0.0)
     {
       return false;
     }
@@ -841,8 +851,7 @@ bool StateToStateInitializer::computeInitState(const Eigen::Vector3d &start_pt,
     }
 
     double t_to_lc_tgt = t_to_lc_end +
-                         (resources_.traj_container->global_traj.glb_t_of_lc_tgt -
-                          resources_.traj_container->global_traj.last_glb_t_of_lc_tgt);
+                         (current_glb_t - previous_glb_t);
     double dist = (start_pt - local_target_pt).norm();
     int piece_nums = std::ceil(dist / resources_.plan_params->polyTraj_piece_length);
     if (piece_nums < 2)
@@ -864,7 +873,7 @@ bool StateToStateInitializer::computeInitState(const Eigen::Vector3d &start_pt,
       else if (t <= t_to_lc_tgt)
       {
         double glb_t = t - t_to_lc_end +
-                       resources_.traj_container->global_traj.last_glb_t_of_lc_tgt -
+                       previous_glb_t -
                        resources_.traj_container->global_traj.global_start_time;
         innerPs.col(i) = resources_.traj_container->global_traj.traj.evaluate(glb_t, 0);
       }
@@ -958,7 +967,8 @@ bool StateToStateInitializer::initializePlain(const core::PlanningProblem &probl
                         result.inner_points,
                         result.durations,
                         result.head_state,
-                        result.tail_state))
+                        result.tail_state,
+                        &problem.context))
   {
     result.failure_reason = "failed to build plain initial trajectory with stable helper";
     return false;
@@ -1049,7 +1059,8 @@ bool StateToStateInitializer::initializeEsdf(const core::PlanningProblem &proble
                          warm_inner_pts,
                          warm_durations,
                          warm_head,
-                         warm_tail))
+                         warm_tail,
+                         &problem.context))
     {
       std::vector<Eigen::Vector3d> warm_anchors;
       if (warm_durations.size() > 0 &&
@@ -1177,7 +1188,8 @@ bool StateToStateInitializer::initializeCorridor(const core::PlanningProblem &pr
                            warm_inner_pts,
                            warm_durations,
                            warm_head,
-                           warm_tail) &&
+                           warm_tail,
+                           &problem.context) &&
           applyWarmStartTimingProfile(warm_durations, candidate_durations))
       {
         warm_timing_used = true;

@@ -27,7 +27,9 @@
 #include <core/planning_context.hpp>
 #include <core/planning_solution.hpp>
 #include <tasks/task_factory.hpp>
+#include <engine/planner_engine.hpp>
 #include <runtime/context_builder.hpp>
+#include <runtime/local_target_selector.hpp>
 #include <runtime/task_executor.hpp>
 #include <runtime/plan_monitor.hpp>
 #include <runtime/replan_trigger.hpp>
@@ -69,13 +71,23 @@ namespace ego_planner
       PRESET_TARGET = 2,
       REFENCE_PATH = 3
     };
+    enum class StateToStateRuntimeDecision
+    {
+      KEEP_EXECUTING = 0,
+      PREPARE_SUCCESSOR,
+      REPLAN_IMMEDIATE,
+      ARRIVED_AND_HOLD,
+      EMERGENCY_STOP
+    };
 
     /* planning utils */
     EGOPlannerManager::Ptr planner_manager_;
     PlanningVisualization::Ptr visualization_;
     traj_utils::DataDisp data_disp_;
     std::unique_ptr<runtime::ContextBuilder> context_builder_;
+    std::unique_ptr<engine::PlannerEngine> planner_engine_;
     std::unique_ptr<runtime::TaskExecutor> task_executor_;
+    std::unique_ptr<runtime::LocalTargetSelector> local_target_selector_;
     std::unique_ptr<runtime::PlanMonitor> plan_monitor_;
     std::unique_ptr<runtime::ReplanTrigger> replan_trigger_;
 
@@ -93,6 +105,11 @@ namespace ego_planner
     double state2state_keep_lookahead_{0.8};
     double state2state_min_rest_time_{0.8};
     double state2state_replan_target_shift_thresh_{0.6};
+    double state2state_successor_lead_time_{0.8};
+    double state2state_successor_min_progress_{0.55};
+    double state2state_successor_target_shift_thresh_{0.35};
+    double state2state_successor_horizon_ratio_{0.65};
+    double state2state_successor_near_goal_hold_radius_{0.5};
     std::string state2state_space_model_preference_{"auto"};
     bool use_tracking_task_{false};
     std::string tracking_reference_topic_{"/tracking/reference"};
@@ -132,6 +149,7 @@ namespace ego_planner
     Eigen::Vector3d tracking_target_odom_pos_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d tracking_target_odom_vel_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_local_target_pt_{Eigen::Vector3d::Zero()};
+    double planned_local_target_glb_t_{-1.0};
     Eigen::Vector3d planned_final_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
@@ -181,6 +199,12 @@ namespace ego_planner
     bool stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
                                         double t_cur,
                                         std::string *reason = nullptr);
+    bool shouldPrepareStateToStateSuccessor(const LocalTrajData *info,
+                                            double t_cur,
+                                            std::string *reason = nullptr);
+    StateToStateRuntimeDecision evaluateStateToStateDecision(const LocalTrajData *info,
+                                                             double t_cur,
+                                                             std::string *reason = nullptr);
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);

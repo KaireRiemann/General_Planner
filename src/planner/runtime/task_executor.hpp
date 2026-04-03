@@ -7,7 +7,10 @@
 
 namespace ego_planner
 {
-class EGOPlannerManager;
+namespace engine
+{
+class PlannerEngine;
+}
 }
 
 namespace ego_planner::runtime
@@ -16,16 +19,16 @@ namespace ego_planner::runtime
 class TaskExecutor
 {
 public:
-  // Runtime owns execution timing and delegates semantics/problem building upstream.
-  explicit TaskExecutor(EGOPlannerManager *planner_manager)
-      : planner_manager_(planner_manager) {}
+  // Runtime owns execution timing and delegates task solving to PlannerEngine.
+  explicit TaskExecutor(engine::PlannerEngine *planner_engine)
+      : planner_engine_(planner_engine) {}
 
   bool execute(const core::PlanningContext &context,
                const core::TaskDefinition &task_definition,
                core::PlanningSolution &solution);
 
 private:
-  EGOPlannerManager *planner_manager_{nullptr};
+  engine::PlannerEngine *planner_engine_{nullptr};
 };
 
 } // namespace ego_planner::runtime
