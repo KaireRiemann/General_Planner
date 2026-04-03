@@ -60,7 +60,9 @@ core::TaskDefinition TaskFactory::makeTrackingDefinition(const cost_functional::
                                                          const Eigen::Vector3d &start_acc,
                                                          bool flag_poly_init,
                                                          bool flag_random_poly_traj,
-                                                         bool force_plain)
+                                                         bool force_plain,
+                                                         bool prefer_corridor,
+                                                         bool prefer_esdf)
 {
   return TrackingTask::buildDefinition(reference,
                                        start_pt,
@@ -68,7 +70,9 @@ core::TaskDefinition TaskFactory::makeTrackingDefinition(const cost_functional::
                                        start_acc,
                                        flag_poly_init,
                                        flag_random_poly_traj,
-                                       force_plain);
+                                       force_plain,
+                                       prefer_corridor,
+                                       prefer_esdf);
 }
 
 core::TaskSpec TaskFactory::makeTrackingTask(const cost_functional::TrackingReference &reference,
@@ -77,7 +81,9 @@ core::TaskSpec TaskFactory::makeTrackingTask(const cost_functional::TrackingRefe
                                              const Eigen::Vector3d &start_acc,
                                              bool flag_poly_init,
                                              bool flag_random_poly_traj,
-                                             bool force_plain)
+                                             bool force_plain,
+                                             bool prefer_corridor,
+                                             bool prefer_esdf)
 {
   return makeTrackingDefinition(reference,
                                 start_pt,
@@ -85,7 +91,9 @@ core::TaskSpec TaskFactory::makeTrackingTask(const cost_functional::TrackingRefe
                                 start_acc,
                                 flag_poly_init,
                                 flag_random_poly_traj,
-                                force_plain)
+                                force_plain,
+                                prefer_corridor,
+                                prefer_esdf)
       .toTaskSpec();
 }
 

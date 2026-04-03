@@ -1,6 +1,7 @@
 #include <engine/planner_engine.hpp>
 
 #include <plan_manage/planner_manager.h>
+#include <plan_manage/tracking_yaw_planner.hpp>
 #include <SFCGenerator/geo_utils.hpp>
 #include <SFCGenerator/quickhull.hpp>
 
@@ -850,10 +851,229 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   return flag_success;
 }
 
+bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &problem,
+                                                 core::PlanningSolution &solution)
+{
+  if (planner_manager_ == nullptr)
+  {
+    solution.success = false;
+    solution.message = "null planner manager";
+    return false;
+  }
+
+  if (problem.representation != core::RepresentationKind::MINCO ||
+      !problem.start_boundary.valid ||
+      !problem.terminal_boundary.valid)
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled tracking problem has invalid MINCO boundaries";
+    if (problem.prefer_legacy_fallback)
+    {
+      return solveTrackingLegacyTask(problem.task, solution);
+    }
+    return false;
+  }
+
+  ::cost_functional::TrackingReference tracking_ref_raw;
+  if (problem.references.has_tracking_reference &&
+      problem.references.tracking_reference.valid())
+  {
+    tracking_ref_raw = problem.references.tracking_reference;
+  }
+  else if (problem.task.tracking_reference.valid())
+  {
+    tracking_ref_raw = problem.task.tracking_reference;
+  }
+  else
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled tracking solve missing valid tracking reference";
+    if (problem.prefer_legacy_fallback)
+    {
+      return solveTrackingLegacyTask(problem.task, solution);
+    }
+    return false;
+  }
+
+  ::cost_functional::TrackingReference tracking_ref;
+  std::string tracking_ref_reason;
+  if (!::cost_functional::normalizeTrackingReference(tracking_ref_raw,
+                                                     tracking_ref,
+                                                     &tracking_ref_reason))
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled tracking reference normalization failed: " + tracking_ref_reason;
+    if (problem.prefer_legacy_fallback)
+    {
+      return solveTrackingLegacyTask(problem.task, solution);
+    }
+    return false;
+  }
+
+  const char *active_mode = activeSpaceModelString(problem.active_space_model);
+  ROS_INFO("[CompiledTracking] active_mode=%s target_ref=%zu view_ref=%zu compiler_hint_guide=%zu seed_kind=%s",
+           active_mode,
+           tracking_ref.t_ref.size(),
+           tracking_ref.t_view_ref.size(),
+           problem.references.guide_path.size(),
+           seedKindString(problem.seed.kind));
+
+  state_to_state_initializer_.setResources(makeStateToStateInitResources());
+  solver::StateToStateInitializationResult init_result;
+  if (!state_to_state_initializer_.initialize(problem, init_result))
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled tracking initialization failed: " + init_result.failure_reason;
+    if (problem.prefer_legacy_fallback)
+    {
+      return solveTrackingLegacyTask(problem.task, solution);
+    }
+    return false;
+  }
+
+  ROS_INFO("[CompiledTrackingInit] active_mode=%s init_source=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
+           active_mode,
+           init_result.init_source.c_str(),
+           init_result.guide_path.size(),
+           init_result.corridor_hpolys.size(),
+           static_cast<long>(init_result.durations.size()));
+
+  planner_manager_->ploy_traj_opt_->setIfTouchGoal(false);
+
+  if (planner_manager_->visualization_)
+  {
+    const std::vector<Eigen::Vector3d> &display_path =
+        init_result.dense_path.empty() ? init_result.guide_path : init_result.dense_path;
+    if (!display_path.empty())
+    {
+      planner_manager_->visualization_->displayGlobalPathList(display_path, 0.08, 3);
+    }
+    if (!init_result.guide_path.empty())
+    {
+      planner_manager_->visualization_->displayFrontendList(init_result.guide_path, 0.10, 3);
+    }
+    if (!init_result.corridor_hpolys.empty())
+    {
+      std::vector<Eigen::Vector3d> tri, edges;
+      buildCorridorVisualization(init_result.corridor_hpolys, tri, edges);
+      planner_manager_->visualization_->displayCorridor(tri, edges, 3);
+    }
+    const Eigen::MatrixXd init_display =
+        init_result.init_traj.getInitConstraintPoints(planner_manager_->ploy_traj_opt_->get_cps_num_prePiece_());
+    std::vector<Eigen::Vector3d> init_pts;
+    init_pts.reserve(static_cast<std::size_t>(std::max<Eigen::Index>(0, init_display.cols())));
+    for (int i = 0; i < init_display.cols(); ++i)
+    {
+      init_pts.push_back(init_display.col(i));
+    }
+    if (!init_pts.empty())
+    {
+      planner_manager_->visualization_->displayInitPathList(init_pts, 0.16, 3);
+    }
+  }
+
+  bool ok = false;
+  double final_cost = 0.0;
+  switch (problem.active_space_model)
+  {
+  case core::ActiveSpaceModel::CORRIDOR:
+    if (init_result.corridor_hpolys.empty())
+    {
+      solution.success = false;
+      solution.used_legacy_adapter = false;
+      solution.message = "compiled tracking corridor mode missing corridor geometry";
+      return false;
+    }
+    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectory(
+        init_result.head_state,
+        init_result.tail_state,
+        init_result.inner_points,
+        init_result.durations,
+        init_result.corridor_hpolys,
+        &init_result.corridor_piece_idx,
+        tracking_ref,
+        final_cost);
+    break;
+  case core::ActiveSpaceModel::ESDF:
+    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectoryWithDistanceField(
+        init_result.head_state,
+        init_result.tail_state,
+        init_result.inner_points,
+        init_result.durations,
+        tracking_ref,
+        nullptr,
+        final_cost);
+    break;
+  case core::ActiveSpaceModel::VISIBLE_REGION:
+  case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
+  case core::ActiveSpaceModel::PLAIN:
+  default:
+    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectory(
+        init_result.head_state,
+        init_result.tail_state,
+        init_result.inner_points,
+        init_result.durations,
+        tracking_ref,
+        nullptr,
+        final_cost);
+    break;
+  }
+
+  solution.success = ok;
+  solution.used_legacy_adapter = false;
+  solution.touch_goal = false;
+  solution.message = ok
+                         ? std::string("compiled tracking solve success; active_mode=") + active_mode
+                         : std::string("compiled tracking solve failed after optimizer; active_mode=") + active_mode;
+  if (!ok)
+  {
+    return false;
+  }
+
+  const MINCOTraj3D opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+  planner_manager_->setLocalTrajFromOpt(opt_traj, false);
+  planner_manager_->have_active_tracking_semantic_guide_ = false;
+  planner_manager_->active_tracking_semantic_guide_.clear();
+  planner_manager_->active_tracking_corridor_.clear();
+
+  const double yaw0 =
+      (problem.start_boundary.velocity.head<2>().norm() > 1.0e-3)
+          ? std::atan2(problem.start_boundary.velocity.y(), problem.start_boundary.velocity.x())
+          : 0.0;
+  auto yaw_plan = TrackingYawPlanner::planFacingTarget(opt_traj,
+                                                       tracking_ref,
+                                                       0.05,
+                                                       1.2,
+                                                       yaw0);
+  planner_manager_->traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
+
+  solution.trajectory = planner_manager_->traj_.local_traj.traj;
+  solution.has_yaw_ref = planner_manager_->traj_.local_traj.has_yaw_ref;
+  solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
+  solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
+
+  if (planner_manager_->visualization_)
+  {
+    const Eigen::MatrixXd opt_display = sampleTrajectoryForDisplay(opt_traj, 0.02);
+    planner_manager_->visualization_->displayOptimalList(opt_display, 3);
+  }
+  return true;
+}
+
 bool PlannerEngine::solveStateToStateCompiled(const core::PlanningProblem &problem,
                                               core::PlanningSolution &solution)
 {
   return solveStateToStateCompiledProblem(problem, solution);
+}
+
+bool PlannerEngine::solveTrackingCompiled(const core::PlanningProblem &problem,
+                                          core::PlanningSolution &solution)
+{
+  return solveTrackingCompiledProblem(problem, solution);
 }
 
 bool PlannerEngine::solveTrackingLegacy(const core::PlanningProblem &problem,

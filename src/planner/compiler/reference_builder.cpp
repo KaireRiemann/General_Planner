@@ -38,17 +38,25 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
     else if (reference.semantic == core::ReferenceSemanticType::TRACKING_TRAJECTORY &&
              reference.tracking_reference.valid())
     {
+      problem.references.has_tracking_reference = true;
+      problem.references.tracking_reference = reference.tracking_reference;
       problem.references.t_ref = reference.tracking_reference.t_ref;
       problem.references.p_ref = reference.tracking_reference.p_ref;
       problem.references.v_ref = reference.tracking_reference.v_ref;
-      if (!problem.terminal_boundary.valid && !reference.tracking_reference.p_ref.empty())
+
+      if (problem.references.guide_path.empty() && reference.tracking_reference.viewValid())
+      {
+        problem.references.guide_path = reference.tracking_reference.p_view_ref;
+        problem.references.guide_times = reference.tracking_reference.t_view_ref;
+      }
+
+      Eigen::Vector3d p_term = Eigen::Vector3d::Zero();
+      Eigen::Vector3d v_term = Eigen::Vector3d::Zero();
+      if (cost_functional::sampleTrackingTerminalReference(reference.tracking_reference, p_term, v_term))
       {
         problem.terminal_boundary.valid = true;
-        problem.terminal_boundary.position = reference.tracking_reference.p_ref.back();
-        if (!reference.tracking_reference.v_ref.empty())
-        {
-          problem.terminal_boundary.velocity = reference.tracking_reference.v_ref.back();
-        }
+        problem.terminal_boundary.position = p_term;
+        problem.terminal_boundary.velocity = v_term;
       }
     }
   }

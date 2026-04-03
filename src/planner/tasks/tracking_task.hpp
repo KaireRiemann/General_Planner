@@ -15,7 +15,9 @@ public:
                                               const Eigen::Vector3d &start_acc,
                                               bool flag_poly_init,
                                               bool flag_random_poly_traj,
-                                              bool force_plain);
+                                              bool force_plain,
+                                              bool prefer_corridor,
+                                              bool prefer_esdf);
 
   static core::TaskSpec build(const cost_functional::TrackingReference &reference,
                               const Eigen::Vector3d &start_pt,
@@ -23,7 +25,9 @@ public:
                               const Eigen::Vector3d &start_acc,
                               bool flag_poly_init,
                               bool flag_random_poly_traj,
-                              bool force_plain);
+                              bool force_plain,
+                              bool prefer_corridor,
+                              bool prefer_esdf);
 };
 
 } // namespace ego_planner::tasks

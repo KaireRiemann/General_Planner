@@ -39,6 +39,8 @@ public:
                           core::PlanningSolution &solution) override;
   bool solveStateToStateCompiled(const core::PlanningProblem &problem,
                                  core::PlanningSolution &solution) override;
+  bool solveTrackingCompiled(const core::PlanningProblem &problem,
+                             core::PlanningSolution &solution) override;
   bool solveTrackingLegacy(const core::PlanningProblem &problem,
                            core::PlanningSolution &solution) override;
   bool solvePerchingLegacy(const core::PlanningProblem &problem,
@@ -53,6 +55,8 @@ private:
                                core::PlanningSolution &solution);
   bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
                                         core::PlanningSolution &solution);
+  bool solveTrackingCompiledProblem(const core::PlanningProblem &problem,
+                                    core::PlanningSolution &solution);
   solver::StateToStateInitResources makeStateToStateInitResources() const;
 
 private:

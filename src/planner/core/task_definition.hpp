@@ -185,9 +185,22 @@ struct TaskDefinition
     switch (task.type)
     {
     case TaskType::TRACKING:
-      definition.space_model_policy.preferred =
-          task.force_plain ? SpaceModelPreference::PLAIN
-                           : SpaceModelPreference::VISIBLE_REGION;
+      if (task.force_plain)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::PLAIN;
+      }
+      else if (task.prefer_corridor)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::CORRIDOR;
+      }
+      else if (task.prefer_esdf)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::ESDF;
+      }
+      else
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::AUTO;
+      }
       break;
     case TaskType::PERCHING:
       definition.space_model_policy.preferred =

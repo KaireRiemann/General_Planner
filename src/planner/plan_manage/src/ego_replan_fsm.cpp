@@ -23,6 +23,10 @@ namespace ego_planner
     nh.param("fsm/fail_safe", enable_fail_safe_, true);
     nh.param("fsm/ground_height_measurement", enable_ground_height_measurement_, false);
     nh.param("fsm/min_replan_interval", min_replan_interval_, 0.15);
+    nh.param("fsm/safety_replan_min_interval", safety_replan_min_interval_, 0.20);
+    nh.param("fsm/safety_replan_emergency_bypass_time", safety_replan_emergency_bypass_time_, 0.10);
+    nh.param("fsm/esdf_runtime_collision_hysteresis", esdf_runtime_collision_hysteresis_, 0.03);
+    nh.param("fsm/esdf_runtime_unsafe_consecutive_samples", esdf_runtime_unsafe_consecutive_samples_, 2);
     nh.param("fsm/corridor_fail_cooldown", corridor_fail_cooldown_, 0.25);
     nh.param("fsm/near_goal_replan_radius", near_goal_replan_radius_, 0.8);
     nh.param("fsm/corridor_check_margin", corridor_check_margin_, 0.05);
@@ -46,6 +50,7 @@ namespace ego_planner
     nh.param("fsm/tracking_prediction_horizon", tracking_prediction_horizon_, 4.0);
     nh.param("fsm/tracking_prediction_dt", tracking_prediction_dt_, 0.2);
     nh.param("fsm/tracking_prediction_max_speed", tracking_prediction_max_speed_, 2.0);
+    nh.param("fsm/tracking_anchor_side_angle_deg", tracking_anchor_side_angle_deg_, 20.0);
     nh.param("fsm/tracking_relay_goal", tracking_relay_goal_, true);
     nh.param("fsm/tracking_target_goal_topic", tracking_target_goal_topic_, std::string("/tracking/target_goal"));
     nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
@@ -65,6 +70,7 @@ namespace ego_planner
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
+    tracking_anchor_side_angle_deg_ = std::max(0.0, tracking_anchor_side_angle_deg_);
     state2state_keep_lookahead_ = std::max(0.2, state2state_keep_lookahead_);
     state2state_min_rest_time_ = std::max(0.1, state2state_min_rest_time_);
     state2state_replan_target_shift_thresh_ = std::max(0.05, state2state_replan_target_shift_thresh_);
@@ -73,6 +79,10 @@ namespace ego_planner
     state2state_successor_target_shift_thresh_ = std::max(0.05, state2state_successor_target_shift_thresh_);
     state2state_successor_horizon_ratio_ = std::max(0.1, std::min(0.95, state2state_successor_horizon_ratio_));
     state2state_successor_near_goal_hold_radius_ = std::max(0.1, state2state_successor_near_goal_hold_radius_);
+    safety_replan_min_interval_ = std::max(0.05, safety_replan_min_interval_);
+    safety_replan_emergency_bypass_time_ = std::max(0.02, safety_replan_emergency_bypass_time_);
+    esdf_runtime_collision_hysteresis_ = std::max(0.0, esdf_runtime_collision_hysteresis_);
+    esdf_runtime_unsafe_consecutive_samples_ = std::max(1, esdf_runtime_unsafe_consecutive_samples_);
     std::transform(state2state_space_model_preference_.begin(),
                    state2state_space_model_preference_.end(),
                    state2state_space_model_preference_.begin(),
@@ -111,6 +121,14 @@ namespace ego_planner
     local_target_selector_.reset(new runtime::LocalTargetSelector());
     plan_monitor_.reset(new runtime::PlanMonitor());
     replan_trigger_.reset(new runtime::ReplanTrigger());
+    tracking_reference_provider_.reset(new runtime::TrackingReferenceProvider());
+    tracking_reference_provider_->configure(tracking_prediction_horizon_,
+                                            tracking_prediction_dt_,
+                                            tracking_prediction_max_speed_);
+    tracking_anchor_selector_.reset(new runtime::TrackingAnchorSelector());
+    tracking_anchor_selector_->configure(tracking_distance_min_,
+                                         tracking_distance_max_,
+                                         tracking_anchor_side_angle_deg_);
 
     have_trigger_ = use_tracking_task_ ? true : !flag_realworld_experiment_;
     no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
@@ -453,7 +471,8 @@ namespace ego_planner
     
     const double t_cur = ros::Time::now().toSec() - info->start_time;
 
-    if (exec_state_ == WAIT_TARGET || info->traj_id <= 0) return;
+    if (exec_state_ != EXEC_TRAJ || info->traj_id <= 0) return;
+    if (!map) return;
 
     if (map->getOdomDepthTimeout())
     {
@@ -471,15 +490,73 @@ namespace ego_planner
 
     constexpr double t_step = 0.05;
     bool trajectory_leaves_corridor = false;
+    int marginal_esdf_unsafe_streak = 0;
+    const bool use_esdf_runtime =
+        planner_manager_ &&
+        planner_manager_->esdfModeEnabled() &&
+        map->esdfEnabled();
+    const double esdf_runtime_tol = runtimeCollisionTol(map);
+
+    const auto allowByMinInterval =
+        [&](double now) -> bool
+    {
+      if (replan_trigger_)
+      {
+        if (!replan_trigger_->allowReplan(now, last_replan_time_, min_replan_interval_))
+        {
+          return false;
+        }
+      }
+      else if ((last_replan_time_ >= 0.0) &&
+               (now - last_replan_time_ <= min_replan_interval_))
+      {
+        return false;
+      }
+
+      if ((last_safety_replan_attempt_time_ >= 0.0) &&
+          (now - last_safety_replan_attempt_time_ <= safety_replan_min_interval_))
+      {
+        return false;
+      }
+      return true;
+    };
 
     for (double t = t_cur; t < t_end; t += t_step)
     {
       Eigen::Vector3d pt =info->traj.getPos(t);
       bool dangerous = false;
 
-      if (map->getInflateOccupancy(pt)) 
+      double sdf_at_pt = 0.0;
+      if (runtimePointUnsafe(map, pt, &sdf_at_pt))
       {
+        bool treat_as_dangerous = true;
+        if (use_esdf_runtime &&
+            std::isfinite(sdf_at_pt) &&
+            sdf_at_pt >= esdf_runtime_tol - esdf_runtime_collision_hysteresis_)
+        {
+          marginal_esdf_unsafe_streak++;
+          treat_as_dangerous =
+              marginal_esdf_unsafe_streak >= esdf_runtime_unsafe_consecutive_samples_;
+        }
+        else
+        {
+          marginal_esdf_unsafe_streak = esdf_runtime_unsafe_consecutive_samples_;
+        }
+
+        if (treat_as_dangerous)
+        {
           dangerous = true;
+          ROS_WARN_THROTTLE(0.8,
+                            "[SAFETY] runtime unsafe sample: t=%.3f sdf=%.3f tol=%.3f streak=%d",
+                            t,
+                            sdf_at_pt,
+                            esdf_runtime_tol,
+                            marginal_esdf_unsafe_streak);
+        }
+      }
+      else
+      {
+        marginal_esdf_unsafe_streak = 0;
       }
 
   
@@ -515,6 +592,23 @@ namespace ego_planner
 
       if (dangerous)
       {
+        const double now = ros::Time::now().toSec();
+        const double time_to_collision = std::max(0.0, t - t_cur);
+        const bool emergency_bypass =
+            time_to_collision <= safety_replan_emergency_bypass_time_;
+        const bool replan_allowed = allowByMinInterval(now);
+
+        if (!emergency_bypass && !replan_allowed)
+        {
+          ROS_WARN_THROTTLE(0.8,
+                            "[SAFETY] collision predicted in %.3fs but replan is throttled (min_interval=%.2f, safety_interval=%.2f).",
+                            time_to_collision,
+                            min_replan_interval_,
+                            safety_replan_min_interval_);
+          return;
+        }
+
+        last_safety_replan_attempt_time_ = now;
         if (planFromLocalTraj(1)) 
         {
           ROS_INFO("Plan success when detect collision at future t=%f", t);
@@ -522,9 +616,9 @@ namespace ego_planner
         }
         else
         {
-          if (t - t_cur < emergency_time_) 
+          if (time_to_collision < emergency_time_) 
           {
-            ROS_WARN("Emergency stop! Crash in %f seconds", t - t_cur);
+            ROS_WARN("Emergency stop! Crash in %f seconds", time_to_collision);
             changeFSMExecState(EMERGENCY_STOP, "SAFETY");
           }
           else
@@ -540,11 +634,11 @@ namespace ego_planner
     if (trajectory_leaves_corridor)
     {
       const double now = ros::Time::now().toSec();
-      const bool replan_allowed =
-          (last_replan_time_ < 0.0) || (now - last_replan_time_ > min_replan_interval_);
+      const bool replan_allowed = allowByMinInterval(now);
 
       if (replan_allowed && exec_state_ == EXEC_TRAJ)
       {
+        last_safety_replan_attempt_time_ = now;
         ROS_WARN("Trajectory leaves corridor, trigger replan.");
         changeFSMExecState(REPLAN_TRAJ, "CORRIDOR_CHECK");
       }
@@ -579,19 +673,105 @@ namespace ego_planner
     {
       return false;
     }
+    if (!planner_manager_->grid_map_)
+    {
+      return true;
+    }
 
     const double t_end = std::min(info->duration, t_cur + std::max(lookahead_time, 0.3));
+    const bool use_esdf_runtime =
+        planner_manager_ &&
+        planner_manager_->esdfModeEnabled() &&
+        planner_manager_->grid_map_->esdfEnabled();
+    const double esdf_runtime_tol = runtimeCollisionTol(planner_manager_->grid_map_);
+    int marginal_esdf_unsafe_streak = 0;
     for (double t = t_cur; t <= t_end + 1.0e-6; t += 0.05)
     {
       const double sample_t = std::min(t, info->duration);
       const Eigen::Vector3d pt = info->traj.getPos(sample_t);
-      if (planner_manager_->grid_map_->getInflateOccupancy(pt))
+      double sdf_at_pt = 0.0;
+      if (runtimePointUnsafe(planner_manager_->grid_map_, pt, &sdf_at_pt))
       {
-        return false;
+        bool treat_as_unsafe = true;
+        if (use_esdf_runtime &&
+            std::isfinite(sdf_at_pt) &&
+            sdf_at_pt >= esdf_runtime_tol - esdf_runtime_collision_hysteresis_)
+        {
+          marginal_esdf_unsafe_streak++;
+          treat_as_unsafe =
+              marginal_esdf_unsafe_streak >= esdf_runtime_unsafe_consecutive_samples_;
+        }
+        else
+        {
+          marginal_esdf_unsafe_streak = esdf_runtime_unsafe_consecutive_samples_;
+        }
+
+        if (treat_as_unsafe)
+        {
+          ROS_DEBUG_THROTTLE(0.8,
+                             "[FSM] currentTrajStillUsable unsafe: t=%.3f sdf=%.3f tol=%.3f streak=%d",
+                             sample_t,
+                             sdf_at_pt,
+                             esdf_runtime_tol,
+                             marginal_esdf_unsafe_streak);
+          return false;
+        }
+      }
+      else
+      {
+        marginal_esdf_unsafe_streak = 0;
       }
     }
 
     return true;
+  }
+
+  double EGOReplanFSM::runtimeCollisionTol(const GridMap::Ptr &map) const
+  {
+    if (!map)
+    {
+      return 0.0;
+    }
+    return -std::max(0.10, 0.5 * map->getResolution());
+  }
+
+  bool EGOReplanFSM::runtimePointUnsafe(const GridMap::Ptr &map,
+                                        const Eigen::Vector3d &pt,
+                                        double *signed_distance) const
+  {
+    if (!map)
+    {
+      if (signed_distance != nullptr)
+      {
+        *signed_distance = 0.0;
+      }
+      return false;
+    }
+
+    const bool use_esdf_runtime =
+        planner_manager_ &&
+        planner_manager_->esdfModeEnabled() &&
+        map->esdfEnabled();
+
+    if (use_esdf_runtime)
+    {
+      const double sdf = map->getDistance(pt);
+      if (signed_distance != nullptr)
+      {
+        *signed_distance = sdf;
+      }
+      if (!std::isfinite(sdf))
+      {
+        return true;
+      }
+      return sdf < runtimeCollisionTol(map);
+    }
+
+    if (signed_distance != nullptr)
+    {
+      *signed_distance = map->getDistance(pt);
+    }
+    return map->getInflateOccupancy(pt) != 0;
   }
 
   bool EGOReplanFSM::stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
@@ -867,6 +1047,7 @@ namespace ego_planner
   {
     have_planned_local_target_ = false;
     have_planned_final_goal_ = false;
+    last_safety_replan_attempt_time_ = -1.0;
     planned_local_target_pt_.setZero();
     planned_local_target_glb_t_ = -1.0;
     planned_final_goal_.setZero();
@@ -887,12 +1068,49 @@ namespace ego_planner
         use_tracking_task_ &&
         have_tracking_ref_ &&
         tracking_reference_.valid();
+    cost_functional::TrackingReference planning_tracking_reference;
+    Eigen::Vector3d tracking_anchor = local_target_pt_;
+    Eigen::Vector3d tracking_anchor_vel = local_target_vel_;
     runtime::LocalTargetSelection target_selection;
 
     if (tracking_active)
     {
-      local_target_pt_ = tracking_target_pos_now_;
-      local_target_vel_ = tracking_target_vel_now_;
+      if (tracking_reference_provider_ &&
+          !tracking_reference_provider_->normalize(tracking_reference_, planning_tracking_reference))
+      {
+        ROS_WARN("[FSM] tracking reference provider normalize failed, fallback to raw reference.");
+        planning_tracking_reference = tracking_reference_;
+      }
+      else if (!tracking_reference_provider_)
+      {
+        planning_tracking_reference = tracking_reference_;
+      }
+
+      bool anchor_ok = false;
+      if (tracking_anchor_selector_)
+      {
+        anchor_ok = tracking_anchor_selector_->buildAnchorReference(planning_tracking_reference,
+                                                                    start_pt_,
+                                                                    start_vel_,
+                                                                    planning_tracking_reference,
+                                                                    tracking_anchor,
+                                                                    tracking_anchor_vel);
+      }
+      if (!anchor_ok)
+      {
+        Eigen::Vector3d p_term = Eigen::Vector3d::Zero();
+        Eigen::Vector3d v_term = Eigen::Vector3d::Zero();
+        if (!cost_functional::sampleTrackingTerminalReference(planning_tracking_reference, p_term, v_term))
+        {
+          ROS_WARN("[FSM] tracking anchor selector failed and terminal fallback unavailable.");
+          return false;
+        }
+        tracking_anchor = p_term;
+        tracking_anchor_vel = v_term;
+      }
+
+      local_target_pt_ = tracking_anchor;
+      local_target_vel_ = tracking_anchor_vel;
       touch_goal_ = false;
     }
     else
@@ -918,6 +1136,12 @@ namespace ego_planner
             local_target_pt_, local_target_vel_,
             touch_goal_);
       }
+    }
+
+    if (tracking_active && !planning_tracking_reference.valid())
+    {
+      ROS_WARN("[FSM] tracking planning aborted: invalid planning tracking reference.");
+      return false;
     }
 
     const bool force_plain = shouldForcePlainReplan();
@@ -963,57 +1187,67 @@ namespace ego_planner
     bool task_force_plain = force_plain;
     bool task_prefer_corridor = false;
     bool task_prefer_esdf = false;
-    std::string resolved_state2state_pref = "plain";
-    if (!tracking_active)
+    std::string resolved_space_pref = "plain";
+    if (task_force_plain || state2state_space_model_preference_ == "plain")
     {
-      if (task_force_plain || state2state_space_model_preference_ == "plain")
-      {
-        task_force_plain = true;
-        resolved_state2state_pref = "plain";
-      }
-      else if (state2state_space_model_preference_ == "corridor")
+      task_force_plain = true;
+      resolved_space_pref = "plain";
+    }
+    else if (state2state_space_model_preference_ == "corridor")
+    {
+      task_prefer_corridor = true;
+      resolved_space_pref = "corridor";
+    }
+    else if (state2state_space_model_preference_ == "esdf")
+    {
+      task_prefer_esdf = true;
+      resolved_space_pref = "esdf";
+    }
+    else
+    {
+      if (planner_manager_->corridorModeEnabled())
       {
         task_prefer_corridor = true;
-        resolved_state2state_pref = "corridor";
+        resolved_space_pref = "auto->corridor";
       }
-      else if (state2state_space_model_preference_ == "esdf")
+      else if (planner_manager_->esdfModeEnabled())
       {
         task_prefer_esdf = true;
-        resolved_state2state_pref = "esdf";
+        resolved_space_pref = "auto->esdf";
       }
       else
       {
-        if (planner_manager_->corridorModeEnabled())
-        {
-          task_prefer_corridor = true;
-          resolved_state2state_pref = "auto->corridor";
-        }
-        else if (planner_manager_->esdfModeEnabled())
-        {
-          task_prefer_esdf = true;
-          resolved_state2state_pref = "auto->esdf";
-        }
-        else
-        {
-          task_force_plain = true;
-          resolved_state2state_pref = "auto->plain";
-        }
+        task_force_plain = true;
+        resolved_space_pref = "auto->plain";
       }
+    }
+
+    if (!tracking_active)
+    {
       ROS_INFO("[FSM] state2state task preference=%s resolved=%s force_plain=%s",
                state2state_space_model_preference_.c_str(),
-               resolved_state2state_pref.c_str(),
+               resolved_space_pref.c_str(),
+               task_force_plain ? "yes" : "no");
+    }
+    else
+    {
+      ROS_INFO("[FSM] tracking task preference=%s resolved=%s force_plain=%s",
+               state2state_space_model_preference_.c_str(),
+               resolved_space_pref.c_str(),
                task_force_plain ? "yes" : "no");
     }
 
     core::TaskDefinition task_definition = tracking_active
                                                ? tasks::TaskFactory::makeTrackingDefinition(
-                                                     tracking_reference_,
+                                                     planning_tracking_reference,
                                                      start_pt_,
                                                      start_vel_,
                                                      start_acc_,
                                                      flag_use_poly_init,
                                                      flag_randomPolyTraj,
-                                                     force_plain)
+                                                     task_force_plain,
+                                                     task_prefer_corridor,
+                                                     task_prefer_esdf)
                                                : tasks::TaskFactory::makeStateToStateDefinition(
                                                      start_pt_,
                                                      start_vel_,
@@ -1041,7 +1275,7 @@ namespace ego_planner
 
       last_replan_time_ = ros::Time::now().toSec();
 
-      if (!force_plain)
+      if (!task_force_plain)
       {
         resetCorridorFailureState(true);
       }
@@ -1050,7 +1284,15 @@ namespace ego_planner
       {
         planned_tracking_target_pos_now_ = tracking_target_pos_now_;
         have_planned_tracking_target_now_ = true;
-        planned_tracking_ref_end_ = tracking_reference_.p_ref.back();
+        Eigen::Vector3d terminal_pos = tracking_anchor;
+        Eigen::Vector3d terminal_vel = tracking_anchor_vel;
+        if (!cost_functional::sampleTrackingTerminalReference(planning_tracking_reference,
+                                                              terminal_pos,
+                                                              terminal_vel))
+        {
+          terminal_pos = tracking_anchor;
+        }
+        planned_tracking_ref_end_ = terminal_pos;
         have_planned_tracking_ref_end_ = true;
         have_planned_local_target_ = false;
         have_planned_final_goal_ = false;
@@ -1076,7 +1318,7 @@ namespace ego_planner
       return true;
     }
 
-    if (!force_plain)
+    if (!task_force_plain)
     {
       markCorridorFailure(planner_manager_->getLastCorridorFailureType());
     }
@@ -1342,33 +1584,44 @@ namespace ego_planner
     }
 
     cost_functional::TrackingReference ref;
-    const double horizon = std::max(0.2, tracking_prediction_horizon_);
-    const double dt = std::max(0.05, tracking_prediction_dt_);
-    const int sample_num =
-        std::max(2, static_cast<int>(std::ceil(horizon / dt)) + 1);
-
-    Eigen::Vector3d pred_vel = tracking_target_odom_vel_;
-    const double speed = pred_vel.norm();
-    if (speed > std::max(0.1, tracking_prediction_max_speed_))
+    if (tracking_reference_provider_)
     {
-      pred_vel *= tracking_prediction_max_speed_ / speed;
+      if (!tracking_reference_provider_->buildFromTargetOdom(tracking_target_odom_pos_,
+                                                             tracking_target_odom_vel_,
+                                                             ref))
+      {
+        return false;
+      }
     }
-
-    ref.t_ref.reserve(static_cast<std::size_t>(sample_num));
-    ref.p_ref.reserve(static_cast<std::size_t>(sample_num));
-    ref.v_ref.reserve(static_cast<std::size_t>(sample_num));
-
-    for (int i = 0; i < sample_num; ++i)
+    else
     {
-      const double t = std::min(horizon, static_cast<double>(i) * dt);
-      ref.t_ref.push_back(t);
-      ref.p_ref.push_back(tracking_target_odom_pos_ + pred_vel * t);
-      ref.v_ref.push_back(pred_vel);
-    }
+      const double horizon = std::max(0.2, tracking_prediction_horizon_);
+      const double dt = std::max(0.05, tracking_prediction_dt_);
+      const int sample_num =
+          std::max(2, static_cast<int>(std::ceil(horizon / dt)) + 1);
 
-    if (!ref.valid())
-    {
-      return false;
+      Eigen::Vector3d pred_vel = tracking_target_odom_vel_;
+      const double speed = pred_vel.norm();
+      if (speed > std::max(0.1, tracking_prediction_max_speed_))
+      {
+        pred_vel *= tracking_prediction_max_speed_ / speed;
+      }
+
+      ref.t_ref.reserve(static_cast<std::size_t>(sample_num));
+      ref.p_ref.reserve(static_cast<std::size_t>(sample_num));
+      ref.v_ref.reserve(static_cast<std::size_t>(sample_num));
+
+      for (int i = 0; i < sample_num; ++i)
+      {
+        const double t = std::min(horizon, static_cast<double>(i) * dt);
+        ref.t_ref.push_back(t);
+        ref.p_ref.push_back(tracking_target_odom_pos_ + pred_vel * t);
+        ref.v_ref.push_back(pred_vel);
+      }
+      if (!ref.valid())
+      {
+        return false;
+      }
     }
 
     tracking_reference_ = ref;
@@ -1535,48 +1788,59 @@ namespace ego_planner
     }
 
     cost_functional::TrackingReference ref;
-    const int N = static_cast<int>(msg->poses.size());
-    ref.t_ref.reserve(static_cast<std::size_t>(N));
-    ref.p_ref.reserve(static_cast<std::size_t>(N));
-    ref.v_ref.resize(static_cast<std::size_t>(N), Eigen::Vector3d::Zero());
-
-    const double min_dt = std::max(0.02, tracking_reference_dt_);
-    const double t0_stamp = msg->poses.front().header.stamp.toSec();
-    double last_t = 0.0;
-
-    for (int i = 0; i < N; ++i)
+    if (tracking_reference_provider_)
     {
-      const auto &pose = msg->poses[static_cast<std::size_t>(i)].pose.position;
-      ref.p_ref.emplace_back(pose.x, pose.y, pose.z);
-
-      double ti = static_cast<double>(i) * min_dt;
-      const double pose_stamp = msg->poses[static_cast<std::size_t>(i)].header.stamp.toSec();
-      if (t0_stamp > 1.0e-6 && pose_stamp > 1.0e-6)
+      if (!tracking_reference_provider_->buildFromPath(*msg, tracking_reference_dt_, ref))
       {
-        ti = std::max(0.0, pose_stamp - t0_stamp);
+        ROS_WARN("Received invalid tracking reference path (provider rejected).");
+        return;
+      }
+    }
+    else
+    {
+      const int N = static_cast<int>(msg->poses.size());
+      ref.t_ref.reserve(static_cast<std::size_t>(N));
+      ref.p_ref.reserve(static_cast<std::size_t>(N));
+      ref.v_ref.resize(static_cast<std::size_t>(N), Eigen::Vector3d::Zero());
+
+      const double min_dt = std::max(0.02, tracking_reference_dt_);
+      const double t0_stamp = msg->poses.front().header.stamp.toSec();
+      double last_t = 0.0;
+
+      for (int i = 0; i < N; ++i)
+      {
+        const auto &pose = msg->poses[static_cast<std::size_t>(i)].pose.position;
+        ref.p_ref.emplace_back(pose.x, pose.y, pose.z);
+
+        double ti = static_cast<double>(i) * min_dt;
+        const double pose_stamp = msg->poses[static_cast<std::size_t>(i)].header.stamp.toSec();
+        if (t0_stamp > 1.0e-6 && pose_stamp > 1.0e-6)
+        {
+          ti = std::max(0.0, pose_stamp - t0_stamp);
+        }
+
+        if (i > 0 && ti <= last_t)
+        {
+          ti = last_t + min_dt;
+        }
+
+        ref.t_ref.push_back(ti);
+        last_t = ti;
       }
 
-      if (i > 0 && ti <= last_t)
+      for (int i = 0; i + 1 < N; ++i)
       {
-        ti = last_t + min_dt;
+        const double dt = std::max(1.0e-3, ref.t_ref[static_cast<std::size_t>(i + 1)] - ref.t_ref[static_cast<std::size_t>(i)]);
+        ref.v_ref[static_cast<std::size_t>(i)] =
+            (ref.p_ref[static_cast<std::size_t>(i + 1)] - ref.p_ref[static_cast<std::size_t>(i)]) / dt;
       }
+      ref.v_ref.back() = ref.v_ref[static_cast<std::size_t>(N - 2)];
 
-      ref.t_ref.push_back(ti);
-      last_t = ti;
-    }
-
-    for (int i = 0; i + 1 < N; ++i)
-    {
-      const double dt = std::max(1.0e-3, ref.t_ref[static_cast<std::size_t>(i + 1)] - ref.t_ref[static_cast<std::size_t>(i)]);
-      ref.v_ref[static_cast<std::size_t>(i)] =
-          (ref.p_ref[static_cast<std::size_t>(i + 1)] - ref.p_ref[static_cast<std::size_t>(i)]) / dt;
-    }
-    ref.v_ref.back() = ref.v_ref[static_cast<std::size_t>(N - 2)];
-
-    if (!ref.valid())
-    {
-      ROS_WARN("Received invalid tracking reference.");
-      return;
+      if (!ref.valid())
+      {
+        ROS_WARN("Received invalid tracking reference.");
+        return;
+      }
     }
 
     tracking_reference_ = ref;

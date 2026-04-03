@@ -66,6 +66,8 @@ add_executable(ego_planner_node
   ../runtime/plan_monitor.cpp
   ../runtime/replan_trigger.cpp
   ../runtime/context_builder.cpp
+  ../runtime/tracking_reference_provider.cpp
+  ../runtime/tracking_anchor_selector.cpp
   )
 target_link_libraries(ego_planner_node 
   ${catkin_LIBRARIES}

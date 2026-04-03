@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <string>
 
 namespace cost_functional
 {
@@ -298,6 +299,58 @@ namespace cost_functional
     {
         return ref.yawValid() &&
                detail::sampleScalarSeries(ref.t_yaw_ref, ref.yaw_ref, yaw_out, t_query);
+    }
+
+    // Normalize a tracking reference for optimizer/cost-manager usage.
+    // 1) requires valid target reference;
+    // 2) fills view reference from target reference when view reference is missing;
+    // 3) resolves terminal reference (explicit > view terminal > target terminal) and stores it explicitly.
+    inline bool normalizeTrackingReference(const TrackingReference &in_ref,
+                                           TrackingReference &out_ref,
+                                           std::string *reason = nullptr)
+    {
+        out_ref = in_ref;
+
+        if (!out_ref.valid())
+        {
+            if (reason != nullptr)
+            {
+                *reason = "target reference is invalid";
+            }
+            return false;
+        }
+
+        if (!out_ref.viewValid())
+        {
+            out_ref.t_view_ref = out_ref.t_ref;
+            out_ref.p_view_ref = out_ref.p_ref;
+            out_ref.v_view_ref = out_ref.v_ref;
+        }
+
+        if (!out_ref.viewValid())
+        {
+            if (reason != nullptr)
+            {
+                *reason = "view reference is invalid after fallback";
+            }
+            return false;
+        }
+
+        Eigen::Vector3d p_term = Eigen::Vector3d::Zero();
+        Eigen::Vector3d v_term = Eigen::Vector3d::Zero();
+        if (!sampleTrackingTerminalReference(out_ref, p_term, v_term))
+        {
+            if (reason != nullptr)
+            {
+                *reason = "terminal reference is invalid";
+            }
+            return false;
+        }
+
+        out_ref.has_terminal_ref = true;
+        out_ref.p_term_ref = p_term;
+        out_ref.v_term_ref = v_term;
+        return true;
     }
 } // namespace cost_functional
 

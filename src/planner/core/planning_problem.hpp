@@ -12,6 +12,7 @@
 #include <core/planning_context.hpp>
 #include <core/task_definition.hpp>
 #include <core/task_spec.hpp>
+#include <CostFunctionalManager/TrackingTypes.hpp>
 
 namespace ego_planner::core
 {
@@ -54,6 +55,10 @@ struct CompiledReferenceSpec
   std::vector<double> t_ref;
   std::vector<Eigen::Vector3d> p_ref;
   std::vector<Eigen::Vector3d> v_ref;
+
+  // Tracking V1 references (target/view/terminal/yaw).
+  bool has_tracking_reference{false};
+  cost_functional::TrackingReference tracking_reference;
 };
 
 struct SeedSpec

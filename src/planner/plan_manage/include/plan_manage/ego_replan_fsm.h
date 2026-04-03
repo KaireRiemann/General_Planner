@@ -33,6 +33,8 @@
 #include <runtime/task_executor.hpp>
 #include <runtime/plan_monitor.hpp>
 #include <runtime/replan_trigger.hpp>
+#include <runtime/tracking_reference_provider.hpp>
+#include <runtime/tracking_anchor_selector.hpp>
 
 using std::vector;
 using std::string;
@@ -90,12 +92,18 @@ namespace ego_planner
     std::unique_ptr<runtime::LocalTargetSelector> local_target_selector_;
     std::unique_ptr<runtime::PlanMonitor> plan_monitor_;
     std::unique_ptr<runtime::ReplanTrigger> replan_trigger_;
+    std::unique_ptr<runtime::TrackingReferenceProvider> tracking_reference_provider_;
+    std::unique_ptr<runtime::TrackingAnchorSelector> tracking_anchor_selector_;
 
     /* parameters */
     int target_type_; // 1 mannual select, 2 hard code
     double no_replan_thresh_, replan_thresh_;
     double waypoints_[50][3];
     double min_replan_interval_{0.15};
+    double safety_replan_min_interval_{0.20};
+    double safety_replan_emergency_bypass_time_{0.10};
+    double esdf_runtime_collision_hysteresis_{0.03};
+    int esdf_runtime_unsafe_consecutive_samples_{2};
     double corridor_fail_cooldown_{0.25};
     double near_goal_replan_radius_{0.8};
     double corridor_check_margin_{0.05};
@@ -119,6 +127,7 @@ namespace ego_planner
     double tracking_prediction_horizon_{4.0};
     double tracking_prediction_dt_{0.2};
     double tracking_prediction_max_speed_{2.0};
+    double tracking_anchor_side_angle_deg_{20.0};
     bool tracking_relay_goal_{true};
     std::string tracking_target_goal_topic_{"/tracking/target_goal"};
     double tracking_distance_min_{1.5};
@@ -155,6 +164,7 @@ namespace ego_planner
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
 
     double last_replan_time_{-1.0};
+    double last_safety_replan_attempt_time_{-1.0};
     double last_corridor_fail_time_{-1.0};
     int corridor_fail_count_{0};
     double corridor_disabled_until_{-1.0};
@@ -196,6 +206,10 @@ namespace ego_planner
 
     /* local planning */
     bool currentTrajStillUsable(double lookahead_time) const;
+    double runtimeCollisionTol(const GridMap::Ptr &map) const;
+    bool runtimePointUnsafe(const GridMap::Ptr &map,
+                            const Eigen::Vector3d &pt,
+                            double *signed_distance = nullptr) const;
     bool stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
                                         double t_cur,
                                         std::string *reason = nullptr);

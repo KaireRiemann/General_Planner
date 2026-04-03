@@ -2,6 +2,7 @@
 #include "SFCGenerator/geo_utils.hpp"
 
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace std;
@@ -460,12 +461,15 @@ namespace ego_planner
       const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
       double &final_cost)
   {
-    if (!tracking_ref.valid())
+    cost_functional::TrackingReference normalized_ref;
+    std::string normalize_reason;
+    if (!cost_functional::normalizeTrackingReference(tracking_ref, normalized_ref, &normalize_reason))
     {
-      ROS_WARN("Tracking optimize rejected: invalid tracking reference.");
+      ROS_WARN("Tracking optimize rejected: invalid tracking reference (%s).",
+               normalize_reason.c_str());
       return false;
     }
-    tracking_reference_ = tracking_ref;
+    tracking_reference_ = normalized_ref;
     tracking_task_enabled_ = true;
     tracking_semantic_enabled_ =
         tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
@@ -741,12 +745,15 @@ namespace ego_planner
       const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
       double &final_cost)
   {
-    if (!tracking_ref.valid())
+    cost_functional::TrackingReference normalized_ref;
+    std::string normalize_reason;
+    if (!cost_functional::normalizeTrackingReference(tracking_ref, normalized_ref, &normalize_reason))
     {
-      ROS_WARN("Tracking ESDF optimize rejected: invalid tracking reference.");
+      ROS_WARN("Tracking ESDF optimize rejected: invalid tracking reference (%s).",
+               normalize_reason.c_str());
       return false;
     }
-    tracking_reference_ = tracking_ref;
+    tracking_reference_ = normalized_ref;
     tracking_task_enabled_ = true;
     tracking_semantic_enabled_ =
         tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
@@ -1162,12 +1169,15 @@ namespace ego_planner
       const cost_functional::TrackingReference &tracking_ref,
       double &final_cost)
   {
-    if (!tracking_ref.valid())
+    cost_functional::TrackingReference normalized_ref;
+    std::string normalize_reason;
+    if (!cost_functional::normalizeTrackingReference(tracking_ref, normalized_ref, &normalize_reason))
     {
-      ROS_WARN("Tracking corridor optimize rejected: invalid tracking reference.");
+      ROS_WARN("Tracking corridor optimize rejected: invalid tracking reference (%s).",
+               normalize_reason.c_str());
       return false;
     }
-    tracking_reference_ = tracking_ref;
+    tracking_reference_ = normalized_ref;
     tracking_task_enabled_ = true;
     tracking_semantic_enabled_ = false;
     tracking_semantic_guide_.clear();
@@ -1191,12 +1201,16 @@ namespace ego_planner
       const cost_functional::TrackingSemanticGuide &tracking_semantic_guide,
       double &final_cost)
   {
-    if (!tracking_ref.valid() || !tracking_semantic_guide.consistent())
+    cost_functional::TrackingReference normalized_ref;
+    std::string normalize_reason;
+    if (!cost_functional::normalizeTrackingReference(tracking_ref, normalized_ref, &normalize_reason) ||
+        !tracking_semantic_guide.consistent())
     {
-      ROS_WARN("Tracking visible-region optimize rejected: invalid tracking semantic inputs.");
+      ROS_WARN("Tracking visible-region optimize rejected: invalid tracking semantic inputs (%s).",
+               normalize_reason.c_str());
       return false;
     }
-    tracking_reference_ = tracking_ref;
+    tracking_reference_ = normalized_ref;
     tracking_task_enabled_ = true;
     tracking_semantic_enabled_ = true;
     tracking_semantic_guide_ = tracking_semantic_guide;

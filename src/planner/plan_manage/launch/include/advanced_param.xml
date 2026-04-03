@@ -67,6 +67,11 @@
         <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
         <!--always set to 1.5 times grater than sensing horizen-->
         <param name="fsm/emergency_time" value="1.0" type="double"/>
+        <param name="fsm/min_replan_interval" value="0.15" type="double"/>
+        <param name="fsm/safety_replan_min_interval" value="0.20" type="double"/>
+        <param name="fsm/safety_replan_emergency_bypass_time" value="0.10" type="double"/>
+        <param name="fsm/esdf_runtime_collision_hysteresis" value="0.03" type="double"/>
+        <param name="fsm/esdf_runtime_unsafe_consecutive_samples" value="2" type="int"/>
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
         <param name="fsm/state2state_keep_current_traj" value="true" type="bool"/>
@@ -199,7 +204,7 @@
         <param name="optimization/weight_time" value="10.0" type="double"/>
         <param name="optimization/obstacle_clearance" value="0.1" type="double"/>
         <param name="optimization/obstacle_clearance_soft" value="0.5" type="double"/>
-        <param name="optimization/safety_margin" value="0.3" type="double"/>
+        <param name="optimization/safety_margin" value="0.2" type="double"/>
         <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->
         <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
         <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>

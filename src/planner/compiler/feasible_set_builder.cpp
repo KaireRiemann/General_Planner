@@ -133,30 +133,10 @@ bool FeasibleSetBuilder::buildTrackingFeasibleSets(const core::PlanningContext &
                                                    const core::TaskDefinition &task_definition,
                                                    core::PlanningProblem &problem) const
 {
-  frontend::GuidePathArtifact guide_artifact;
-  const auto *guide_ref = findGuideReference(task_definition);
-  if (guide_ref != nullptr &&
-      guide_path_service_.buildFromWaypoints(guide_ref->points, guide_artifact))
-  {
-    if (guide_ref->times.size() == guide_ref->points.size())
-    {
-      guide_artifact.times = guide_ref->times;
-    }
-    problem.references.guide_path = guide_artifact.points;
-    problem.references.guide_times = guide_artifact.times;
-    if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR ||
-        problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION)
-    {
-      core::FeasibleSetSpec corridor_set;
-      if (corridor_service_.buildFromGuidePath(context, guide_artifact, corridor_set))
-      {
-        problem.feasible_sets.push_back(corridor_set);
-      }
-    }
-  }
-
   (void)task_definition;
-  return true;
+  // Tracking V1 reuses the same initializer/solver path as state-to-state.
+  // Compiler-side guide/corridor outputs remain optional hints.
+  return buildTransitFeasibleSets(context, task_definition, problem);
 }
 
 bool FeasibleSetBuilder::buildPerchingFeasibleSets(const core::PlanningContext &context,

@@ -55,12 +55,10 @@ ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
   case TaskType::STATE_TO_STATE:
     return selectStateToStateSpaceModel(task_definition, context);
   case TaskType::TRACKING:
-    if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
-    {
-      return ActiveSpaceModel::PLAIN;
-    }
-    return policy.allow_visible_region ? ActiveSpaceModel::VISIBLE_REGION
-                                       : ActiveSpaceModel::PLAIN;
+    // Tracking V1 follows the same space-model selection as state-to-state:
+    // plain/esdf/corridor. Visible-region semantic mode is intentionally not
+    // used in this migration step.
+    return selectStateToStateSpaceModel(task_definition, context);
   case TaskType::PERCHING:
     if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
     {
@@ -116,14 +114,16 @@ void applyDefaultObjectiveConstraintPolicy(const TaskDefinition &task_definition
     problem.objective_mask |= ego_planner::optimization::OBJ_CORRIDOR;
     problem.constraint_mask |= ego_planner::optimization::CON_CORRIDOR;
   }
-  if (problem.active_space_model == ActiveSpaceModel::VISIBLE_REGION ||
-      task_definition.type == TaskType::TRACKING)
+  if (task_definition.type == TaskType::TRACKING)
   {
     problem.objective_mask |=
         ego_planner::optimization::OBJ_TRACKING_DISTANCE |
         ego_planner::optimization::OBJ_TRACKING_VIEW |
         ego_planner::optimization::OBJ_TRACKING_VISIBILITY |
         ego_planner::optimization::OBJ_TERMINAL_SOFT;
+  }
+  if (problem.active_space_model == ActiveSpaceModel::VISIBLE_REGION)
+  {
     problem.constraint_mask |= ego_planner::optimization::CON_VISIBLE_REGION;
   }
   if (problem.active_space_model == ActiveSpaceModel::TERMINAL_MANIFOLD)
@@ -231,7 +231,7 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
       problem.solve_callback =
           [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
       {
-        return adapter->solveTrackingLegacy(p, s);
+        return adapter->solveTrackingCompiled(p, s);
       };
       break;
     case core::TaskType::PERCHING:

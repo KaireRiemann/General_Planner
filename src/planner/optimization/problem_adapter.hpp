@@ -29,6 +29,12 @@ public:
     return solveCompatibility(problem, solution);
   }
 
+  virtual bool solveTrackingCompiled(const core::PlanningProblem &problem,
+                                     core::PlanningSolution &solution)
+  {
+    return solveTrackingLegacy(problem, solution);
+  }
+
   virtual bool solvePerchingLegacy(const core::PlanningProblem &problem,
                                    core::PlanningSolution &solution)
   {
