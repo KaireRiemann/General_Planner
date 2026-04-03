@@ -122,6 +122,37 @@ namespace ego_planner
       return pts;
     }
 
+    const char *managerDefaultModeString(const bool use_corridor, const bool use_esdf)
+    {
+      if (use_corridor)
+      {
+        return "CORRIDOR";
+      }
+      if (use_esdf)
+      {
+        return "ESDF";
+      }
+      return "PLAIN";
+    }
+
+    const char *activeSpaceModelString(const core::ActiveSpaceModel mode)
+    {
+      switch (mode)
+      {
+      case core::ActiveSpaceModel::ESDF:
+        return "ESDF";
+      case core::ActiveSpaceModel::CORRIDOR:
+        return "CORRIDOR";
+      case core::ActiveSpaceModel::VISIBLE_REGION:
+        return "VISIBLE_REGION";
+      case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
+        return "TERMINAL_MANIFOLD";
+      case core::ActiveSpaceModel::PLAIN:
+      default:
+        return "PLAIN";
+      }
+    }
+
     bool improveCorridorSeedByTimeScaling(const PolyTrajOptimizer *optimizer,
                                           const MINCOBoundaryState3D &head_state,
                                           const MINCOBoundaryState3D &tail_state,
@@ -295,7 +326,7 @@ namespace ego_planner
     }
 
     const ros::Time solve_start = ros::Time::now();
-    const bool ok = backend_solver_->solve(problem, solution);
+    const bool ok = solveProblem(problem, solution);
     solution.solve_time_ms = (ros::Time::now() - solve_start).toSec() * 1.0e3;
     return ok;
   }
@@ -305,6 +336,16 @@ namespace ego_planner
                                     core::PlanningSolution &solution)
   {
     return solveTask(context, core::TaskDefinition::fromTaskSpec(task), solution);
+  }
+
+  bool EGOPlannerManager::solveProblem(const core::PlanningProblem &problem,
+                                       core::PlanningSolution &solution)
+  {
+    if (!backend_solver_)
+    {
+      backend_solver_.reset(new optimization::CompatibilityBackendSolver());
+    }
+    return backend_solver_->solve(problem, solution);
   }
 
   bool EGOPlannerManager::solveCompatibility(const core::PlanningProblem &problem,
@@ -426,16 +467,14 @@ namespace ego_planner
       return solveStateToStateLegacy(problem.task, solution);
     }
 
-    if (problem.representation != core::RepresentationKind::MINCO ||
-        !problem.start_boundary.valid ||
-        !problem.terminal_boundary.valid ||
-        !problem.seed.valid)
-    {
-      return solveStateToStateLegacy(problem.task, solution);
-    }
-
     const core::TaskDefinition &task_definition = problem.task_definition;
     const core::TaskSpec &task = problem.task;
+    const Eigen::Vector3d start_pt = problem.start_boundary.position;
+    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
+    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
+    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
+    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+
     bool compiled_use_corridor = false;
     bool compiled_use_esdf = false;
     bool compiled_force_plain = task_definition.space_model_policy.force_plain || task.force_plain;
@@ -466,25 +505,99 @@ namespace ego_planner
       break;
     }
 
-    ROS_INFO("[CompiledS2S] selected_mode=%s force_plain=%s seed_kind=%d guide_pts=%zu feasible_sets=%zu",
+    const char *manager_default_mode =
+        managerDefaultModeString(use_sfc_corridor_, use_esdf_);
+    const char *compiled_active_mode =
+        activeSpaceModelString(problem.active_space_model);
+    ROS_INFO("[CompiledS2S] manager_default_mode=%s active_mode=%s selected_mode=%s force_plain=%s fallback_to_legacy=%s seed_kind=%d guide_pts=%zu feasible_sets=%zu",
+             manager_default_mode,
+             compiled_active_mode,
              mode_str,
              compiled_force_plain ? "yes" : "no",
+             allow_compiled_state2state_legacy_fallback_ ? "enabled" : "disabled",
              static_cast<int>(problem.seed.kind),
              problem.references.guide_path.size(),
              problem.feasible_sets.size());
 
-    const auto fallbackToLegacy = [&](const std::string &reason) -> bool
+    bool fallback_attempted = false;
+    const auto fillCompiledFailure = [&](const std::string &reason) -> bool
     {
-      ROS_WARN("[CompiledS2S] %s, fallback to legacy-compatible state-to-state.",
+      solution.success = false;
+      solution.used_legacy_adapter = false;
+      solution.touch_goal = task_definition.runtime_policy.touch_goal;
+      solution.message =
+          std::string("compiled state-to-state solve failed; active_mode=") +
+          mode_str +
+          " fallback_attempted=" + (fallback_attempted ? "yes" : "no") +
+          " reason=" + reason;
+      ROS_WARN("[CompiledS2S] active_mode=%s fallback_to_legacy=%s reason=%s",
+               compiled_active_mode,
+               fallback_attempted ? "attempted" : "no",
                reason.c_str());
-      return solveStateToStateLegacy(task, solution);
+      return false;
     };
 
-    const Eigen::Vector3d start_pt = problem.start_boundary.position;
-    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
-    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
-    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
-    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+    const auto runModePinnedLegacyFallback =
+        [&](const std::string &reason,
+            const std::vector<Eigen::Vector3d> *preferred_guide_path) -> bool
+    {
+      if (!allow_compiled_state2state_legacy_fallback_)
+      {
+        return fillCompiledFailure(reason);
+      }
+
+      fallback_attempted = true;
+      ROS_WARN("[CompiledS2S] fallback_to_legacy=yes active_mode=%s reason=%s",
+               compiled_active_mode,
+               reason.c_str());
+
+      const bool prev_use_corridor = use_sfc_corridor_;
+      const bool prev_use_esdf = use_esdf_;
+      use_sfc_corridor_ = compiled_use_corridor;
+      use_esdf_ = compiled_use_esdf;
+      const bool ok = reboundReplan(task.start_pt,
+                                    task.start_vel,
+                                    task.start_acc,
+                                    task.goal_pt,
+                                    task.goal_vel,
+                                    task.flag_poly_init,
+                                    task.flag_random_poly_traj,
+                                    task.touch_goal,
+                                    compiled_force_plain,
+                                    nullptr,
+                                    preferred_guide_path,
+                                    nullptr);
+      use_sfc_corridor_ = prev_use_corridor;
+      use_esdf_ = prev_use_esdf;
+
+      if (!ok)
+      {
+        return fillCompiledFailure(reason + "; mode-preserving legacy fallback also failed");
+      }
+
+      solution.success = true;
+      solution.used_legacy_adapter = true;
+      solution.touch_goal = task_definition.runtime_policy.touch_goal;
+      solution.message =
+          std::string("compiled state-to-state fallback success; active_mode=") +
+          mode_str + " reason=" + reason;
+      solution.trajectory = traj_.local_traj.traj;
+      if (traj_.local_traj.has_yaw_ref)
+      {
+        solution.has_yaw_ref = true;
+        solution.yaw_time = traj_.local_traj.yaw_time;
+        solution.yaw_ref = traj_.local_traj.yaw_ref;
+      }
+      return true;
+    };
+
+    if (problem.representation != core::RepresentationKind::MINCO ||
+        !problem.start_boundary.valid ||
+        !problem.terminal_boundary.valid ||
+        !problem.seed.valid)
+    {
+      return runModePinnedLegacyFallback("compiled problem is missing valid MINCO boundaries or seed", nullptr);
+    }
 
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx = problem.seed.corridor_piece_idx;
@@ -496,7 +609,8 @@ namespace ego_planner
       {
         reportCorridorFailure(FAIL_CORRIDOR_GENERATION,
                               "compiled problem is missing corridor feasible set");
-        return fallbackToLegacy("compiled corridor problem has no feasible corridor");
+        return runModePinnedLegacyFallback("compiled corridor problem has no feasible corridor",
+                                           problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
       }
 
       corridor_hpolys = corridor_set->corridor;
@@ -513,19 +627,22 @@ namespace ego_planner
       {
         reportCorridorFailure(FAIL_CORRIDOR_INIT,
                               "compiled corridor seed piece allocation is inconsistent");
-        return fallbackToLegacy("compiled corridor seed has invalid piece-to-polytope layout");
+        return runModePinnedLegacyFallback("compiled corridor seed has invalid piece-to-polytope layout",
+                                           problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
       }
     }
 
     if (problem.seed.durations.size() <= 0 ||
         !problem.seed.durations.allFinite())
     {
-      return fallbackToLegacy("compiled seed has invalid durations");
+      return runModePinnedLegacyFallback("compiled seed has invalid durations",
+                                         problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
     }
     if (problem.seed.inner_points.cols() !=
         std::max(0, static_cast<int>(problem.seed.durations.size()) - 1))
     {
-      return fallbackToLegacy("compiled seed inner point layout does not match durations");
+      return runModePinnedLegacyFallback("compiled seed inner point layout does not match durations",
+                                         problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
     }
 
     ploy_traj_opt_->setIfTouchGoal(task_definition.runtime_policy.touch_goal);
@@ -544,7 +661,8 @@ namespace ego_planner
         reportCorridorFailure(FAIL_CORRIDOR_INIT,
                               "compiled initial guess failed to generate MINCO trajectory");
       }
-      return fallbackToLegacy("compiled seed could not generate initial MINCO trajectory");
+      return runModePinnedLegacyFallback("compiled seed could not generate initial MINCO trajectory",
+                                         problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
     }
 
     if (compiled_use_corridor)
@@ -570,7 +688,8 @@ namespace ego_planner
       {
         reportCorridorFailure(FAIL_CORRIDOR_INIT,
                               "compiled corridor seed remains infeasible after conservative timing");
-        return fallbackToLegacy("compiled corridor seed is still infeasible");
+        return runModePinnedLegacyFallback("compiled corridor seed is still infeasible",
+                                           problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
       }
     }
     else if (compiled_use_esdf)
@@ -591,7 +710,8 @@ namespace ego_planner
       if (ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) ==
           PolyTrajOptimizer::CHK_RET::ERR)
       {
-        return fallbackToLegacy("compiled plain seed failed initial collision checking");
+        return runModePinnedLegacyFallback("compiled plain seed failed initial collision checking",
+                                           problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
       }
     }
 
@@ -794,29 +914,37 @@ namespace ego_planner
         visualization_->displayFailedList(cstr_pts, 0);
       }
       continous_failures_count_++;
-      return fallbackToLegacy("compiled backend solve failed");
+      return runModePinnedLegacyFallback("compiled backend solve failed",
+                                         problem.references.guide_path.size() >= 2 ? &problem.references.guide_path : nullptr);
     }
 
     const MINCOTraj3D &opt_traj = traj_.local_traj.traj;
     const int piece_num = opt_traj.getPieceNum();
     const double total_T = opt_traj.getTotalDuration();
     const double min_sdf = computeTrajectoryMinSdf(opt_traj);
-    const bool inside_corridor =
-        !compiled_use_corridor ||
-        ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0);
+    bool inside_corridor = true;
+    const char *corridor_status = "n/a";
+    if (compiled_use_corridor)
+    {
+      inside_corridor = ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0);
+      corridor_status = inside_corridor ? "yes" : "no";
+    }
 
-    ROS_INFO("[CompiledS2S] success=yes mode=%s pieces=%d total_T=%.3f min_sdf=%.3f inside_corridor=%s solve_ms=%.3f",
+    ROS_INFO("[CompiledS2S] parity success=yes mode=%s pieces=%d total_T=%.3f min_sdf=%.3f corridor_check=%s solve_ms=%.3f",
              mode_str,
              piece_num,
              total_T,
              min_sdf,
-             inside_corridor ? "yes" : "no",
+             corridor_status,
              solve_time_ms);
 
     solution.success = true;
     solution.used_legacy_adapter = false;
     solution.touch_goal = task_definition.runtime_policy.touch_goal;
-    solution.message = "compiled state-to-state solve success";
+    solution.message =
+        std::string("compiled state-to-state solve success; active_mode=") +
+        mode_str + " fallback_attempted=" +
+        (fallback_attempted ? "yes" : "no");
     solution.trajectory = traj_.local_traj.traj;
     if (traj_.local_traj.has_yaw_ref)
     {
@@ -881,7 +1009,10 @@ namespace ego_planner
     nh.param("manager/tracking_time_align_alpha", tracking_time_align_alpha_, 0.55);
     nh.param("manager/tracking_visible_yaw_half_span_deg", tracking_visible_yaw_half_span_deg_, 35.0);
     nh.param("manager/tracking_visible_z_half_span", tracking_visible_z_half_span_, 0.50);
-    nh.param("manager/enable_compiled_state2state", enable_compiled_state2state_, false);
+    nh.param("manager/enable_compiled_state2state", enable_compiled_state2state_, true);
+    nh.param("manager/allow_compiled_state2state_legacy_fallback",
+             allow_compiled_state2state_legacy_fallback_,
+             false);
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_anchor_future_time_ = std::max(0.0, tracking_anchor_future_time_);
@@ -893,8 +1024,8 @@ namespace ego_planner
     tracking_viewpoint_yaw_step_deg_ = std::max(5.0, std::min(60.0, tracking_viewpoint_yaw_step_deg_));
     tracking_viewpoint_connect_dist_ = std::max(0.3, tracking_viewpoint_connect_dist_);
     tracking_viewpoint_clearance_ = std::max(0.0, tracking_viewpoint_clearance_);
-    const char *mode_name = use_sfc_corridor_ ? "sfc_corridor" : (use_esdf_ ? "esdf" : "guide_points");
-    ROS_INFO("Local planner obstacle mode: %s", mode_name);
+    const char *mode_name = managerDefaultModeString(use_sfc_corridor_, use_esdf_);
+    ROS_INFO("Manager default obstacle preference: %s", mode_name);
 
     grid_map_.reset(new GridMap);
     grid_map_->initMap(nh);

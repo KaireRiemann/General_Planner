@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -88,6 +89,11 @@ namespace ego_planner
     double corridor_check_margin_{0.05};
     int corridor_disable_fail_threshold_{3};
     double corridor_disable_duration_{1.0};
+    bool state2state_keep_current_traj_{true};
+    double state2state_keep_lookahead_{0.8};
+    double state2state_min_rest_time_{0.8};
+    double state2state_replan_target_shift_thresh_{0.6};
+    std::string state2state_space_model_preference_{"auto"};
     bool use_tracking_task_{false};
     std::string tracking_reference_topic_{"/tracking/reference"};
     std::string tracking_target_odom_topic_{"/tracking/target_odom"};
@@ -115,6 +121,8 @@ namespace ego_planner
     bool tracking_wait_for_motion_{false};
     bool tracking_target_moving_{true};
     bool have_tracking_target_odom_{false};
+    bool have_planned_local_target_{false};
+    bool have_planned_final_goal_{false};
     bool have_planned_tracking_target_now_{false};
     bool have_planned_tracking_ref_end_{false};
     double last_tracking_ref_recv_time_{-1.0};
@@ -123,6 +131,8 @@ namespace ego_planner
     Eigen::Vector3d tracking_target_vel_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d tracking_target_odom_pos_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d tracking_target_odom_vel_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d planned_local_target_pt_{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d planned_final_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
 
@@ -168,6 +178,9 @@ namespace ego_planner
 
     /* local planning */
     bool currentTrajStillUsable(double lookahead_time) const;
+    bool stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
+                                        double t_cur,
+                                        std::string *reason = nullptr);
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);
@@ -176,6 +189,7 @@ namespace ego_planner
     bool shouldForcePlainReplan() const;
     void markCorridorFailure(EGOPlannerManager::CorridorFailureType failure_type);
     void resetCorridorFailureState(bool clear_disable = true);
+    void resetPlannedTaskTargets();
 
     /* global trajectory */
     void waypointCallback(const quadrotor_msgs::GoalSetPtr &msg);

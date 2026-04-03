@@ -49,6 +49,11 @@ namespace ego_planner
                    const core::TaskDefinition &task_definition,
                    core::PlanningSolution &solution);
 
+    // Unified solver-facing entry: callers that already compiled a PlanningProblem
+    // should solve it here rather than rebuilding task semantics in planner_manager.
+    bool solveProblem(const core::PlanningProblem &problem,
+                      core::PlanningSolution &solution);
+
     bool solveTask(const core::PlanningContext &context,
                    const core::TaskSpec &task,
                    core::PlanningSolution &solution);
@@ -287,6 +292,7 @@ namespace ego_planner
     double tracking_visible_yaw_half_span_deg_{35.0};
     double tracking_visible_z_half_span_{0.50};
     bool enable_compiled_state2state_{false};
+    bool allow_compiled_state2state_legacy_fallback_{false};
     mutable bool have_tracking_anchor_dir_{false};
     mutable Eigen::Vector3d last_tracking_anchor_dir_{Eigen::Vector3d::UnitX()};
     mutable cost_functional::TrackingSemanticGuide active_tracking_semantic_guide_;

@@ -69,6 +69,11 @@
         <param name="fsm/emergency_time" value="1.0" type="double"/>
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
+        <param name="fsm/state2state_keep_current_traj" value="true" type="bool"/>
+        <param name="fsm/state2state_keep_lookahead" value="0.80" type="double"/>
+        <param name="fsm/state2state_min_rest_time" value="0.80" type="double"/>
+        <param name="fsm/state2state_replan_target_shift_thresh" value="0.60" type="double"/>
+        <param name="fsm/state2state_space_model_preference" value="auto" type="str"/>
         <param name="fsm/use_tracking_task" value="$(arg use_tracking_task)" type="bool"/>
         <param name="fsm/tracking_reference_topic" value="$(arg tracking_reference_topic)" type="str"/>
         <param name="fsm/tracking_reference_dt" value="0.2" type="double"/>
@@ -165,7 +170,8 @@
         <param name="manager/tracking_viewpoint_connect_dist" value="1.5" type="double"/>
         <param name="manager/tracking_viewpoint_clearance" value="0.15" type="double"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
-        <param name="manager/enable_compiled_state2state" value="false"/>
+        <param name="manager/enable_compiled_state2state" value="true"/>
+        <param name="manager/allow_compiled_state2state_legacy_fallback" value="false"/>
         <!-- trajectory optimization -->
         <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>

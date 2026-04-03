@@ -28,6 +28,11 @@ namespace ego_planner
     nh.param("fsm/corridor_check_margin", corridor_check_margin_, 0.05);
     nh.param("fsm/corridor_disable_fail_threshold", corridor_disable_fail_threshold_, 3);
     nh.param("fsm/corridor_disable_duration", corridor_disable_duration_, 1.0);
+    nh.param("fsm/state2state_keep_current_traj", state2state_keep_current_traj_, true);
+    nh.param("fsm/state2state_keep_lookahead", state2state_keep_lookahead_, 0.8);
+    nh.param("fsm/state2state_min_rest_time", state2state_min_rest_time_, 0.8);
+    nh.param("fsm/state2state_replan_target_shift_thresh", state2state_replan_target_shift_thresh_, 0.6);
+    nh.param("fsm/state2state_space_model_preference", state2state_space_model_preference_, std::string("auto"));
     nh.param("fsm/use_tracking_task", use_tracking_task_, false);
     nh.param("fsm/tracking_reference_topic", tracking_reference_topic_, std::string("/tracking/reference"));
     nh.param("fsm/tracking_target_odom_topic", tracking_target_odom_topic_, std::string("/tracking/target_odom"));
@@ -55,6 +60,23 @@ namespace ego_planner
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
+    state2state_keep_lookahead_ = std::max(0.2, state2state_keep_lookahead_);
+    state2state_min_rest_time_ = std::max(0.1, state2state_min_rest_time_);
+    state2state_replan_target_shift_thresh_ = std::max(0.05, state2state_replan_target_shift_thresh_);
+    std::transform(state2state_space_model_preference_.begin(),
+                   state2state_space_model_preference_.end(),
+                   state2state_space_model_preference_.begin(),
+                   [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
+    if (state2state_space_model_preference_ != "auto" &&
+        state2state_space_model_preference_ != "plain" &&
+        state2state_space_model_preference_ != "corridor" &&
+        state2state_space_model_preference_ != "esdf")
+    {
+      ROS_WARN("Unknown fsm/state2state_space_model_preference=%s, fallback to auto.",
+               state2state_space_model_preference_.c_str());
+      state2state_space_model_preference_ = "auto";
+    }
 
     nh.param("fsm/waypoint_num", waypoint_num_, -1);
     for (int i = 0; i < waypoint_num_; i++)
@@ -316,7 +338,25 @@ namespace ego_planner
           !near_goal &&
           (t_cur > replan_thresh_ || (!touch_the_goal && close_to_current_traj_end)))
       {
-        changeFSMExecState(REPLAN_TRAJ, "FSM");
+        if (tracking_active)
+        {
+          changeFSMExecState(REPLAN_TRAJ, "FSM");
+        }
+        else
+        {
+          std::string keep_reason = state2state_keep_current_traj_ ? "replan_forced" : "keep_disabled";
+          const bool keep_current =
+              state2state_keep_current_traj_ &&
+              stateToStateCanKeepCurrentTraj(info, t_cur, &keep_reason);
+          ROS_INFO_THROTTLE(0.8,
+                            "[FSM] keep_current_state2state=%s, reason=%s",
+                            keep_current ? "yes" : "no",
+                            keep_reason.c_str());
+          if (!keep_current)
+          {
+            changeFSMExecState(REPLAN_TRAJ, "FSM");
+          }
+        }
       }
       break;
     }
@@ -345,6 +385,11 @@ namespace ego_planner
   {
     if (new_state == exec_state_) continously_called_times_++;
     else continously_called_times_ = 1;
+
+    if (new_state == WAIT_TARGET || new_state == EMERGENCY_STOP)
+    {
+      resetPlannedTaskTargets();
+    }
 
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
     int pre_s = int(exec_state_);
@@ -402,9 +447,6 @@ namespace ego_planner
 
     constexpr double t_step = 0.05;
     bool trajectory_leaves_corridor = false;
-    int outside_cnt = 0;
-    const bool near_goal =
-        touch_the_end || (final_goal_ - odom_pos_).norm() < near_goal_replan_radius_;
 
     for (double t = t_cur; t < t_end; t += t_step)
     {
@@ -488,6 +530,7 @@ namespace ego_planner
 
   bool EGOReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
+    resetPlannedTaskTargets();
     planner_manager_->EmergencyStop(stop_pos);
 
     traj_utils::PolyTraj poly_msg;
@@ -524,6 +567,82 @@ namespace ego_planner
       }
     }
 
+    return true;
+  }
+
+  bool EGOReplanFSM::stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
+                                                    double t_cur,
+                                                    std::string *reason)
+  {
+    const auto set_reason = [&](const std::string &msg)
+    {
+      if (reason != nullptr)
+      {
+        *reason = msg;
+      }
+    };
+
+    if (!state2state_keep_current_traj_)
+    {
+      set_reason("keep_disabled");
+      return false;
+    }
+    if (info == nullptr)
+    {
+      set_reason("null_local_traj");
+      return false;
+    }
+    if (plan_monitor_ && !plan_monitor_->hasValidLocalTraj(*info))
+    {
+      set_reason("invalid_local_traj");
+      return false;
+    }
+    if (!have_planned_local_target_ || !have_planned_final_goal_)
+    {
+      set_reason("missing_planned_targets");
+      return false;
+    }
+
+    const double remaining_t = std::max(0.0, info->duration - t_cur);
+    if (remaining_t < state2state_min_rest_time_)
+    {
+      set_reason("remaining_time_short");
+      return false;
+    }
+
+    const double lookahead = std::min(state2state_keep_lookahead_, remaining_t);
+    if (!currentTrajStillUsable(lookahead))
+    {
+      set_reason("future_collision_or_invalid");
+      return false;
+    }
+
+    const double local_target_shift =
+        (local_target_pt_ - planned_local_target_pt_).norm();
+    if (local_target_shift > state2state_replan_target_shift_thresh_)
+    {
+      set_reason("local_target_shift");
+      return false;
+    }
+
+    const double final_goal_shift =
+        (final_goal_ - planned_final_goal_).norm();
+    if (final_goal_shift > state2state_replan_target_shift_thresh_)
+    {
+      set_reason("final_goal_shift");
+      return false;
+    }
+
+    const bool near_goal =
+        touch_goal_ ||
+        (final_goal_ - odom_pos_).norm() < near_goal_replan_radius_;
+    if (near_goal)
+    {
+      set_reason("near_goal");
+      return true;
+    }
+
+    set_reason("current_traj_valid");
     return true;
   }
 
@@ -580,6 +699,18 @@ namespace ego_planner
     {
       corridor_disabled_until_ = -1.0;
     }
+  }
+
+  void EGOReplanFSM::resetPlannedTaskTargets()
+  {
+    have_planned_local_target_ = false;
+    have_planned_final_goal_ = false;
+    planned_local_target_pt_.setZero();
+    planned_final_goal_.setZero();
+    have_planned_tracking_target_now_ = false;
+    have_planned_tracking_ref_end_ = false;
+    planned_tracking_target_pos_now_.setZero();
+    planned_tracking_ref_end_.setZero();
   }
 
   bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
@@ -642,6 +773,51 @@ namespace ego_planner
 
     // FSM only manages runtime state transitions.
     // Task semantics come from TaskFactory, and the compiler owns problem construction.
+    bool task_force_plain = force_plain;
+    bool task_prefer_corridor = false;
+    bool task_prefer_esdf = false;
+    std::string resolved_state2state_pref = "plain";
+    if (!tracking_active)
+    {
+      if (task_force_plain || state2state_space_model_preference_ == "plain")
+      {
+        task_force_plain = true;
+        resolved_state2state_pref = "plain";
+      }
+      else if (state2state_space_model_preference_ == "corridor")
+      {
+        task_prefer_corridor = true;
+        resolved_state2state_pref = "corridor";
+      }
+      else if (state2state_space_model_preference_ == "esdf")
+      {
+        task_prefer_esdf = true;
+        resolved_state2state_pref = "esdf";
+      }
+      else
+      {
+        if (planner_manager_->corridorModeEnabled())
+        {
+          task_prefer_corridor = true;
+          resolved_state2state_pref = "auto->corridor";
+        }
+        else if (planner_manager_->esdfModeEnabled())
+        {
+          task_prefer_esdf = true;
+          resolved_state2state_pref = "auto->esdf";
+        }
+        else
+        {
+          task_force_plain = true;
+          resolved_state2state_pref = "auto->plain";
+        }
+      }
+      ROS_INFO("[FSM] state2state task preference=%s resolved=%s force_plain=%s",
+               state2state_space_model_preference_.c_str(),
+               resolved_state2state_pref.c_str(),
+               task_force_plain ? "yes" : "no");
+    }
+
     core::TaskDefinition task_definition = tracking_active
                                                ? tasks::TaskFactory::makeTrackingDefinition(
                                                      tracking_reference_,
@@ -660,9 +836,9 @@ namespace ego_planner
                                                      touch_goal_,
                                                      flag_use_poly_init,
                                                      flag_randomPolyTraj,
-                                                     force_plain,
-                                                     planner_manager_->corridorModeEnabled(),
-                                                     planner_manager_->esdfModeEnabled());
+                                                     task_force_plain,
+                                                     task_prefer_corridor,
+                                                     task_prefer_esdf);
 
     core::PlanningSolution planning_solution;
     const bool plan_success = task_executor_
@@ -689,6 +865,17 @@ namespace ego_planner
         have_planned_tracking_target_now_ = true;
         planned_tracking_ref_end_ = tracking_reference_.p_ref.back();
         have_planned_tracking_ref_end_ = true;
+        have_planned_local_target_ = false;
+        have_planned_final_goal_ = false;
+      }
+      else
+      {
+        planned_local_target_pt_ = local_target_pt_;
+        planned_final_goal_ = final_goal_;
+        have_planned_local_target_ = true;
+        have_planned_final_goal_ = true;
+        have_planned_tracking_target_now_ = false;
+        have_planned_tracking_ref_end_ = false;
       }
 
       return true;
@@ -751,6 +938,7 @@ namespace ego_planner
 
   bool EGOReplanFSM::planNextWaypoint(const Eigen::Vector3d next_wp)
   {
+    resetPlannedTaskTargets();
     bool success = false;
     std::vector<Eigen::Vector3d> one_pt_wps;
     one_pt_wps.push_back(next_wp);
