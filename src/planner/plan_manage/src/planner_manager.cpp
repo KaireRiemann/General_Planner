@@ -340,19 +340,6 @@ namespace ego_planner
       velocities.back() = velocities[velocities.size() - 2];
     }
 
-    const core::FeasibleSetSpec *findCorridorFeasibleSet(const core::PlanningProblem &problem)
-    {
-      for (const auto &set : problem.feasible_sets)
-      {
-        if (set.enabled &&
-            set.type == core::FeasibleSetType::CORRIDOR_POLYTOPE &&
-            !set.corridor.empty())
-        {
-          return &set;
-        }
-      }
-      return nullptr;
-    }
   } // namespace
 
 
@@ -517,430 +504,6 @@ namespace ego_planner
     return success;
   }
 
-  bool EGOPlannerManager::buildCompiledStateToStateInitialization(
-      const core::PlanningProblem &problem,
-      bool compiled_use_corridor,
-      bool compiled_use_esdf,
-      MINCOBoundaryState3D &headState,
-      MINCOBoundaryState3D &tailState,
-      Eigen::MatrixXd &innerPts,
-      Eigen::VectorXd &durations,
-      MINCOTraj3D &initTraj,
-      spatial_map::PolyhedraH &corridor_hpolys,
-      Eigen::VectorXi &corridor_piece_idx,
-      std::vector<Eigen::Vector3d> &guide_path,
-      std::vector<Eigen::Vector3d> &display_path,
-      std::string &init_source,
-      std::string &failure_reason)
-  {
-    init_source = "stable_helper";
-    failure_reason.clear();
-    guide_path.clear();
-    display_path.clear();
-    corridor_hpolys.clear();
-    corridor_piece_idx.resize(0);
-    innerPts.resize(3, 0);
-    durations.resize(0);
-
-    const core::TaskSpec &task = problem.task;
-    const Eigen::Vector3d start_pt = problem.start_boundary.position;
-    const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
-    const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
-    const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
-    const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
-    const double ts = pp_.polyTraj_piece_length / std::max(pp_.max_vel_, 0.1);
-
-    Eigen::Vector3d safe_target_pt = goal_pt;
-    if (!sanitizeLocalTarget(goal_pt, safe_target_pt))
-    {
-      failure_reason = "unable to sanitize compiled local target";
-      return false;
-    }
-
-    headState = makeBoundaryState(start_pt, start_vel, start_acc);
-    tailState = makeBoundaryState(safe_target_pt, goal_vel, Eigen::Vector3d::Zero());
-
-    if (compiled_use_corridor)
-    {
-      reportCorridorFailure(FAIL_NONE, "");
-      const auto *corridor_set = findCorridorFeasibleSet(problem);
-      const auto tryCorridorInitialization =
-          [&](const std::vector<Eigen::Vector3d> &candidate_guide_path,
-              const spatial_map::PolyhedraH &candidate_corridor,
-              const Eigen::VectorXi &candidate_piece_idx,
-              const std::string &candidate_source,
-              bool authoritative_failure,
-              std::string *attempt_reason) -> bool
-      {
-        std::vector<Eigen::Vector3d> transition_points;
-        std::vector<double> inner_clearances;
-        Eigen::MatrixXd candidate_inner_pts;
-        Eigen::VectorXd candidate_durations;
-        Eigen::VectorXi candidate_alloc = candidate_piece_idx;
-        MINCOTraj3D candidate_traj;
-        std::vector<Eigen::Vector3d> adjusted_guide_path = candidate_guide_path;
-        if (adjusted_guide_path.size() >= 2)
-        {
-          adjusted_guide_path.front() = start_pt;
-          adjusted_guide_path.back() = safe_target_pt;
-        }
-
-        if (!buildCorridorAwareInitialGuess(start_pt,
-                                            start_vel,
-                                            safe_target_pt,
-                                            candidate_corridor,
-                                            candidate_inner_pts,
-                                            candidate_durations,
-                                            candidate_alloc,
-                                            transition_points,
-                                            inner_clearances))
-        {
-          if (attempt_reason != nullptr)
-          {
-            *attempt_reason = "failed to build GCOPTER-style corridor initial guess";
-          }
-          if (authoritative_failure)
-          {
-            reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                                  "failed to build GCOPTER-style corridor initial guess");
-          }
-          return false;
-        }
-
-        bool corridor_warm_timing_used = false;
-        if (!task.flag_poly_init)
-        {
-          MINCOTraj3D warm_traj;
-          Eigen::MatrixXd warm_inner_pts;
-          Eigen::VectorXd warm_durations;
-          MINCOBoundaryState3D warm_head, warm_tail;
-
-          const bool warm_ok = computeInitState(start_pt,
-                                                start_vel,
-                                                start_acc,
-                                                safe_target_pt,
-                                                goal_vel,
-                                                false,
-                                                false,
-                                                ts,
-                                                warm_traj,
-                                                warm_inner_pts,
-                                                warm_durations,
-                                                warm_head,
-                                                warm_tail);
-          if (warm_ok && applyWarmStartTimingProfile(warm_durations, candidate_durations))
-          {
-            corridor_warm_timing_used = true;
-          }
-        }
-
-        if (!candidate_traj.generate(candidate_inner_pts, headState, tailState, candidate_durations) ||
-            candidate_traj.getTotalDuration() <= 1.0e-6)
-        {
-          if (attempt_reason != nullptr)
-          {
-            *attempt_reason = "failed to generate corridor-seeded MINCO trajectory";
-          }
-          if (authoritative_failure)
-          {
-            reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                                  "failed to generate corridor-seeded MINCO trajectory");
-          }
-          return false;
-        }
-
-        const bool init_seed_feasible = improveCorridorSeedByTimeScaling(ploy_traj_opt_.get(),
-                                                                         headState,
-                                                                         tailState,
-                                                                         candidate_inner_pts,
-                                                                         candidate_durations,
-                                                                         candidate_corridor,
-                                                                         candidate_traj);
-        const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(candidate_traj);
-        const bool seed_inside_corridor =
-            ploy_traj_opt_->isTrajectoryInsideCorridor(candidate_traj, candidate_corridor, 0.0);
-
-        ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
-                 seed_collision_free ? "yes" : "no",
-                 computeTrajectoryMinSdf(candidate_traj),
-                 seed_inside_corridor ? "yes" : "no");
-        ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
-                 corridor_warm_timing_used ? "yes" : "no",
-                 init_seed_feasible ? "yes" : "no");
-
-        if (!seed_collision_free || !seed_inside_corridor)
-        {
-          if (attempt_reason != nullptr)
-          {
-            *attempt_reason = "corridor seed remains infeasible after conservative timing/scaling";
-          }
-          if (authoritative_failure)
-          {
-            reportCorridorFailure(FAIL_CORRIDOR_INIT,
-                                  "corridor seed remains infeasible after conservative timing/scaling");
-          }
-          return false;
-        }
-
-        init_source = candidate_source;
-        guide_path = adjusted_guide_path;
-        display_path = adjusted_guide_path;
-        corridor_hpolys = candidate_corridor;
-        corridor_piece_idx = candidate_alloc;
-        innerPts = candidate_inner_pts;
-        durations = candidate_durations;
-        initTraj = candidate_traj;
-        return true;
-      };
-
-      bool compiler_hint_used = false;
-      bool compiler_hint_init_ok = false;
-      std::string compiler_hint_reason;
-
-      std::vector<Eigen::Vector3d> hint_guide_path;
-      spatial_map::PolyhedraH hint_corridor;
-      Eigen::VectorXi hint_piece_idx;
-      std::string hint_source = "compiled_hint";
-
-      if (corridor_set != nullptr && !corridor_set->corridor.empty())
-      {
-        compiler_hint_used = true;
-        hint_corridor = corridor_set->corridor;
-        hint_piece_idx = corridor_set->corridor_piece_idx;
-        if (corridor_set->corridor_seed_path.size() >= 2)
-        {
-          hint_guide_path = corridor_set->corridor_seed_path;
-        }
-        else if (problem.references.guide_path.size() >= 2)
-        {
-          hint_guide_path = problem.references.guide_path;
-        }
-      }
-      else if (problem.references.guide_path.size() >= 2)
-      {
-        compiler_hint_used = true;
-        hint_source = "mixed";
-        hint_guide_path = problem.references.guide_path;
-
-        std::vector<Eigen::Vector3d> sparse_hint_guide = hint_guide_path;
-        sparse_hint_guide.front() = start_pt;
-        sparse_hint_guide.back() = safe_target_pt;
-        if (sparsifyGuidePath(sparse_hint_guide, sparse_hint_guide) &&
-            generateSafeFlightCorridor(sparse_hint_guide, hint_corridor))
-        {
-          hint_guide_path = sparse_hint_guide;
-        }
-        else
-        {
-          hint_corridor.clear();
-          if (generateSafeFlightCorridor(problem.references.guide_path, hint_corridor))
-          {
-            hint_guide_path = problem.references.guide_path;
-          }
-        }
-      }
-
-      if (compiler_hint_used && hint_guide_path.size() >= 2 && !hint_corridor.empty())
-      {
-        ROS_INFO("[CompiledS2SInit] active_mode=CORRIDOR trying compiler corridor hint route");
-        compiler_hint_init_ok = tryCorridorInitialization(hint_guide_path,
-                                                          hint_corridor,
-                                                          hint_piece_idx,
-                                                          hint_source,
-                                                          false,
-                                                          &compiler_hint_reason);
-        if (!compiler_hint_init_ok)
-        {
-          ROS_WARN("[CompiledS2SInit] compiler corridor hint init failed: %s",
-                   compiler_hint_reason.c_str());
-        }
-      }
-
-      if (compiler_hint_init_ok)
-      {
-        return true;
-      }
-
-      ROS_WARN("[CompiledS2SInit] retry stable corridor helper initialization");
-      guide_path.clear();
-      display_path.clear();
-      corridor_hpolys.clear();
-      corridor_piece_idx.resize(0);
-      innerPts.resize(3, 0);
-      durations.resize(0);
-
-      if (!prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
-      {
-        failure_reason = last_corridor_failure_tag_.empty()
-                             ? "failed to build corridor guide/corridor from stable helper"
-                             : last_corridor_failure_tag_;
-        ROS_WARN("[CompiledS2SInit] stable corridor helper failed: %s",
-                 failure_reason.c_str());
-        return false;
-      }
-
-      display_path = guide_path;
-      std::string stable_reason;
-      const bool stable_ok = tryCorridorInitialization(guide_path,
-                                                       corridor_hpolys,
-                                                       corridor_piece_idx,
-                                                       compiler_hint_used ? "mixed" : "stable_helper",
-                                                       true,
-                                                       &stable_reason);
-      if (!stable_ok)
-      {
-        failure_reason = last_corridor_failure_tag_.empty() ? stable_reason : last_corridor_failure_tag_;
-        ROS_WARN("[CompiledS2SInit] stable corridor helper init failed: %s",
-                 failure_reason.c_str());
-        return false;
-      }
-
-      ROS_INFO("[CompiledS2SInit] stable corridor helper succeeded");
-      return true;
-    }
-
-    if (compiled_use_esdf)
-    {
-      std::vector<Eigen::Vector3d> dense_path;
-      Eigen::Vector3d safe_goal = safe_target_pt;
-      if (problem.references.guide_path.size() >= 2)
-      {
-        init_source = "compiled_hint";
-        dense_path = problem.references.guide_path;
-        dense_path.front() = start_pt;
-        dense_path.back() = safe_goal;
-      }
-      else if (!prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
-      {
-        failure_reason = "failed to prepare local A* path for ESDF init";
-        return false;
-      }
-
-      display_path = dense_path;
-
-      if (!sparsifyGuidePath(dense_path, guide_path))
-      {
-        guide_path = dense_path;
-      }
-      if (guide_path.size() < 2)
-      {
-        failure_reason = "failed to build stable ESDF guide path";
-        return false;
-      }
-
-      Eigen::MatrixXd guide_inner_pts;
-      Eigen::VectorXd guide_durations;
-      MINCOTraj3D guide_init_traj;
-      if (!buildInitStateFromGuidePath(start_pt,
-                                       start_vel,
-                                       start_acc,
-                                       safe_goal,
-                                       goal_vel,
-                                       guide_path,
-                                       guide_init_traj,
-                                       guide_inner_pts,
-                                       guide_durations,
-                                       headState,
-                                       tailState))
-      {
-        failure_reason = "failed to build guide-based ESDF initial trajectory";
-        return false;
-      }
-
-      innerPts = guide_inner_pts;
-      durations = guide_durations;
-      initTraj = guide_init_traj;
-
-      bool warm_start_used = false;
-      if (!task.flag_poly_init)
-      {
-        MINCOTraj3D warm_traj;
-        Eigen::MatrixXd warm_inner_pts;
-        Eigen::VectorXd warm_durations;
-        MINCOBoundaryState3D warm_head, warm_tail;
-        const bool warm_ok = computeInitState(start_pt,
-                                              start_vel,
-                                              start_acc,
-                                              safe_goal,
-                                              goal_vel,
-                                              false,
-                                              false,
-                                              ts,
-                                              warm_traj,
-                                              warm_inner_pts,
-                                              warm_durations,
-                                              warm_head,
-                                              warm_tail);
-
-        if (warm_ok && warm_durations.size() > 0)
-        {
-          std::vector<Eigen::Vector3d> warm_anchors;
-          if (resamplePolylineByCount(guide_path, warm_durations.size() + 1, warm_anchors))
-          {
-            Eigen::MatrixXd warm_inner_from_guide(3, std::max(0, static_cast<int>(warm_anchors.size()) - 2));
-            for (int i = 1; i + 1 < static_cast<int>(warm_anchors.size()); ++i)
-            {
-              warm_inner_from_guide.col(i - 1) = warm_anchors[static_cast<std::size_t>(i)];
-            }
-
-            MINCOTraj3D mixed_init_traj;
-            if (mixed_init_traj.generate(warm_inner_from_guide, headState, tailState, warm_durations))
-            {
-              innerPts = warm_inner_from_guide;
-              durations = warm_durations;
-              initTraj = mixed_init_traj;
-              warm_start_used = true;
-              if (init_source == "compiled_hint")
-              {
-                init_source = "mixed";
-              }
-            }
-          }
-        }
-      }
-
-      ROS_INFO("ESDF init strategy: %s (guide_points=%zu pieces=%ld)",
-               warm_start_used ? "warm_duration+guide_inner" : "guide_only",
-               guide_path.size(),
-               static_cast<long>(durations.size()));
-      const double init_min_sdf = computeTrajectoryMinSdf(initTraj);
-      const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
-      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-               init_min_sdf >= esdf_tol ? "yes" : "no",
-               init_min_sdf);
-      return true;
-    }
-
-    if (!computeInitState(start_pt,
-                          start_vel,
-                          start_acc,
-                          safe_target_pt,
-                          goal_vel,
-                          task.flag_poly_init,
-                          task.flag_random_poly_traj,
-                          ts,
-                          initTraj,
-                          innerPts,
-                          durations,
-                          headState,
-                          tailState))
-    {
-      failure_reason = "failed to build plain initial trajectory with stable helper";
-      return false;
-    }
-
-    init_source = "stable_helper";
-    guide_path = problem.references.guide_path;
-    display_path = guide_path;
-    if (guide_path.size() >= 2)
-    {
-      guide_path.front() = start_pt;
-      guide_path.back() = safe_target_pt;
-      display_path = guide_path;
-    }
-    return initTraj.getTotalDuration() > 1.0e-6;
-  }
-
   bool EGOPlannerManager::solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
                                                            core::PlanningSolution &solution)
   {
@@ -1082,35 +645,50 @@ namespace ego_planner
       return runModePinnedLegacyFallback("compiled problem is missing valid MINCO boundaries", nullptr);
     }
 
-    MINCOBoundaryState3D headState;
-    MINCOBoundaryState3D tailState;
-    Eigen::MatrixXd innerPts;
-    Eigen::VectorXd durations;
-    MINCOTraj3D initTraj;
-    spatial_map::PolyhedraH corridor_hpolys;
-    Eigen::VectorXi corridor_piece_idx;
-    std::vector<Eigen::Vector3d> active_guide_path = problem.references.guide_path;
-    std::vector<Eigen::Vector3d> display_path;
-    std::string solver_init_source;
-    std::string init_failure_reason;
-    if (!buildCompiledStateToStateInitialization(problem,
-                                                 compiled_use_corridor,
-                                                 compiled_use_esdf,
-                                                 headState,
-                                                 tailState,
-                                                 innerPts,
-                                                 durations,
-                                                 initTraj,
-                                                 corridor_hpolys,
-                                                 corridor_piece_idx,
-                                                 active_guide_path,
-                                                 display_path,
-                                                 solver_init_source,
-                                                 init_failure_reason))
+    if (!state_to_state_initializer_)
     {
-      return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_failure_reason,
-                                         active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+      return fillCompiledFailure("state-to-state initializer is not available");
     }
+
+    solver::StateToStateInitializationResult init_result;
+    if (!state_to_state_initializer_->initialize(problem, init_result))
+    {
+      if (compiled_use_corridor)
+      {
+        switch (init_result.failure_type)
+        {
+        case solver::StateToStateInitFailureType::LOCAL_TARGET_INVALID:
+          reportCorridorFailure(FAIL_LOCAL_TARGET_INVALID, init_result.failure_reason);
+          break;
+        case solver::StateToStateInitFailureType::GUIDE_PATH_TOO_CLOSE:
+          reportCorridorFailure(FAIL_GUIDE_PATH_TOO_CLOSE, init_result.failure_reason);
+          break;
+        case solver::StateToStateInitFailureType::CORRIDOR_GENERATION:
+          reportCorridorFailure(FAIL_CORRIDOR_GENERATION, init_result.failure_reason);
+          break;
+        case solver::StateToStateInitFailureType::CORRIDOR_INIT:
+          reportCorridorFailure(FAIL_CORRIDOR_INIT, init_result.failure_reason);
+          break;
+        case solver::StateToStateInitFailureType::NONE:
+        default:
+          break;
+        }
+      }
+      return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_result.failure_reason,
+                                         init_result.guide_path.size() >= 2 ? &init_result.guide_path : nullptr);
+    }
+
+    MINCOBoundaryState3D &headState = init_result.head_state;
+    MINCOBoundaryState3D &tailState = init_result.tail_state;
+    Eigen::MatrixXd &innerPts = init_result.inner_points;
+    Eigen::VectorXd &durations = init_result.durations;
+    MINCOTraj3D &initTraj = init_result.init_traj;
+    spatial_map::PolyhedraH &corridor_hpolys = init_result.corridor_hpolys;
+    Eigen::VectorXi &corridor_piece_idx = init_result.corridor_piece_idx;
+    std::vector<Eigen::Vector3d> &active_guide_path = init_result.guide_path;
+    const std::vector<Eigen::Vector3d> &display_path =
+        init_result.dense_path.empty() ? init_result.guide_path : init_result.dense_path;
+    const std::string &solver_init_source = init_result.init_source;
 
     if (durations.size() <= 0 || !durations.allFinite())
     {
@@ -1146,9 +724,13 @@ namespace ego_planner
              problem.references.guide_path.size(),
              corridor_set_count,
              seedKindString(problem.seed.kind));
-    ROS_INFO("[CompiledS2SInit] active_mode=%s solver_init_source=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
+    ROS_INFO("[CompiledS2SInit] active_mode=%s solver_init_source=%s compiler_hint_attempted=%s compiler_hint_succeeded=%s stable_helper_attempted=%s stable_helper_succeeded=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
              mode_str,
              solver_init_source.c_str(),
+             init_result.compiler_hint_attempted ? "yes" : "no",
+             init_result.compiler_hint_succeeded ? "yes" : "no",
+             init_result.stable_helper_attempted ? "yes" : "no",
+             init_result.stable_helper_succeeded ? "yes" : "no",
              active_guide_path.size(),
              corridor_hpolys.size(),
              static_cast<long>(durations.size()));
@@ -1552,6 +1134,27 @@ namespace ego_planner
     if (!backend_solver_)
     {
       backend_solver_.reset(new optimization::CompatibilityBackendSolver());
+    }
+    solver::StateToStateInitResources init_resources;
+    init_resources.plan_params = &pp_;
+    init_resources.traj_container = &traj_;
+    init_resources.continuous_failures_count = &continous_failures_count_;
+    init_resources.grid_map = grid_map_;
+    init_resources.jps_astar = jps_astar_.get();
+    init_resources.optimizer = ploy_traj_opt_.get();
+    init_resources.guide_min_clearance = guide_min_clearance_;
+    init_resources.guide_sparse_min_inner = guide_sparse_min_inner_;
+    init_resources.guide_sparse_max_inner = guide_sparse_max_inner_;
+    init_resources.guide_turn_angle_deg = guide_turn_angle_deg_;
+    init_resources.sfc_progress = sfc_progress_;
+    init_resources.sfc_range = sfc_range_;
+    if (!state_to_state_initializer_)
+    {
+      state_to_state_initializer_.reset(new solver::StateToStateInitializer(init_resources));
+    }
+    else
+    {
+      state_to_state_initializer_->setResources(init_resources);
     }
   }
 

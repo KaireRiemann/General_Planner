@@ -23,6 +23,7 @@
 #include <compiler/problem_compiler.hpp>
 #include <optimization/backend_solver.hpp>
 #include <optimization/problem_adapter.hpp>
+#include <solver/state_to_state_initializer.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
@@ -167,20 +168,6 @@ namespace ego_planner
                                  core::PlanningSolution &solution);
     bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
                                           core::PlanningSolution &solution);
-    bool buildCompiledStateToStateInitialization(const core::PlanningProblem &problem,
-                                                 bool compiled_use_corridor,
-                                                 bool compiled_use_esdf,
-                                                 MINCOBoundaryState3D &headState,
-                                                 MINCOBoundaryState3D &tailState,
-                                                 Eigen::MatrixXd &innerPts,
-                                                 Eigen::VectorXd &durations,
-                                                 MINCOTraj3D &initTraj,
-                                                 spatial_map::PolyhedraH &corridor_hpolys,
-                                                 Eigen::VectorXi &corridor_piece_idx,
-                                                 std::vector<Eigen::Vector3d> &guide_path,
-                                                 std::vector<Eigen::Vector3d> &display_path,
-                                                 std::string &init_source,
-                                                 std::string &failure_reason);
 
     // Frontend / seed helpers that still back the legacy replan path.
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
@@ -315,6 +302,7 @@ namespace ego_planner
 
     std::unique_ptr<compiler::ProblemCompiler> problem_compiler_;
     std::unique_ptr<optimization::BackendSolver> backend_solver_;
+    std::unique_ptr<solver::StateToStateInitializer> state_to_state_initializer_;
 
     int replan_seq_{0};
     CorridorFailureType last_corridor_failure_type_{FAIL_NONE};

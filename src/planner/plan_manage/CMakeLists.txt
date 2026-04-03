@@ -59,6 +59,7 @@ add_executable(ego_planner_node
   ../frontend/visible_region_service.cpp
   ../frontend/terminal_manifold_service.cpp
   ../frontend/warm_start_service.cpp
+  ../solver/state_to_state_initializer.cpp
   ../runtime/task_executor.cpp
   ../runtime/plan_monitor.cpp
   ../runtime/replan_trigger.cpp
