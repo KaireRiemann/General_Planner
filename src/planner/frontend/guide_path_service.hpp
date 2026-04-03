@@ -26,6 +26,14 @@ struct GuidePathArtifact
 class GuidePathService
 {
 public:
+  bool searchStateToStateDensePath(const core::PlanningContext &context,
+                                   const core::TaskDefinition &task_definition,
+                                   std::vector<Eigen::Vector3d> &path) const;
+
+  bool searchStateToStateDensePath(const core::PlanningContext &context,
+                                   const core::TaskSpec &task,
+                                   std::vector<Eigen::Vector3d> &path) const;
+
   bool buildStateToStateGuide(const core::PlanningContext &context,
                               const core::TaskDefinition &task_definition,
                               GuidePathArtifact &artifact) const;

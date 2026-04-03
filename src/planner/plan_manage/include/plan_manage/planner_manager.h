@@ -167,6 +167,18 @@ namespace ego_planner
                                  core::PlanningSolution &solution);
     bool solveStateToStateCompiledProblem(const core::PlanningProblem &problem,
                                           core::PlanningSolution &solution);
+    bool buildCompiledStateToStateInitialization(const core::PlanningProblem &problem,
+                                                 bool compiled_use_corridor,
+                                                 bool compiled_use_esdf,
+                                                 MINCOBoundaryState3D &headState,
+                                                 MINCOBoundaryState3D &tailState,
+                                                 Eigen::MatrixXd &innerPts,
+                                                 Eigen::VectorXd &durations,
+                                                 MINCOTraj3D &initTraj,
+                                                 spatial_map::PolyhedraH &corridor_hpolys,
+                                                 Eigen::VectorXi &corridor_piece_idx,
+                                                 std::vector<Eigen::Vector3d> &guide_path,
+                                                 std::string &failure_reason);
 
     // Frontend / seed helpers that still back the legacy replan path.
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,

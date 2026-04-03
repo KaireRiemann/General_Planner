@@ -99,6 +99,7 @@ struct PlanningProblem
 {
   std::string problem_name{"planning_problem"};
   bool valid{false};
+  std::string compile_message;
 
   PlanningContext context;
   TaskDefinition task_definition;

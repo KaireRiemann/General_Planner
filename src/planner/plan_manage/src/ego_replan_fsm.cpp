@@ -886,6 +886,11 @@ namespace ego_planner
       markCorridorFailure(planner_manager_->getLastCorridorFailureType());
     }
 
+    if (!planning_solution.message.empty())
+    {
+      ROS_WARN("[FSM] planning failed: %s", planning_solution.message.c_str());
+    }
+
     return false;
   }
 

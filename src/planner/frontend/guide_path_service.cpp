@@ -126,13 +126,10 @@ bool sparsifyGuidePath(const ego_planner::core::PlanningContext &context,
 namespace ego_planner::frontend
 {
 
-bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &context,
-                                              const core::TaskDefinition &task_definition,
-                                              GuidePathArtifact &artifact) const
+bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &context,
+                                                   const core::TaskDefinition &task_definition,
+                                                   std::vector<Eigen::Vector3d> &path) const
 {
-  artifact.points.clear();
-  artifact.times.clear();
-
   const auto *guide_ref =
       task_definition.findActiveReference(core::ReferenceSemanticType::GUIDE_PATH);
   if (guide_ref == nullptr)
@@ -143,23 +140,98 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
 
   if (guide_ref != nullptr && !guide_ref->points.empty())
   {
-    std::vector<Eigen::Vector3d> sparse_points;
-    const auto &points =
-        sparsifyGuidePath(context, guide_ref->points, sparse_points) ? sparse_points : guide_ref->points;
-    if (!buildFromWaypoints(points, artifact))
-    {
-      return false;
-    }
-    if (guide_ref->times.size() == guide_ref->points.size() &&
-        guide_ref->points.size() == points.size())
-    {
-      artifact.times = guide_ref->times;
-    }
-    return artifact.valid();
+    path = guide_ref->points;
+    return path.size() >= 2;
   }
 
   core::TaskSpec compat_task = task_definition.toTaskSpec();
-  return buildStateToStateGuide(context, compat_task, artifact);
+  return searchStateToStateDensePath(context, compat_task, path);
+}
+
+bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &context,
+                                                   const core::TaskSpec &task,
+                                                   std::vector<Eigen::Vector3d> &path) const
+{
+  path.clear();
+
+  if (!task.preferred_guide_path.empty())
+  {
+    path = task.preferred_guide_path;
+    return path.size() >= 2;
+  }
+
+  Eigen::Vector3d safe_start = task.start_pt;
+  Eigen::Vector3d safe_goal = task.goal_pt;
+  if (!sanitizePoint(context, task.start_pt, safe_start) ||
+      !sanitizePoint(context, task.goal_pt, safe_goal))
+  {
+    return false;
+  }
+
+  bool search_ok = false;
+  if (context.jps_astar != nullptr)
+  {
+    search_ok = context.jps_astar->search(safe_start, safe_goal, path);
+  }
+
+  if (!search_ok)
+  {
+    path.clear();
+    path.push_back(safe_start);
+    path.push_back(safe_goal);
+  }
+
+  if (path.size() < 2)
+  {
+    return false;
+  }
+
+  if ((path.front() - task.start_pt).norm() > 1.0e-3)
+  {
+    path.insert(path.begin(), task.start_pt);
+  }
+  if ((path.back() - task.goal_pt).norm() > 1.0e-3)
+  {
+    path.push_back(task.goal_pt);
+  }
+  return path.size() >= 2;
+}
+
+bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &context,
+                                              const core::TaskDefinition &task_definition,
+                                              GuidePathArtifact &artifact) const
+{
+  artifact.points.clear();
+  artifact.times.clear();
+
+  std::vector<Eigen::Vector3d> dense_path;
+  if (!searchStateToStateDensePath(context, task_definition, dense_path))
+  {
+    return false;
+  }
+
+  std::vector<Eigen::Vector3d> sparse_points;
+  const auto &points =
+      sparsifyGuidePath(context, dense_path, sparse_points) ? sparse_points : dense_path;
+  if (!buildFromWaypoints(points, artifact))
+  {
+    return false;
+  }
+
+  const auto *guide_ref =
+      task_definition.findActiveReference(core::ReferenceSemanticType::GUIDE_PATH);
+  if (guide_ref == nullptr)
+  {
+    guide_ref =
+        task_definition.findActiveReference(core::ReferenceSemanticType::WAYPOINT_SEQUENCE);
+  }
+  if (guide_ref != nullptr &&
+      guide_ref->times.size() == guide_ref->points.size() &&
+      guide_ref->points.size() == points.size())
+  {
+    artifact.times = guide_ref->times;
+  }
+  return artifact.valid();
 }
 
 bool GuidePathService::sanitizePoint(const core::PlanningContext &context,
@@ -215,59 +287,19 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
   artifact.points.clear();
   artifact.times.clear();
 
-  if (!task.preferred_guide_path.empty())
-  {
-    std::vector<Eigen::Vector3d> sparse_points;
-    const auto &points =
-        sparsifyGuidePath(context, task.preferred_guide_path, sparse_points)
-            ? sparse_points
-            : task.preferred_guide_path;
-    return buildFromWaypoints(points, artifact);
-  }
-
-  Eigen::Vector3d safe_start = task.start_pt;
-  Eigen::Vector3d safe_goal = task.goal_pt;
-  if (!sanitizePoint(context, task.start_pt, safe_start) ||
-      !sanitizePoint(context, task.goal_pt, safe_goal))
+  std::vector<Eigen::Vector3d> dense_path;
+  if (!searchStateToStateDensePath(context, task, dense_path))
   {
     return false;
-  }
-
-  std::vector<Eigen::Vector3d> path;
-  bool search_ok = false;
-  if (context.jps_astar != nullptr)
-  {
-    search_ok = context.jps_astar->search(safe_start, safe_goal, path);
-  }
-
-  if (!search_ok)
-  {
-    path.clear();
-    path.push_back(safe_start);
-    path.push_back(safe_goal);
-  }
-
-  if (path.size() < 2)
-  {
-    return false;
-  }
-
-  if ((path.front() - task.start_pt).norm() > 1.0e-3)
-  {
-    path.insert(path.begin(), task.start_pt);
-  }
-  if ((path.back() - task.goal_pt).norm() > 1.0e-3)
-  {
-    path.push_back(task.goal_pt);
   }
 
   std::vector<Eigen::Vector3d> sparse_path;
-  if (sparsifyGuidePath(context, path, sparse_path))
+  if (sparsifyGuidePath(context, dense_path, sparse_path))
   {
-    path.swap(sparse_path);
+    dense_path.swap(sparse_path);
   }
 
-  return buildFromWaypoints(path, artifact);
+  return buildFromWaypoints(dense_path, artifact);
 }
 
 bool GuidePathService::buildFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,

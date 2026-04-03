@@ -127,9 +127,9 @@ bool assembleInitialGuessFromAnchors(const ego_planner::core::PlanningContext &c
   return durations.size() > 0;
 }
 
-bool buildGuideSeed(const ego_planner::core::PlanningContext &context,
-                    const ego_planner::core::PlanningProblem &problem,
-                    ego_planner::core::SeedSpec &seed)
+bool buildGuideSeedImpl(const ego_planner::core::PlanningContext &context,
+                        const ego_planner::core::PlanningProblem &problem,
+                        ego_planner::core::SeedSpec &seed)
 {
   if (problem.references.guide_path.size() < 2)
   {
@@ -146,9 +146,9 @@ bool buildGuideSeed(const ego_planner::core::PlanningContext &context,
                                          seed.durations);
 }
 
-bool buildCorridorSeed(const ego_planner::core::PlanningContext &context,
-                       const ego_planner::core::PlanningProblem &problem,
-                       ego_planner::core::SeedSpec &seed)
+bool buildCorridorSeedImpl(const ego_planner::core::PlanningContext &context,
+                           const ego_planner::core::PlanningProblem &problem,
+                           ego_planner::core::SeedSpec &seed)
 {
   const auto *corridor_set = findCorridorSet(problem);
   if (corridor_set == nullptr ||
@@ -178,13 +178,60 @@ bool buildCorridorSeed(const ego_planner::core::PlanningContext &context,
                                       &short_path,
                                       &seed.corridor_piece_idx))
   {
-    return false;
+    const std::vector<Eigen::Vector3d> &fallback_path =
+        corridor_set->corridor_seed_path.size() >= 2
+            ? corridor_set->corridor_seed_path
+            : problem.references.guide_path;
+    if (fallback_path.size() < 2 ||
+        !assembleInitialGuessFromAnchors(context,
+                                         fallback_path,
+                                         seed.inner_points,
+                                         seed.durations))
+    {
+      return false;
+    }
+
+    seed.anchor_points = fallback_path;
+    seed.corridor_piece_idx = Eigen::VectorXi::Zero(static_cast<int>(corridor_set->corridor.size()));
+    if (seed.corridor_piece_idx.size() == 1)
+    {
+      seed.corridor_piece_idx(0) = seed.durations.size();
+    }
+    else if (seed.corridor_piece_idx.size() > 1 && seed.durations.size() > 0)
+    {
+      for (int i = 0; i < seed.durations.size(); ++i)
+      {
+        const double ratio =
+            (static_cast<double>(i) + 0.5) / static_cast<double>(seed.durations.size());
+        const int poly_id =
+            std::min(static_cast<int>(seed.corridor_piece_idx.size()) - 1,
+                     std::max(0, static_cast<int>(std::floor(ratio * seed.corridor_piece_idx.size()))));
+        seed.corridor_piece_idx(poly_id) += 1;
+      }
+    }
+    return seed.durations.size() > 0;
   }
 
   if (seed.corridor_piece_idx.size() != static_cast<int>(corridor_set->corridor.size()) ||
       seed.corridor_piece_idx.sum() != seed.durations.size())
   {
-    return false;
+    seed.corridor_piece_idx = Eigen::VectorXi::Zero(static_cast<int>(corridor_set->corridor.size()));
+    if (seed.corridor_piece_idx.size() == 1)
+    {
+      seed.corridor_piece_idx(0) = seed.durations.size();
+    }
+    else if (seed.corridor_piece_idx.size() > 1 && seed.durations.size() > 0)
+    {
+      for (int i = 0; i < seed.durations.size(); ++i)
+      {
+        const double ratio =
+            (static_cast<double>(i) + 0.5) / static_cast<double>(seed.durations.size());
+        const int poly_id =
+            std::min(static_cast<int>(seed.corridor_piece_idx.size()) - 1,
+                     std::max(0, static_cast<int>(std::floor(ratio * seed.corridor_piece_idx.size()))));
+        seed.corridor_piece_idx(poly_id) += 1;
+      }
+    }
   }
 
   if (short_path.size() >= 2)
@@ -208,17 +255,43 @@ bool buildCorridorSeed(const ego_planner::core::PlanningContext &context,
 namespace ego_planner::compiler
 {
 
-bool SeedBuilder::buildSeedFromGuide(const core::PlanningContext &context,
-                                     const core::PlanningProblem &problem,
-                                     core::SeedSpec &seed) const
+bool SeedBuilder::buildGuideSeed(const core::PlanningContext &context,
+                                 const core::PlanningProblem &problem,
+                                 core::SeedSpec &seed) const
 {
-  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+  if (!buildGuideSeedImpl(context, problem, seed))
   {
-    return buildCorridorSeed(context, problem, seed) ||
-           buildGuideSeed(context, problem, seed);
+    return false;
   }
 
-  return buildGuideSeed(context, problem, seed);
+  if (problem.active_space_model == core::ActiveSpaceModel::PLAIN)
+  {
+    seed.kind = core::SeedSpec::Kind::PLAIN_INIT;
+  }
+  else if (problem.active_space_model == core::ActiveSpaceModel::ESDF)
+  {
+    seed.kind = core::SeedSpec::Kind::ESDF_INIT;
+  }
+  else if (problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION)
+  {
+    seed.kind = core::SeedSpec::Kind::SEMANTIC_INIT;
+  }
+  return true;
+}
+
+bool SeedBuilder::buildTransitSeed(const core::PlanningContext &context,
+                                   const core::PlanningProblem &problem,
+                                   core::SeedSpec &seed) const
+{
+  switch (problem.active_space_model)
+  {
+  case core::ActiveSpaceModel::CORRIDOR:
+    return buildCorridorSeedImpl(context, problem, seed);
+  case core::ActiveSpaceModel::ESDF:
+  case core::ActiveSpaceModel::PLAIN:
+  default:
+    return buildGuideSeed(context, problem, seed);
+  }
 }
 
 bool SeedBuilder::build(const core::PlanningContext &context,
@@ -228,21 +301,35 @@ bool SeedBuilder::build(const core::PlanningContext &context,
   problem.seed = core::SeedSpec{};
 
   core::SeedSpec guide_seed;
-  if (buildSeedFromGuide(context, problem, guide_seed))
+  bool seed_ok = false;
+  switch (task_definition.type)
+  {
+  case core::TaskType::STATE_TO_STATE:
+    seed_ok = buildTransitSeed(context, problem, guide_seed);
+    break;
+  case core::TaskType::TRACKING:
+  case core::TaskType::PERCHING:
+  case core::TaskType::UNKNOWN:
+  default:
+    seed_ok = buildGuideSeed(context, problem, guide_seed);
+    break;
+  }
+
+  if (seed_ok)
   {
     problem.seed = guide_seed;
-    if (problem.active_space_model == core::ActiveSpaceModel::PLAIN)
+  }
+  else if (task_definition.type == core::TaskType::STATE_TO_STATE)
+  {
+    if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
     {
-      problem.seed.kind = core::SeedSpec::Kind::PLAIN_INIT;
+      problem.compile_message = "failed to build corridor-aware initial seed";
     }
-    else if (problem.active_space_model == core::ActiveSpaceModel::ESDF)
+    else
     {
-      problem.seed.kind = core::SeedSpec::Kind::ESDF_INIT;
+      problem.compile_message = "failed to build state-to-state initial seed";
     }
-    else if (problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION)
-    {
-      problem.seed.kind = core::SeedSpec::Kind::SEMANTIC_INIT;
-    }
+    return false;
   }
 
   if (context.allow_warm_start)
@@ -254,7 +341,10 @@ bool SeedBuilder::build(const core::PlanningContext &context,
       if (problem.seed.valid &&
           applyWarmStartTimingProfile(warm_start.durations, problem.seed.durations))
       {
-        problem.seed.kind = core::SeedSpec::Kind::WARM_START;
+        if (problem.active_space_model != core::ActiveSpaceModel::CORRIDOR)
+        {
+          problem.seed.kind = core::SeedSpec::Kind::WARM_START;
+        }
       }
     }
   }
@@ -264,6 +354,15 @@ bool SeedBuilder::build(const core::PlanningContext &context,
   problem.variable_layout.inner_point_num =
       problem.seed.valid ? static_cast<int>(problem.seed.inner_points.cols()) : 0;
   problem.variable_layout.boundary_derivative_num = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
+
+  if (!problem.seed.valid && task_definition.type == core::TaskType::STATE_TO_STATE)
+  {
+    if (problem.compile_message.empty())
+    {
+      problem.compile_message = "compiled seed is invalid";
+    }
+    return false;
+  }
 
   return problem.seed.valid || task_definition.type != core::TaskType::STATE_TO_STATE;
 }

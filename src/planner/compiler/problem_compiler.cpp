@@ -7,6 +7,9 @@ namespace
 {
 
 using ego_planner::core::ActiveSpaceModel;
+using ego_planner::core::FeasibleSetType;
+using ego_planner::core::PlanningProblem;
+using ego_planner::core::SeedSpec;
 using ego_planner::core::SpaceModelPreference;
 using ego_planner::core::TaskDefinition;
 using ego_planner::core::TaskType;
@@ -73,6 +76,72 @@ ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
   }
 }
 
+int countEnabledFeasibleSets(const PlanningProblem &problem,
+                             const FeasibleSetType type)
+{
+  int count = 0;
+  for (const auto &set : problem.feasible_sets)
+  {
+    if (set.enabled && set.type == type)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool validateCompiledProblem(PlanningProblem &problem)
+{
+  if (problem.representation != ego_planner::core::RepresentationKind::MINCO)
+  {
+    problem.compile_message = "compiled problem representation is not MINCO";
+    return false;
+  }
+  if (!problem.start_boundary.valid)
+  {
+    problem.compile_message = "compiled problem is missing valid start boundary";
+    return false;
+  }
+  if (!problem.terminal_boundary.valid)
+  {
+    problem.compile_message = "compiled problem is missing valid terminal boundary";
+    return false;
+  }
+  if (problem.task_definition.type != TaskType::STATE_TO_STATE)
+  {
+    return true;
+  }
+
+  if (!problem.seed.valid)
+  {
+    if (problem.compile_message.empty())
+    {
+      problem.compile_message = "compiled state-to-state problem is missing a valid seed";
+    }
+    return false;
+  }
+
+  if (problem.active_space_model == ActiveSpaceModel::CORRIDOR)
+  {
+    if (problem.references.guide_path.size() < 2)
+    {
+      problem.compile_message = "corridor mode requires a guide path with at least 2 points";
+      return false;
+    }
+    if (countEnabledFeasibleSets(problem, FeasibleSetType::CORRIDOR_POLYTOPE) <= 0)
+    {
+      problem.compile_message = "corridor mode requires at least one enabled corridor feasible set";
+      return false;
+    }
+    if (!(problem.seed.corridor_aware || problem.seed.kind == SeedSpec::Kind::CORRIDOR_INIT))
+    {
+      problem.compile_message = "corridor mode requires a corridor-aware seed";
+      return false;
+    }
+  }
+  return true;
+}
+
 void applyDefaultObjectiveConstraintPolicy(const TaskDefinition &task_definition,
                                           ego_planner::core::PlanningProblem &problem)
 {
@@ -123,6 +192,7 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
 {
   problem = core::PlanningProblem{};
   problem.problem_name = task_definition.task_name;
+  problem.compile_message.clear();
   problem.context = context;
   problem.task_definition = task_definition;
   problem.task = task_definition.toTaskSpec();
@@ -133,13 +203,30 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
 
   if (!reference_builder_.build(context, task_definition, problem))
   {
+    if (problem.compile_message.empty())
+    {
+      problem.compile_message = "reference builder rejected task";
+    }
     return false;
   }
   if (!feasible_set_builder_.build(context, task_definition, problem))
   {
+    if (problem.compile_message.empty())
+    {
+      problem.compile_message = "feasible-set builder rejected task";
+    }
     return false;
   }
   if (!seed_builder_.build(context, task_definition, problem))
+  {
+    if (problem.compile_message.empty())
+    {
+      problem.compile_message = "seed builder rejected task";
+    }
+    return false;
+  }
+
+  if (!validateCompiledProblem(problem))
   {
     return false;
   }
@@ -208,6 +295,10 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
   }
 
   problem.valid = static_cast<bool>(problem.solve_callback);
+  if (!problem.valid && problem.compile_message.empty())
+  {
+    problem.compile_message = "compiled planning problem is missing solve callback";
+  }
   return problem.valid;
 }
 

@@ -17,6 +17,18 @@ public:
              core::PlanningProblem &problem) const;
 
 private:
+  bool ensureTransitGuidePath(const core::PlanningContext &context,
+                              const core::TaskDefinition &task_definition,
+                              core::PlanningProblem &problem) const;
+  bool buildPlainFeasibleSets(const core::PlanningContext &context,
+                              const core::TaskDefinition &task_definition,
+                              core::PlanningProblem &problem) const;
+  bool buildEsdfFeasibleSets(const core::PlanningContext &context,
+                             const core::TaskDefinition &task_definition,
+                             core::PlanningProblem &problem) const;
+  bool buildCorridorFeasibleSets(const core::PlanningContext &context,
+                                 const core::TaskDefinition &task_definition,
+                                 core::PlanningProblem &problem) const;
   bool buildTransitFeasibleSets(const core::PlanningContext &context,
                                 const core::TaskDefinition &task_definition,
                                 core::PlanningProblem &problem) const;
