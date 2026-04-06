@@ -14,7 +14,8 @@ class ProblemCompiler
 {
 public:
   // ProblemCompiler is the semantic-to-optimization bridge:
-  // it lowers TaskDefinition into a solver-facing PlanningProblem IR.
+  // it lowers TaskDefinition into a solver-facing PlanningProblem IR and may attach optional hints,
+  // but task-stable state-to-state initialization remains downstream in StateToStateInitializer.
   void setProblemAdapter(optimization::ProblemAdapter *adapter)
   {
     adapter_ = adapter;

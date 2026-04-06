@@ -3254,52 +3254,6 @@ namespace ego_planner
     return true;
   }
 
-  void EGOPlannerManager::getLocalTarget(
-      const double planning_horizen, const Eigen::Vector3d &start_pt,
-      const Eigen::Vector3d &global_end_pt, Eigen::Vector3d &local_target_pos,
-      Eigen::Vector3d &local_target_vel, bool &touch_goal)
-  {
-    double t;
-    touch_goal = false;
-
-    traj_.global_traj.last_glb_t_of_lc_tgt = traj_.global_traj.glb_t_of_lc_tgt;
-
-    double t_step = planning_horizen / 20 / pp_.max_vel_;
-
-    for (t = traj_.global_traj.glb_t_of_lc_tgt;
-         t < (traj_.global_traj.global_start_time + traj_.global_traj.duration);
-         t += t_step)
-    {
-      double local_t = t - traj_.global_traj.global_start_time;
-      Eigen::Vector3d pos_t = traj_.global_traj.traj.evaluate(local_t, 0); // 0 为位置
-      double dist = (pos_t - start_pt).norm();
-
-      if (dist >= planning_horizen)
-      {
-        local_target_pos = pos_t;
-        traj_.global_traj.glb_t_of_lc_tgt = t;
-        break;
-      }
-    }
-
-    if ((t - traj_.global_traj.global_start_time) >= traj_.global_traj.duration - 1e-5)
-    {
-      local_target_pos = global_end_pt;
-      traj_.global_traj.glb_t_of_lc_tgt = traj_.global_traj.global_start_time + traj_.global_traj.duration;
-      touch_goal = true;
-    }
-
-    if ((global_end_pt - local_target_pos).norm() < (pp_.max_vel_ * pp_.max_vel_) / (2 * pp_.max_acc_))
-    {
-      local_target_vel = Eigen::Vector3d::Zero();
-    }
-    else
-    {
-      double local_t = t - traj_.global_traj.global_start_time;
-      local_target_vel = traj_.global_traj.traj.evaluate(local_t, 1); 
-    }
-  }
-
   bool EGOPlannerManager::setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal)
   {
     // Eigen::MatrixXd cps = traj.getControlPoints().transpose();

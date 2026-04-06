@@ -21,6 +21,7 @@ struct LocalTargetSelection
 class LocalTargetSelector
 {
 public:
+  // peekLocalTarget computes a successor local target without mutating progress state.
   bool peekLocalTarget(const TrajContainer &traj_container,
                        double planning_horizon,
                        double max_vel,
@@ -28,6 +29,7 @@ public:
                        const Eigen::Vector3d &global_end_pt,
                        LocalTargetSelection &selection) const;
 
+  // commitLocalTarget advances progress only after a successor plan succeeds.
   bool commitLocalTarget(TrajContainer &traj_container,
                          const LocalTargetSelection &selection) const;
 };

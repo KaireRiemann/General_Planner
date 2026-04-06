@@ -75,6 +75,7 @@
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
         <param name="fsm/state2state_keep_current_traj" value="true" type="bool"/>
+        <param name="fsm/state2state_successor_enable" value="true" type="bool"/>
         <param name="fsm/state2state_keep_lookahead" value="0.80" type="double"/>
         <param name="fsm/state2state_min_rest_time" value="0.80" type="double"/>
         <param name="fsm/state2state_replan_target_shift_thresh" value="0.60" type="double"/>

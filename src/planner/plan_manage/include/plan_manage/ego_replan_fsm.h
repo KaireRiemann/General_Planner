@@ -81,8 +81,25 @@ namespace ego_planner
       ARRIVED_AND_HOLD,
       EMERGENCY_STOP
     };
+    struct StateToStateDecisionDebug
+    {
+      StateToStateRuntimeDecision decision{StateToStateRuntimeDecision::KEEP_EXECUTING};
+      bool keep_current_state2state{false};
+      bool successor_preparation{false};
+      bool immediate_replan{false};
+      bool arrived_hold{false};
+      bool emergency_stop{false};
+      bool preview_valid{false};
+      double remaining_time{0.0};
+      double progress_ratio{0.0};
+      double preview_target_shift{0.0};
+      std::string reason;
+    };
 
     /* planning utils */
+    // planner_manager is only the ROS/resource/module host.
+    // PlannerEngine owns TaskDefinition -> PlanningProblem -> solve orchestration,
+    // and FSM stays responsible for runtime transitions plus successor-planning decisions.
     EGOPlannerManager::Ptr planner_manager_;
     PlanningVisualization::Ptr visualization_;
     traj_utils::DataDisp data_disp_;
@@ -110,6 +127,7 @@ namespace ego_planner
     int corridor_disable_fail_threshold_{3};
     double corridor_disable_duration_{1.0};
     bool state2state_keep_current_traj_{true};
+    bool state2state_successor_enable_{true};
     double state2state_keep_lookahead_{0.8};
     double state2state_min_rest_time_{0.8};
     double state2state_replan_target_shift_thresh_{0.6};
@@ -213,12 +231,17 @@ namespace ego_planner
     bool stateToStateCanKeepCurrentTraj(const LocalTrajData *info,
                                         double t_cur,
                                         std::string *reason = nullptr);
+    bool shouldImmediateReplanStateToState(const LocalTrajData *info,
+                                           double t_cur,
+                                           std::string *reason = nullptr);
     bool shouldPrepareStateToStateSuccessor(const LocalTrajData *info,
                                             double t_cur,
-                                            std::string *reason = nullptr);
+                                            std::string *reason = nullptr,
+                                            double *preview_target_shift = nullptr,
+                                            bool *preview_valid = nullptr);
     StateToStateRuntimeDecision evaluateStateToStateDecision(const LocalTrajData *info,
                                                              double t_cur,
-                                                             std::string *reason = nullptr);
+                                                             StateToStateDecisionDebug *debug = nullptr);
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);

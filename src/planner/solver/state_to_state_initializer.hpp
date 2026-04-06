@@ -45,8 +45,9 @@ struct StateToStateInitResources
 struct StateToStateInitializationResult
 {
   bool success{false};
-  core::ActiveSpaceModel active_mode{core::ActiveSpaceModel::PLAIN};
+  core::ActiveSpaceModel selected_mode{core::ActiveSpaceModel::PLAIN};
   std::string init_source{"stable_helper"};
+  std::string message;
   std::string failure_reason;
   StateToStateInitFailureType failure_type{StateToStateInitFailureType::NONE};
 

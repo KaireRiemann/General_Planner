@@ -53,62 +53,11 @@ namespace ego_planner
       FAIL_CORRIDOR_OPT
     };
     
-    // Planner trajectory now uses MINCO
-    bool computeInitState(
-        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
-        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
-        const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
-        const bool flag_randomPolyTraj, const double &ts,
-        MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
-        MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState);
-
-    // Legacy compatibility path. New callers should prefer solveTask(...).
-    bool reboundReplan(
-        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
-        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
-        const Eigen::Vector3d &end_vel, const bool flag_polyInit,
-        const bool flag_randomPolyTraj, const bool touch_goal,
-        const bool force_plain = false,
-        const cost_functional::TrackingReference *tracking_ref = nullptr,
-        const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr,
-        const cost_functional::TrackingSemanticGuide *tracking_semantic_guide = nullptr);
-
-    // Legacy compatibility path. New callers should prefer solveTask(...).
-    bool planTrackingTask(
-        const cost_functional::TrackingReference &reference,
-        const Eigen::Vector3d &start_pt,
-        const Eigen::Vector3d &start_vel,
-        const Eigen::Vector3d &start_acc,
-        const bool flag_polyInit,
-        const bool flag_randomPolyTraj,
-        const bool force_plain = false);
-
-    bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
-                                      const Eigen::Vector3d &start_vel,
-                                      const Eigen::Vector3d &goal_pt,
-                                      std::vector<Eigen::Vector3d> &guide_path,
-                                      spatial_map::PolyhedraH &corridor_hpolys,
-                                      bool force_refresh = false);
-
-    bool pointInsidePolytope(const Eigen::Vector3d& pt,
-                         const spatial_map::PolyhedronH& hpoly,
-                         double margin = 0.0) const;
-
-    bool pointInsideCorridor(const Eigen::Vector3d& pt,
-                            const spatial_map::PolyhedraH& corridor,
-                            double margin = 0.0) const;
-        
     bool planGlobalTrajWaypoints(
         const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const std::vector<Eigen::Vector3d> &waypoints,
         const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc);
-        
-    void getLocalTarget(
-        const double planning_horizen,
-        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &global_end_pt,
-        Eigen::Vector3d &local_target_pos, Eigen::Vector3d &local_target_vel,
-        bool &touch_goal);
-        
+
     bool EmergencyStop(Eigen::Vector3d stop_pos);
     bool checkCollision(int drone_id);
     
@@ -133,6 +82,47 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
+    // Legacy task bridges are retained only so PlannerEngine can preserve
+    // compatibility paths while planner_manager stays a resource host.
+    bool reboundReplan(
+        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
+        const Eigen::Vector3d &end_vel, const bool flag_polyInit,
+        const bool flag_randomPolyTraj, const bool touch_goal,
+        const bool force_plain = false,
+        const cost_functional::TrackingReference *tracking_ref = nullptr,
+        const std::vector<Eigen::Vector3d> *preferred_guide_path = nullptr,
+        const cost_functional::TrackingSemanticGuide *tracking_semantic_guide = nullptr);
+    bool planTrackingTask(
+        const cost_functional::TrackingReference &reference,
+        const Eigen::Vector3d &start_pt,
+        const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc,
+        const bool flag_polyInit,
+        const bool flag_randomPolyTraj,
+        const bool force_plain = false);
+
+    // Legacy frontend / seed helpers remain here only for compatibility flows.
+    bool computeInitState(
+        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
+        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
+        const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
+        const bool flag_randomPolyTraj, const double &ts,
+        MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
+        MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState);
+    bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
+                                      const Eigen::Vector3d &start_vel,
+                                      const Eigen::Vector3d &goal_pt,
+                                      std::vector<Eigen::Vector3d> &guide_path,
+                                      spatial_map::PolyhedraH &corridor_hpolys,
+                                      bool force_refresh = false);
+    bool pointInsidePolytope(const Eigen::Vector3d &pt,
+                             const spatial_map::PolyhedronH &hpoly,
+                             double margin = 0.0) const;
+    bool pointInsideCorridor(const Eigen::Vector3d &pt,
+                             const spatial_map::PolyhedraH &corridor,
+                             double margin = 0.0) const;
+
     // Frontend / seed helpers that still back the legacy replan path.
     bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
                              Eigen::Vector3d &safe_target) const;

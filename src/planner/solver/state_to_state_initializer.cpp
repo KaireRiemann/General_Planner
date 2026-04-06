@@ -1324,20 +1324,39 @@ bool StateToStateInitializer::initialize(const core::PlanningProblem &problem,
                                          StateToStateInitializationResult &result) const
 {
   result = StateToStateInitializationResult{};
-  result.active_mode = problem.active_space_model;
+  result.selected_mode = problem.active_space_model;
+
+  bool ok = false;
 
   switch (problem.active_space_model)
   {
   case core::ActiveSpaceModel::CORRIDOR:
-    return initializeCorridor(problem, result);
+    ok = initializeCorridor(problem, result);
+    break;
   case core::ActiveSpaceModel::ESDF:
-    return initializeEsdf(problem, result);
+    ok = initializeEsdf(problem, result);
+    break;
   case core::ActiveSpaceModel::PLAIN:
   case core::ActiveSpaceModel::VISIBLE_REGION:
   case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
   default:
-    return initializePlain(problem, result);
+    ok = initializePlain(problem, result);
+    break;
   }
+
+  if (ok)
+  {
+    if (result.message.empty())
+    {
+      result.message = "initialized via " + result.init_source;
+    }
+  }
+  else if (result.message.empty())
+  {
+    result.message = result.failure_reason;
+  }
+
+  return ok;
 }
 
 } // namespace ego_planner::solver

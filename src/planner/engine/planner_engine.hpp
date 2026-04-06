@@ -16,9 +16,10 @@ class EGOPlannerManager;
 namespace ego_planner::engine
 {
 
-// This system is organized as:
-// TaskDefinition + PlanningContext -> ProblemCompiler -> PlanningProblem -> BackendSolver -> PlanningSolution.
-// Task-specific semantics belong in TaskSpec/ProblemCompiler; planner_manager only hosts shared resources.
+// PlannerEngine is the unified task-level solve facade:
+// TaskDefinition + PlanningContext -> ProblemCompiler -> PlanningProblem -> solveProblem -> PlanningSolution.
+// ProblemCompiler owns semantics + optional hints, StateToStateInitializer owns final state-to-state
+// construction, and planner_manager only hosts shared resources/modules.
 class PlannerEngine : public optimization::ProblemAdapter
 {
 public:

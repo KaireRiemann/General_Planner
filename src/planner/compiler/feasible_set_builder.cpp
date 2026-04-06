@@ -1,21 +1,5 @@
 #include <compiler/feasible_set_builder.hpp>
 
-namespace
-{
-
-const ego_planner::core::ReferenceDefinition *findGuideReference(const ego_planner::core::TaskDefinition &task_definition)
-{
-  const auto *guide_ref =
-      task_definition.findActiveReference(ego_planner::core::ReferenceSemanticType::GUIDE_PATH);
-  if (guide_ref != nullptr)
-  {
-    return guide_ref;
-  }
-  return task_definition.findActiveReference(ego_planner::core::ReferenceSemanticType::WAYPOINT_SEQUENCE);
-}
-
-} // namespace
-
 namespace ego_planner::compiler
 {
 

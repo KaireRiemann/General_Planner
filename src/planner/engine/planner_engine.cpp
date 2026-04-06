@@ -556,7 +556,9 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
         break;
       }
     }
-    return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_result.failure_reason,
+    const std::string init_failure =
+        init_result.message.empty() ? init_result.failure_reason : init_result.message;
+    return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_failure,
                                        init_result.guide_path.size() >= 2 ? &init_result.guide_path : nullptr);
   }
 
@@ -571,6 +573,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   const std::vector<Eigen::Vector3d> &display_path =
       init_result.dense_path.empty() ? init_result.guide_path : init_result.dense_path;
   const std::string &solver_init_source = init_result.init_source;
+  const char *selected_mode_str = activeSpaceModelString(init_result.selected_mode);
 
   if (durations.size() <= 0 || !durations.allFinite())
   {
@@ -606,8 +609,9 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
            problem.references.guide_path.size(),
            corridor_set_count,
            seedKindString(problem.seed.kind));
-  ROS_INFO("[CompiledS2SInit] active_mode=%s solver_init_source=%s compiler_hint_attempted=%s compiler_hint_succeeded=%s stable_helper_attempted=%s stable_helper_succeeded=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
+  ROS_INFO("[CompiledS2SInit] requested_mode=%s selected_mode=%s solver_init_source=%s compiler_hint_attempted=%s compiler_hint_succeeded=%s stable_helper_attempted=%s stable_helper_succeeded=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
            mode_str,
+           selected_mode_str,
            solver_init_source.c_str(),
            init_result.compiler_hint_attempted ? "yes" : "no",
            init_result.compiler_hint_succeeded ? "yes" : "no",
@@ -836,8 +840,12 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   solution.used_legacy_adapter = false;
   solution.touch_goal = task_definition.runtime_policy.touch_goal;
   solution.message = flag_success
-                         ? std::string("compiled state-to-state solve success; active_mode=") + mode_str
-                         : std::string("compiled state-to-state solve failed after optimizer; active_mode=") + mode_str;
+                         ? std::string("compiled state-to-state solve success; selected_mode=") +
+                               selected_mode_str +
+                               " init_source=" + solver_init_source
+                         : std::string("compiled state-to-state solve failed after optimizer; selected_mode=") +
+                               selected_mode_str +
+                               " init_source=" + solver_init_source;
   if (flag_success)
   {
     solution.trajectory = planner_manager_->traj_.local_traj.traj;
