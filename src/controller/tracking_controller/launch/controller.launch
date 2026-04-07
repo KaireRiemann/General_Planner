@@ -1,0 +1,34 @@
+<launch>
+    <arg name="body_rate_control" value="false"/>
+    <arg name="acc_control" value="false"/>
+    <arg name="attitude_control" value="false"/>
+    <arg name="vel_control" value="true"/>
+    <arg name="attitude_control_tau" value="0.3"/>
+    <arg name="hover_thrust" value="0.7"/>
+
+
+    <arg name="odometry_topic" value="/iris_0/mavros/vision_odom/odom"/>
+    <arg name="imu_topic" value="/iris_0/imu_gazebo"/>
+    <arg name="trajectory_target_topic" value="/drone_0_planning/pos_cmd"/>
+    <arg name="att_cmd_topic" value="/iris_0/mavros/setpoint_raw/attitude"/>
+    <arg name="acc_cmd_topic" value="/iris_0/mavros/setpoint_raw/local"/>
+    <arg name="vel_cmd_topic" value="/iris_0/mavros/setpoint_raw/local"/>
+
+    <include file="$(find tracking_controller)/launch/control_param.xml">
+        <arg name="body_rate_control" value="$(arg body_rate_control)"/>
+        <arg name="acc_control" value="$(arg acc_control)"/>
+        <arg name="attitude_control" value="$(arg attitude_control)"/>
+        <arg name="vel_control" value="$(arg vel_control)"/>
+        <arg name="attitude_control_tau" value="$(arg attitude_control_tau)"/>
+        <arg name="hover_thrust" value="$(arg hover_thrust)"/>
+
+        <arg name="odometry_topic" value="$(arg odometry_topic)"/>
+        <arg name="imu_topic" value="$(arg imu_topic)"/>
+        <arg name="trajectory_target_topic" value="$(arg trajectory_target_topic)"/>
+        <arg name="att_cmd_topic" value="$(arg att_cmd_topic)"/>
+        <arg name="acc_cmd_topic" value="$(arg acc_cmd_topic)"/>
+        <arg name="vel_cmd_topic" value="$(arg vel_cmd_topic)"/>
+
+    </include>
+
+</launch>

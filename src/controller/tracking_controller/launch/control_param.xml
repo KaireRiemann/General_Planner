@@ -1,0 +1,34 @@
+<launch>
+    <arg name="body_rate_control"/>
+    <arg name="acc_control"/>
+    <arg name="attitude_control"/>
+    <arg name="vel_control"/>
+    <arg name="attitude_control_tau"/>
+    <arg name="hover_thrust"/>
+
+
+    <arg name="odometry_topic"/>
+    <arg name="imu_topic"/>
+    <arg name="trajectory_target_topic"/>
+    <arg name="att_cmd_topic"/>
+    <arg name="acc_cmd_topic"/>
+    <arg name="vel_cmd_topic"/>
+
+    <node pkg="tracking_controller" type="tracking_controller_node" name="tracking_controller_node" output="screen">
+        <remap from="~odom_topic" to="$(arg odometry_topic)"/>
+        <remap from="~imu_topic" to="$(arg imu_topic)"/>
+        <remap from="~trajectory_target_topic" to="$(arg trajectory_target_topic)"/>
+        <remap from="~att_cmd_topic" to="$(arg att_cmd_topic)"/>
+        <remap from="~acc_cmd_topic" to="$(arg acc_cmd_topic)"/>
+        <remap from="~vel_cmd_topic" to="$(arg vel_cmd_topic)"/>
+        
+        <rosparam file="$(find tracking_controller)/launch/param.yaml" ns="controller"/>
+        <param name="controller/body_rate_control_" value="$(arg body_rate_control)" type="bool"/>
+        <param name="controller/acc_control_" value="$(arg acc_control)" type="bool"/>
+        <param name="controller/attitude_control_" value="$(arg attitude_control)" type="bool"/>
+        <param name="controller/vel_control_" value="$(arg vel_control)" type="bool"/>
+        <param name="controller/attitude_control_tau_" value="$(arg attitude_control_tau)" type="double"/>
+        <param name="controller/hover_thrust_" value="$(arg hover_thrust)" type="double"/>
+    </node>
+
+</launch>

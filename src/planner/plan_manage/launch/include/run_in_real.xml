@@ -14,6 +14,10 @@
     <arg name="tracking_reference_topic" default="/tracking/reference"/>
     <arg name="tracking_relay_goal" default="true"/>
     <arg name="tracking_target_goal_topic" default="/tracking/target_goal"/>
+    <arg name="sensor_topics_absolute" default="false"/>
+    <arg name="camera_pose_topic" default="pcl_render_node/camera_pose"/>
+    <arg name="depth_topic" default="/iris_0/realsense/depth_camera/depth/image_raw"/>
+    <arg name="cloud_topic" default="pcl_render_node/cloud"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
@@ -47,11 +51,11 @@
         <!-- camera pose: transform of camera frame in the world frame -->
         <!-- depth topic: depth image, 640x480 by default -->
         <!-- don't set cloud_topic if you already set these ones! -->
-        <arg name="camera_pose_topic" value="pcl_render_node/camera_pose"/>
-        <arg name="depth_topic" value="pcl_render_node/depth"/>
+        <arg name="camera_pose_topic" value="$(arg camera_pose_topic)"/>
+        <arg name="depth_topic" value="$(arg depth_topic)"/>
         <!-- topic of point cloud measurement, such as from LIDAR  -->
         <!-- don't set camera pose and depth, if you already set this one! -->
-        <arg name="cloud_topic" value="pcl_render_node/cloud"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
         <!-- intrinsic params of the depth camera -->
         <arg name="cx" value="321.04638671875"/>
         <arg name="cy" value="243.44969177246094"/>
@@ -70,6 +74,7 @@
         <arg name="tracking_reference_topic" value="$(arg tracking_reference_topic)" />
         <arg name="tracking_relay_goal" value="$(arg tracking_relay_goal)" />
         <arg name="tracking_target_goal_topic" value="$(arg tracking_target_goal_topic)" />
+        <arg name="sensor_topics_absolute" value="$(arg sensor_topics_absolute)" />
         <arg name="enable_esdf" value="$(arg enable_esdf)" />
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
         <arg name="sfc_progress" value="$(arg sfc_progress)" />
@@ -102,6 +107,18 @@
         <remap from="position_cmd" to="drone_$(arg drone_id)_planning/pos_cmd"/>
         <remap from="~planning/trajectory" to="drone_$(arg drone_id)_planning/trajectory"/>
         <param name="traj_server/time_forward" value="1.0" type="double"/>
+    </node>
+
+    <node pkg="odom_visualization" name="drone_$(arg drone_id)_odom_visualization" type="odom_visualization" output="screen">
+        <remap from="~odom" to="$(arg odom_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.0"/>
+        <param name="color/b" value="0.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="$(arg drone_id)"/>
     </node>
     <!-- use simulator -->
     <!-- <include file="$(find ego_planner)/launch/include/simulator.xml">

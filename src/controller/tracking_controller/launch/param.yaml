@@ -1,0 +1,9 @@
+# Position PID
+position_p: [1.5, 1.5, 1.5]
+position_i: [0.0, 0.0, 0.1]
+position_d: [0.0, 0.0, 0.0]
+
+# Velocity
+velocity_p: [1.0, 1.0, 1.0]
+velocity_i: [0.0, 0.0, 0.0]
+velocity_d: [0.0, 0.0, 0.0]
