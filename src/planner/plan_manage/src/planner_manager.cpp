@@ -323,6 +323,11 @@ namespace ego_planner
     tracking_viewpoint_clearance_ = std::max(0.0, tracking_viewpoint_clearance_);
     const char *mode_name = managerDefaultModeString(use_sfc_corridor_, use_esdf_);
     ROS_INFO("Manager default obstacle preference: %s", mode_name);
+    //ROS_INFO("PlannerEngine owns task-level solve orchestration; manager/enable_compiled_state2state is kept only for backward compatibility.");
+
+    nh.setParam("grid_map/local_update_range_x", pp_.planning_horizen_);
+    nh.setParam("grid_map/local_update_range_y", pp_.planning_horizen_);
+    //ROS_INFO("Align grid_map local_update_range_{x,y} to planning_horizon=%.2f", pp_.planning_horizen_);
 
     grid_map_.reset(new GridMap);
     grid_map_->initMap(nh);
@@ -388,6 +393,24 @@ namespace ego_planner
     return use_esdf_;
   }
 
+  solver::StateToStateInitResources EGOPlannerManager::makeStateToStateInitResources() const
+  {
+    solver::StateToStateInitResources resources;
+    resources.plan_params = &pp_;
+    resources.traj_container = &traj_;
+    resources.continuous_failures_count = &continous_failures_count_;
+    resources.grid_map = grid_map_;
+    resources.jps_astar = jps_astar_.get();
+    resources.optimizer = ploy_traj_opt_.get();
+    resources.guide_min_clearance = guide_min_clearance_;
+    resources.guide_sparse_min_inner = guide_sparse_min_inner_;
+    resources.guide_sparse_max_inner = guide_sparse_max_inner_;
+    resources.guide_turn_angle_deg = guide_turn_angle_deg_;
+    resources.sfc_progress = sfc_progress_;
+    resources.sfc_range = sfc_range_;
+    return resources;
+  }
+
   void EGOPlannerManager::reportCorridorFailure(CorridorFailureType type,
                                                 const std::string &detail)
   {
@@ -426,174 +449,6 @@ namespace ego_planner
     {
       ROS_WARN("%s: %s", last_corridor_failure_tag_.c_str(), detail.c_str());
     }
-  }
-
-  bool EGOPlannerManager::sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
-                                              Eigen::Vector3d &safe_target) const
-  {
-    if (!grid_map_)
-    {
-      safe_target = raw_target;
-      return true;
-    }
-
-    if (!mapWindowReady())
-    {
-      safe_target = raw_target;
-      return true;
-    }
-
-    const double resolution = std::max(grid_map_->getResolution(), 1.0e-3);
-    const Eigen::Vector3d map_low = grid_map_->getUpdatedBoxLow();
-    const Eigen::Vector3d map_high = grid_map_->getUpdatedBoxHigh();
-    if (!map_low.allFinite() || !map_high.allFinite() ||
-        (map_high.array() <= map_low.array()).any())
-    {
-      safe_target = raw_target;
-      return true;
-    }
-
-    const Eigen::Vector3d clamp_low =
-        map_low + Eigen::Vector3d::Constant(2.0 * resolution);
-    const Eigen::Vector3d clamp_high =
-        map_high - Eigen::Vector3d::Constant(2.0 * resolution);
-
-    safe_target = raw_target.cwiseMax(clamp_low).cwiseMin(clamp_high);
-    if (grid_map_->getInflateOccupancy(safe_target) == 0)
-    {
-      return true;
-    }
-
-    const int max_step = std::max(4, static_cast<int>(std::ceil(std::max(sfc_range_, 1.5) / resolution)));
-    for (int ring = 1; ring <= max_step; ++ring)
-    {
-      double best_score = -std::numeric_limits<double>::infinity();
-      Eigen::Vector3d best_candidate = safe_target;
-      bool found = false;
-
-      for (int dx = -ring; dx <= ring; ++dx)
-      {
-        for (int dy = -ring; dy <= ring; ++dy)
-        {
-          for (int dz = -ring; dz <= ring; ++dz)
-          {
-            if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != ring)
-            {
-              continue;
-            }
-
-            const Eigen::Vector3d candidate =
-                (safe_target + Eigen::Vector3d(dx, dy, dz) * resolution).cwiseMax(clamp_low).cwiseMin(clamp_high);
-            if (grid_map_->getInflateOccupancy(candidate) != 0)
-            {
-              continue;
-            }
-
-            const double clearance =
-                estimateObstacleClearance(candidate,
-                                          std::max(guide_min_clearance_, 3.0 * resolution),
-                                          nullptr);
-            const double score = clearance - 0.1 * (candidate - raw_target).norm();
-            if (!found || score > best_score)
-            {
-              best_score = score;
-              best_candidate = candidate;
-              found = true;
-            }
-          }
-        }
-      }
-
-      if (found)
-      {
-        safe_target = best_candidate;
-        return true;
-      }
-    }
-
-    ROS_WARN("FAIL_LOCAL_TARGET_INVALID");
-    return false;
-  }
-
-  bool EGOPlannerManager::sparsifyGuidePath(const std::vector<Eigen::Vector3d> &dense_path,
-                                            std::vector<Eigen::Vector3d> &sparse_path) const
-  {
-    sparse_path.clear();
-    if (dense_path.size() < 2)
-    {
-      return false;
-    }
-
-    std::vector<double> accum_len(dense_path.size(), 0.0);
-    for (std::size_t i = 1; i < dense_path.size(); ++i)
-    {
-      accum_len[i] = accum_len[i - 1] + (dense_path[i] - dense_path[i - 1]).norm();
-    }
-
-    const double total_len = accum_len.back();
-    const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
-    int desired_inner = std::max(0, static_cast<int>(std::round(total_len / piece_length)) - 1);
-    desired_inner = std::max(desired_inner, guide_sparse_min_inner_);
-    desired_inner = std::min(desired_inner, guide_sparse_max_inner_);
-    desired_inner = std::min(desired_inner, static_cast<int>(dense_path.size()) - 2);
-
-    std::vector<std::pair<double, int>> turn_candidates;
-    const double turn_thresh_rad = guide_turn_angle_deg_ * M_PI / 180.0;
-    for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
-    {
-      const Eigen::Vector3d vin = dense_path[static_cast<std::size_t>(i)] - dense_path[static_cast<std::size_t>(i - 1)];
-      const Eigen::Vector3d vout = dense_path[static_cast<std::size_t>(i + 1)] - dense_path[static_cast<std::size_t>(i)];
-      if (vin.norm() < 1.0e-4 || vout.norm() < 1.0e-4)
-      {
-        continue;
-      }
-      const double angle = std::acos(std::max(-1.0, std::min(1.0, vin.normalized().dot(vout.normalized()))));
-      if (angle >= turn_thresh_rad)
-      {
-        turn_candidates.emplace_back(angle, i);
-      }
-    }
-    std::sort(turn_candidates.begin(), turn_candidates.end(),
-              [](const auto &a, const auto &b)
-              { return a.first > b.first; });
-
-    std::set<int> selected;
-    for (const auto &cand : turn_candidates)
-    {
-      if (static_cast<int>(selected.size()) >= desired_inner)
-      {
-        break;
-      }
-      selected.insert(cand.second);
-    }
-
-    for (int k = 1; static_cast<int>(selected.size()) < desired_inner && k <= desired_inner; ++k)
-    {
-      const double target_s = total_len * static_cast<double>(k) / static_cast<double>(desired_inner + 1);
-      int best_idx = 1;
-      double best_err = std::numeric_limits<double>::infinity();
-      for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
-      {
-        const double err = std::abs(accum_len[static_cast<std::size_t>(i)] - target_s);
-        if (err < best_err)
-        {
-          best_err = err;
-          best_idx = i;
-        }
-      }
-      selected.insert(best_idx);
-    }
-
-    sparse_path.push_back(dense_path.front());
-    for (int idx : selected)
-    {
-      sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
-    }
-    sparse_path.push_back(dense_path.back());
-
-    ROS_INFO("Guide path sparsification: dense=%zu sparse=%zu",
-             dense_path.size(), sparse_path.size());
-    return sparse_path.size() >= 2;
   }
 
   double EGOPlannerManager::estimateObstacleClearance(const Eigen::Vector3d &pt,
@@ -734,260 +589,6 @@ namespace ego_planner
     }
 
     return grid_map_->getInflateOccupancy(to) == 0;
-  }
-
-  double EGOPlannerManager::computeTrajectoryMinSdf(const MINCOTraj3D &traj) const
-  {
-    if (!grid_map_)
-    {
-      return 0.0;
-    }
-
-    const double total_duration = traj.getTotalDuration();
-    const double dt = std::max(0.01, std::min(0.05, grid_map_->getResolution() / std::max(pp_.max_vel_, 0.1)));
-    double min_sdf = std::numeric_limits<double>::infinity();
-
-    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
-    {
-      const double sample_t = std::min(t, total_duration);
-      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
-      if (grid_map_->esdfEnabled())
-      {
-        min_sdf = std::min(min_sdf, grid_map_->getDistance(pt));
-      }
-      else
-      {
-        min_sdf = std::min(min_sdf,
-                           estimateObstacleClearance(pt,
-                                                     std::max(guide_min_clearance_, 3.0 * grid_map_->getResolution()),
-                                                     nullptr));
-      }
-    }
-
-    return std::isfinite(min_sdf) ? min_sdf : 0.0;
-  }
-
-  bool EGOPlannerManager::assembleInitialGuessFromAnchors(const std::vector<Eigen::Vector3d> &anchors,
-                                                          Eigen::MatrixXd &inner_pts,
-                                                          Eigen::VectorXd &durations,
-                                                          std::vector<double> *inner_clearances) const
-  {
-    if (anchors.size() < 2)
-    {
-      return false;
-    }
-
-    std::vector<Eigen::Vector3d> expanded;
-    expanded.reserve(anchors.size() * 2);
-    expanded.push_back(anchors.front());
-
-    const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
-    for (std::size_t i = 1; i < anchors.size(); ++i)
-    {
-      const Eigen::Vector3d &p0 = anchors[i - 1];
-      const Eigen::Vector3d &p1 = anchors[i];
-      const double seg_len = (p1 - p0).norm();
-      const int split_num = std::max(1, static_cast<int>(std::ceil(seg_len / piece_length)));
-      for (int k = 1; k <= split_num; ++k)
-      {
-        const double ratio = static_cast<double>(k) / static_cast<double>(split_num);
-        const Eigen::Vector3d pt = p0 + ratio * (p1 - p0);
-        if ((pt - expanded.back()).norm() > 1.0e-4)
-        {
-          expanded.push_back(pt);
-        }
-      }
-    }
-
-    if (expanded.size() < 2)
-    {
-      return false;
-    }
-
-    if (expanded.size() == 2)
-    {
-      expanded.insert(expanded.begin() + 1, 0.5 * (expanded.front() + expanded.back()));
-    }
-
-    const int piece_num = static_cast<int>(expanded.size()) - 1;
-    durations.resize(piece_num);
-    inner_pts.resize(3, std::max(0, piece_num - 1));
-    if (inner_clearances != nullptr)
-    {
-      inner_clearances->clear();
-      inner_clearances->reserve(std::max(0, piece_num - 1));
-    }
-
-    for (int i = 0; i < piece_num; ++i)
-    {
-      const double seg_len = (expanded[i + 1] - expanded[i]).norm();
-      durations(i) = std::max(seg_len / std::max(pp_.max_vel_, 0.1), 0.2);
-      if (i < piece_num - 1)
-      {
-        inner_pts.col(i) = expanded[i + 1];
-        if (inner_clearances != nullptr)
-        {
-          inner_clearances->push_back(
-              estimateObstacleClearance(expanded[i + 1],
-                                        std::max(guide_min_clearance_ * 1.5, 2.0 * grid_map_->getResolution()),
-                                        nullptr));
-        }
-      }
-    }
-
-    return true;
-  }
-
-  bool EGOPlannerManager::buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
-                                                      const Eigen::Vector3d &start_vel,
-                                                      const Eigen::Vector3d &start_acc,
-                                                      const Eigen::Vector3d &target_pt,
-                                                      const Eigen::Vector3d &target_vel,
-                                                      const std::vector<Eigen::Vector3d> &guide_path,
-                                                      MINCOTraj3D &init_traj,
-                                                      Eigen::MatrixXd &inner_pts,
-                                                      Eigen::VectorXd &durations,
-                                                      MINCOBoundaryState3D &head_state,
-                                                      MINCOBoundaryState3D &tail_state) const
-  {
-    if (guide_path.size() < 2)
-    {
-      return false;
-    }
-
-    std::vector<Eigen::Vector3d> anchors = guide_path;
-    anchors.front() = start_pt;
-    anchors.back() = target_pt;
-
-    head_state = makeBoundaryState(start_pt, start_vel, start_acc);
-    tail_state = makeBoundaryState(target_pt, target_vel, Eigen::Vector3d::Zero());
-
-    if (!assembleInitialGuessFromAnchors(anchors, inner_pts, durations, nullptr))
-    {
-      return false;
-    }
-
-    if (!init_traj.generate(inner_pts, head_state, tail_state, durations))
-    {
-      return false;
-    }
-    return init_traj.getTotalDuration() > 1.0e-6;
-  }
-
-  bool EGOPlannerManager::applyWarmStartTimingProfile(const Eigen::VectorXd &warm_durations,
-                                                      Eigen::VectorXd &durations) const
-  {
-    if (warm_durations.size() <= 0 || durations.size() <= 0)
-    {
-      return false;
-    }
-    if (!warm_durations.allFinite() || !durations.allFinite())
-    {
-      return false;
-    }
-
-    const double warm_total = warm_durations.sum();
-    const double init_total = durations.sum();
-    if (warm_total <= 1.0e-6 || init_total <= 1.0e-6)
-    {
-      return false;
-    }
-
-    const Eigen::VectorXd warm_safe = warm_durations.cwiseMax(0.03);
-    Eigen::VectorXd adjusted = durations.cwiseMax(0.03);
-
-    if (warm_safe.size() == adjusted.size())
-    {
-      adjusted = 0.35 * adjusted + 0.65 * warm_safe;
-    }
-    else
-    {
-      const double scale = std::min(2.5, std::max(0.4, warm_total / init_total));
-      adjusted *= scale;
-    }
-
-    const double adjusted_sum = adjusted.sum();
-    if (adjusted_sum <= 1.0e-6)
-    {
-      return false;
-    }
-    adjusted *= warm_total / adjusted_sum;
-    adjusted = adjusted.cwiseMax(0.03);
-
-    durations = adjusted;
-    return true;
-  }
-
-  bool EGOPlannerManager::buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,
-                                                        const Eigen::Vector3d &start_vel,
-                                                        const Eigen::Vector3d &goal_pt,
-                                                        const spatial_map::PolyhedraH &corridor_hpolys, Eigen::MatrixXd &inner_pts,
-                                                        Eigen::VectorXd &durations, Eigen::VectorXi &corridor_piece_idx,
-                                                        std::vector<Eigen::Vector3d> &transition_points,
-                                                        std::vector<double> &inner_clearances) const
-  {
-    transition_points.clear();
-    inner_clearances.clear();
-    inner_pts.resize(3, 0);
-    durations.resize(0);
-    corridor_piece_idx.resize(0);
-
-    if (corridor_hpolys.empty())
-    {
-      return false;
-    }
-
-    const double piece_length = std::max(pp_.polyTraj_piece_length, 0.2);
-    const double alloc_speed = std::max(0.9 * pp_.max_vel_, 0.35);
-
-    std::vector<Eigen::Vector3d> short_path;
-    if (!spatial_map::buildCorridorInit(
-            start_pt,
-            start_vel,
-            goal_pt,
-            corridor_hpolys,
-            piece_length,
-            alloc_speed,
-            inner_pts,
-            durations,
-            &transition_points,
-            &short_path,
-            &corridor_piece_idx))
-    {
-      ROS_WARN("buildCorridorAwareInitialGuess: corridor init failed.");
-      return false;
-    }
-
-    if (corridor_piece_idx.size() != static_cast<int>(corridor_hpolys.size()) ||
-        corridor_piece_idx.sum() != durations.size())
-    {
-      ROS_WARN("buildCorridorAwareInitialGuess: piece_idx mismatch, piece_idx_size=%ld corridor=%zu piece_sum=%d durations=%ld",
-               static_cast<long>(corridor_piece_idx.size()),
-               corridor_hpolys.size(),
-               corridor_piece_idx.sum(),
-               static_cast<long>(durations.size()));
-    }
-
-    inner_clearances.resize(std::max(0, static_cast<int>(inner_pts.cols())));
-    const double clearance_probe_radius =
-        std::max(guide_min_clearance_, 2.0 * (grid_map_ ? grid_map_->getResolution() : 0.1));
-    for (int i = 0; i < inner_pts.cols(); ++i)
-    {
-      inner_clearances[i] = estimateObstacleClearance(
-          inner_pts.col(i),
-          clearance_probe_radius,
-          nullptr);
-    }
-
-    ROS_INFO("buildCorridorAwareInitialGuess: pieces=%ld inner=%ld totalT=%.3f transitions=%ld short_path=%ld alloc_speed=%.3f conservative_timing=yes",
-             static_cast<long>(durations.size()),
-             static_cast<long>(inner_pts.cols()),
-             durations.sum(),
-             static_cast<long>(transition_points.size()),
-             static_cast<long>(short_path.size()),
-             alloc_speed);
-
-    return true;
   }
 
   bool EGOPlannerManager::generateTrackingSafeFlightCorridor(
@@ -1230,97 +831,6 @@ namespace ego_planner
     return durations.size() > 0 && corridor_piece_idx.sum() == durations.size();
   }
 
-  bool EGOPlannerManager::generateSafeFlightCorridor(
-      const std::vector<Eigen::Vector3d> &guide_path,
-      spatial_map::PolyhedraH &corridor_hpolys) const
-  {
-    corridor_hpolys.clear();
-    if (guide_path.size() < 2)
-    {
-      return false;
-    }
-
-    const Eigen::Vector3d low_corner = grid_map_->getUpdatedBoxLow();
-    const Eigen::Vector3d high_corner = grid_map_->getUpdatedBoxHigh();
-
-    std::vector<Eigen::Vector3d> occupied_points;
-    grid_map_->getInflatedOccupiedPoints(occupied_points);
-
-    sfc_gen::convexCover(guide_path,
-                         occupied_points,
-                         low_corner,
-                         high_corner,
-                         sfc_progress_,
-                         sfc_range_,
-                         corridor_hpolys);
-    sfc_gen::shortCut(corridor_hpolys);
-
-    if (corridor_hpolys.empty())
-    {
-      ROS_WARN("Failed to generate valid corridor data.");
-      return false;
-    }
-
-    // ROS_INFO("generateSafeFlightCorridor: path_pts=%zu corridor_polys=%zu",
-    //          guide_path.size(), corridor_hpolys.size());
-    return true;
-  }
-
- bool EGOPlannerManager::prepareLocalGuideAndCorridor(
-    const Eigen::Vector3d &start_pt,
-    const Eigen::Vector3d &start_vel,
-    const Eigen::Vector3d &goal_pt,
-    std::vector<Eigen::Vector3d> &guide_path,
-    spatial_map::PolyhedraH &corridor_hpolys,
-    bool force_refresh)
-  {
-    (void)start_vel;
-    (void)force_refresh;
-
-    guide_path.clear();
-    corridor_hpolys.clear();
-    reportCorridorFailure(FAIL_NONE, "");
-
-    Eigen::Vector3d safe_goal;
-    std::vector<Eigen::Vector3d> dense_path;
-    if (!prepareLocalAStarPath(start_pt, goal_pt, dense_path, safe_goal))
-    {
-      reportCorridorFailure(FAIL_GUIDE_PATH_TOO_CLOSE, "local A* path preparation failed");
-      return false;
-    }
-
-    std::vector<Eigen::Vector3d> sparse_path;
-    if (!sparsifyGuidePath(dense_path, sparse_path))
-    {
-      reportCorridorFailure(FAIL_GUIDE_PATH_TOO_CLOSE, "failed to sparsify local A* path for corridor");
-      return false;
-    }
-
-    guide_path = sparse_path;
-    if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
-    {
-      ROS_WARN("Corridor generation from sparse guide path failed, fallback to dense guide path.");
-      guide_path = dense_path;
-      if (!generateSafeFlightCorridor(guide_path, corridor_hpolys))
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_GENERATION, "failed to generate safe flight corridor from guide path");
-        return false;
-      }
-    }
-
-    if (visualization_)
-    {
-      visualization_->displayGlobalPathList(dense_path, 0.08, 0);
-      visualization_->displayFrontendList(guide_path, 0.12, 0);
-
-      std::vector<Eigen::Vector3d> tri, edges;
-      buildCorridorVisualization(corridor_hpolys, tri, edges);
-      visualization_->displayCorridor(tri, edges, 0);
-    }
-
-    return true;
-  }
-
   bool EGOPlannerManager::pointInsidePolytope(const Eigen::Vector3d& pt,
                                             const spatial_map::PolyhedronH& hpoly,
                                             double margin) const
@@ -1377,76 +887,6 @@ namespace ego_planner
     return maxVel;
   }
 
-  bool EGOPlannerManager::prepareLocalAStarPath(const Eigen::Vector3d &start_pt,
-                                              const Eigen::Vector3d &goal_pt,
-                                              std::vector<Eigen::Vector3d> &dense_path,
-                                              Eigen::Vector3d &safe_goal) const
-  {
-    dense_path.clear();
-    safe_goal = goal_pt;
-    Eigen::Vector3d safe_start = start_pt;
-
-    if (!sanitizeLocalTarget(goal_pt, safe_goal))
-    {
-      ROS_WARN("FAIL_LOCAL_TARGET_INVALID: cannot sanitize local target");
-      return false;
-    }
-
-    if (!sanitizeLocalTarget(start_pt, safe_start))
-    {
-      safe_start = start_pt;
-    }
-
-    if ((safe_goal - safe_start).norm() < 1.0e-3)
-    {
-      dense_path = {start_pt, safe_goal};
-      return true;
-    }
-
-    if (!grid_map_ || !mapWindowReady())
-    {
-      dense_path = {start_pt, safe_goal};
-      return true;
-    }
-
-    if (!jps_astar_)
-    {
-      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: jps_astar_ is null");
-      return false;
-    }
-
-    if (!jps_astar_->search(safe_start, safe_goal, dense_path))
-    {
-      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: 3D A* failed, start=[%.2f %.2f %.2f] safe_start=[%.2f %.2f %.2f] goal=[%.2f %.2f %.2f] safe_goal=[%.2f %.2f %.2f]",
-               start_pt.x(), start_pt.y(), start_pt.z(),
-               safe_start.x(), safe_start.y(), safe_start.z(),
-               goal_pt.x(), goal_pt.y(), goal_pt.z(),
-               safe_goal.x(), safe_goal.y(), safe_goal.z());
-      return false;
-    }
-
-    if (dense_path.size() < 2)
-    {
-      ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: 3D A* returned too short path");
-      return false;
-    }
-
-    dense_path.front() = safe_start;
-    dense_path.back() = safe_goal;
-
-    if ((dense_path.front() - start_pt).norm() > 1.0e-3)
-    {
-      dense_path.insert(dense_path.begin(), start_pt);
-    }
-
-    if ((dense_path.back() - safe_goal).norm() > 1.0e-3)
-    {
-      dense_path.push_back(safe_goal);
-    }
-
-    return true;
-  }
-
   bool EGOPlannerManager::buildTrackingAnchorCandidates(
       const cost_functional::TrackingReference &reference,
       const Eigen::Vector3d &start_pt,
@@ -1455,6 +895,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *anchor_target_vels,
       std::vector<double> *anchor_times) const
   {
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     anchor_candidates.clear();
     if (anchor_target_vels != nullptr)
     {
@@ -1595,6 +1036,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *viewpoint_target_vels,
       std::vector<double> *viewpoint_times) const
   {
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     target_samples.clear();
     viewpoint_series.clear();
     if (viewpoint_target_vels != nullptr)
@@ -1749,7 +1191,7 @@ namespace ego_planner
         candidate.z() = ref_pos.z();
 
         Eigen::Vector3d safe_candidate = candidate;
-        if (!sanitizeLocalTarget(candidate, safe_candidate))
+        if (!state_to_state_initializer.sanitizeLocalTarget(candidate, safe_candidate))
         {
           continue;
         }
@@ -1919,90 +1361,6 @@ namespace ego_planner
     }
 
     return !viewpoint_series.empty();
-  }
-
-  bool EGOPlannerManager::buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
-                                                      std::vector<Eigen::Vector3d> &guide_path) const
-  {
-    guide_path.clear();
-    if (waypoints.size() < 2)
-    {
-      return false;
-    }
-
-    guide_path.push_back(waypoints.front());
-    for (std::size_t i = 1; i < waypoints.size(); ++i)
-    {
-      const Eigen::Vector3d &next_wp = waypoints[i];
-      if ((next_wp - guide_path.back()).norm() < 1.0e-3)
-      {
-        continue;
-      }
-
-      if (lineOfSightFree(guide_path.back(), next_wp, tracking_viewpoint_connect_dist_))
-      {
-        guide_path.push_back(next_wp);
-        continue;
-      }
-
-      std::vector<Eigen::Vector3d> segment_path;
-      Eigen::Vector3d safe_goal = next_wp;
-      if (!prepareLocalAStarPath(guide_path.back(), next_wp, segment_path, safe_goal))
-      {
-        return false;
-      }
-
-      for (std::size_t j = 1; j < segment_path.size(); ++j)
-      {
-        if ((segment_path[j] - guide_path.back()).norm() > 1.0e-3)
-        {
-          guide_path.push_back(segment_path[j]);
-        }
-      }
-    }
-
-    if (guide_path.size() < 2)
-    {
-      return false;
-    }
-
-    std::vector<Eigen::Vector3d> shortcut_path;
-    shortcut_path.reserve(guide_path.size());
-    std::size_t anchor_idx = 0;
-    shortcut_path.push_back(guide_path.front());
-    while (anchor_idx + 1 < guide_path.size())
-    {
-      std::size_t next_idx = anchor_idx + 1;
-      for (std::size_t cand = guide_path.size(); cand-- > anchor_idx + 1;)
-      {
-        if (lineOfSightFree(guide_path[anchor_idx], guide_path[cand]))
-        {
-          next_idx = cand;
-          break;
-        }
-      }
-
-      if ((guide_path[next_idx] - shortcut_path.back()).norm() > 1.0e-3)
-      {
-        shortcut_path.push_back(guide_path[next_idx]);
-      }
-      anchor_idx = next_idx;
-    }
-
-    if (shortcut_path.size() >= 2)
-    {
-      std::vector<Eigen::Vector3d> sparse_path;
-      if (sparsifyGuidePath(shortcut_path, sparse_path))
-      {
-        guide_path = sparse_path;
-      }
-      else
-      {
-        guide_path = shortcut_path;
-      }
-    }
-
-    return guide_path.size() >= 2;
   }
 
   bool EGOPlannerManager::buildTrackingVisibleRegionGuide(
@@ -2525,6 +1883,7 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     Eigen::Vector3d safe_target_pt = local_target_pt;
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     const bool is_tracking_task = (tracking_ref != nullptr && tracking_ref->valid());
     if (tracking_ref != nullptr && !tracking_ref->valid())
     {
@@ -2532,8 +1891,9 @@ namespace ego_planner
       return false;
     }
 
-    if (!sanitizeLocalTarget(local_target_pt, safe_target_pt))
+    if (!state_to_state_initializer.sanitizeLocalTarget(local_target_pt, safe_target_pt))
     {
+      ROS_WARN("FAIL_LOCAL_TARGET_INVALID");
       reportCorridorFailure(FAIL_LOCAL_TARGET_INVALID, "unable to sanitize local target before planning");
       return false;
     }
@@ -2548,7 +1908,141 @@ namespace ego_planner
     const bool has_tracking_semantic_guide =
         tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
 
-    if (use_corridor)
+    if (!is_tracking_task)
+    {
+      core::PlanningProblem init_problem;
+      init_problem.representation = core::RepresentationKind::MINCO;
+      init_problem.active_space_model =
+          use_corridor ? core::ActiveSpaceModel::CORRIDOR
+                       : (use_esdf ? core::ActiveSpaceModel::ESDF
+                                   : core::ActiveSpaceModel::PLAIN);
+      init_problem.start_boundary.valid = true;
+      init_problem.start_boundary.position = start_pt;
+      init_problem.start_boundary.velocity = start_vel;
+      init_problem.start_boundary.acceleration = start_acc;
+      init_problem.terminal_boundary.valid = true;
+      init_problem.terminal_boundary.position = safe_target_pt;
+      init_problem.terminal_boundary.velocity = local_target_vel;
+      init_problem.terminal_boundary.acceleration = Eigen::Vector3d::Zero();
+      init_problem.task.type = core::TaskType::STATE_TO_STATE;
+      init_problem.task.task_name = "legacy_state_to_state_compat";
+      init_problem.task.start_pt = start_pt;
+      init_problem.task.start_vel = start_vel;
+      init_problem.task.start_acc = start_acc;
+      init_problem.task.goal_pt = safe_target_pt;
+      init_problem.task.goal_vel = local_target_vel;
+      init_problem.task.touch_goal = touch_goal;
+      init_problem.task.flag_poly_init = flag_polyInit;
+      init_problem.task.flag_random_poly_traj = flag_randomPolyTraj;
+      init_problem.task.force_plain = force_plain;
+      init_problem.context.now = ros::Time::now().toSec();
+      init_problem.context.map_ready = mapWindowReady();
+      init_problem.context.has_grid_map = (grid_map_ != nullptr);
+      init_problem.context.has_esdf = (grid_map_ != nullptr && grid_map_->esdfEnabled());
+      init_problem.context.has_jps = (jps_astar_ != nullptr);
+      init_problem.context.allow_warm_start = true;
+      init_problem.context.grid_map = grid_map_;
+      init_problem.context.jps_astar = jps_astar_.get();
+      init_problem.context.odom_pos = start_pt;
+      init_problem.context.odom_vel = start_vel;
+      init_problem.context.odom_acc = start_acc;
+      init_problem.context.global_goal = safe_target_pt;
+      init_problem.context.local_target = safe_target_pt;
+      init_problem.context.local_target_vel = local_target_vel;
+      init_problem.context.max_vel = pp_.max_vel_;
+      init_problem.context.max_acc = pp_.max_acc_;
+      init_problem.context.poly_piece_length = pp_.polyTraj_piece_length;
+      init_problem.context.guide_min_clearance = guide_min_clearance_;
+      init_problem.context.guide_sparse_min_inner = guide_sparse_min_inner_;
+      init_problem.context.guide_sparse_max_inner = guide_sparse_max_inner_;
+      init_problem.context.guide_turn_angle_deg = guide_turn_angle_deg_;
+      init_problem.context.sfc_progress = sfc_progress_;
+      init_problem.context.sfc_range = sfc_range_;
+      init_problem.context.sfc_corridor_margin = sfc_corridor_margin_;
+      init_problem.context.has_local_target_progress_preview =
+          traj_.global_traj.last_glb_t_of_lc_tgt >= 0.0;
+      init_problem.context.preview_glb_t_of_lc_tgt = traj_.global_traj.glb_t_of_lc_tgt;
+      init_problem.context.preview_last_glb_t_of_lc_tgt = traj_.global_traj.last_glb_t_of_lc_tgt;
+      if (has_preferred_guide)
+      {
+        init_problem.references.guide_path = *preferred_guide_path;
+      }
+
+      solver::StateToStateInitializationResult init_result;
+      if (!state_to_state_initializer.initialize(init_problem, init_result))
+      {
+        if (use_corridor)
+        {
+          switch (init_result.failure_type)
+          {
+          case solver::StateToStateInitFailureType::LOCAL_TARGET_INVALID:
+            reportCorridorFailure(FAIL_LOCAL_TARGET_INVALID, init_result.failure_reason);
+            break;
+          case solver::StateToStateInitFailureType::GUIDE_PATH_TOO_CLOSE:
+            reportCorridorFailure(FAIL_GUIDE_PATH_TOO_CLOSE, init_result.failure_reason);
+            break;
+          case solver::StateToStateInitFailureType::CORRIDOR_GENERATION:
+            reportCorridorFailure(FAIL_CORRIDOR_GENERATION, init_result.failure_reason);
+            break;
+          case solver::StateToStateInitFailureType::CORRIDOR_INIT:
+            reportCorridorFailure(FAIL_CORRIDOR_INIT, init_result.failure_reason);
+            break;
+          case solver::StateToStateInitFailureType::NONE:
+          default:
+            break;
+          }
+        }
+        return false;
+      }
+
+      initTraj = init_result.init_traj;
+      innerPts = init_result.inner_points;
+      durations = init_result.durations;
+      headState = init_result.head_state;
+      tailState = init_result.tail_state;
+      corridor_hpolys = init_result.corridor_hpolys;
+      corridor_piece_idx = init_result.corridor_piece_idx;
+
+      ROS_INFO("Legacy compatibility init now delegated to StateToStateInitializer: mode=%s source=%s guide_pts=%zu corridor_polys=%zu pieces=%ld",
+               use_corridor ? "CORRIDOR" : (use_esdf ? "ESDF" : "PLAIN"),
+               init_result.init_source.c_str(),
+               init_result.guide_path.size(),
+               init_result.corridor_hpolys.size(),
+               static_cast<long>(init_result.durations.size()));
+
+      if (visualization_)
+      {
+        if (use_esdf)
+        {
+          if (!init_result.dense_path.empty())
+          {
+            visualization_->displayGlobalPathList(init_result.dense_path, 0.08, 1);
+          }
+          if (!init_result.guide_path.empty())
+          {
+            visualization_->displayFrontendList(init_result.guide_path, 0.10, 1);
+          }
+        }
+        else if (use_corridor)
+        {
+          if (!init_result.dense_path.empty())
+          {
+            visualization_->displayGlobalPathList(init_result.dense_path, 0.08, 0);
+          }
+          if (!init_result.guide_path.empty())
+          {
+            visualization_->displayFrontendList(init_result.guide_path, 0.12, 0);
+          }
+          if (!init_result.corridor_hpolys.empty())
+          {
+            std::vector<Eigen::Vector3d> tri, edges;
+            buildCorridorVisualization(init_result.corridor_hpolys, tri, edges);
+            visualization_->displayCorridor(tri, edges, 0);
+          }
+        }
+      }
+    }
+    else if (use_corridor)
     {
       std::vector<Eigen::Vector3d> guide_path;
       std::vector<Eigen::Vector3d> transition_points;
@@ -2581,13 +2075,13 @@ namespace ego_planner
         guide_path.back() = safe_target_pt;
 
         std::vector<Eigen::Vector3d> sparse_guide_path;
-        if (sparsifyGuidePath(guide_path, sparse_guide_path) &&
-            generateSafeFlightCorridor(sparse_guide_path, corridor_hpolys))
+        if (state_to_state_initializer.sparsifyGuidePath(guide_path, sparse_guide_path) &&
+            state_to_state_initializer.generateSafeFlightCorridor(sparse_guide_path, corridor_hpolys))
         {
           guide_path = sparse_guide_path;
           corridor_ready = true;
         }
-        else if (generateSafeFlightCorridor(guide_path, corridor_hpolys))
+        else if (state_to_state_initializer.generateSafeFlightCorridor(guide_path, corridor_hpolys))
         {
           corridor_ready = true;
         }
@@ -2608,9 +2102,22 @@ namespace ego_planner
       }
 
       if (!corridor_ready &&
-          !prepareLocalGuideAndCorridor(start_pt, start_vel, safe_target_pt, guide_path, corridor_hpolys))
+          !state_to_state_initializer.prepareLocalGuideAndCorridor(start_pt,
+                                                                   start_vel,
+                                                                   safe_target_pt,
+                                                                   guide_path,
+                                                                   corridor_hpolys))
       {
+        reportCorridorFailure(FAIL_CORRIDOR_GENERATION,
+                              "compatibility corridor helper failed in StateToStateInitializer");
         return false;
+      }
+      if (!corridor_ready && visualization_)
+      {
+        visualization_->displayFrontendList(guide_path, 0.12, 0);
+        std::vector<Eigen::Vector3d> tri, edges;
+        buildCorridorVisualization(corridor_hpolys, tri, edges);
+        visualization_->displayCorridor(tri, edges, 0);
       }
       const bool tracking_semantic_init_ok =
           has_tracking_semantic_guide &&
@@ -2624,15 +2131,15 @@ namespace ego_planner
                                               corridor_piece_idx,
                                               &inner_clearances);
       if (!tracking_semantic_init_ok &&
-          !buildCorridorAwareInitialGuess(start_pt,
-                                          start_vel,
-                                          safe_target_pt,
-                                          corridor_hpolys,
-                                          innerPts,
-                                          durations,
-                                          corridor_piece_idx,
-                                          transition_points,
-                                          inner_clearances))
+          !state_to_state_initializer.buildCorridorAwareInitialGuess(start_pt,
+                                                                     start_vel,
+                                                                     safe_target_pt,
+                                                                     corridor_hpolys,
+                                                                     innerPts,
+                                                                     durations,
+                                                                     corridor_piece_idx,
+                                                                     transition_points,
+                                                                     inner_clearances))
       {
         reportCorridorFailure(FAIL_CORRIDOR_INIT, "failed to build GCOPTER-style corridor initial guess");
         return false;
@@ -2646,20 +2153,20 @@ namespace ego_planner
         Eigen::VectorXd warm_durations;
         MINCOBoundaryState3D warm_head, warm_tail;
 
-        const bool warm_ok = computeInitState(start_pt,
-                                              start_vel,
-                                              start_acc,
-                                              safe_target_pt,
-                                              local_target_vel,
-                                              false,
-                                              false,
-                                              ts,
-                                              warm_traj,
-                                              warm_inner_pts,
-                                              warm_durations,
-                                              warm_head,
-                                              warm_tail);
-        if (warm_ok && applyWarmStartTimingProfile(warm_durations, durations))
+        const bool warm_ok = state_to_state_initializer.computeInitState(start_pt,
+                                                                         start_vel,
+                                                                         start_acc,
+                                                                         safe_target_pt,
+                                                                         local_target_vel,
+                                                                         false,
+                                                                         false,
+                                                                         ts,
+                                                                         warm_traj,
+                                                                         warm_inner_pts,
+                                                                         warm_durations,
+                                                                         warm_head,
+                                                                         warm_tail);
+        if (warm_ok && state_to_state_initializer.applyWarmStartTimingProfile(warm_durations, durations))
         {
           corridor_warm_timing_used = true;
         }
@@ -2689,7 +2196,7 @@ namespace ego_planner
           ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0);
       ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
                seed_collision_free ? "yes" : "no",
-               computeTrajectoryMinSdf(initTraj),
+               state_to_state_initializer.computeTrajectoryMinSdf(initTraj),
                seed_inside_corridor ? "yes" : "no");
       ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
                corridor_warm_timing_used ? "yes" : "no",
@@ -2714,18 +2221,18 @@ namespace ego_planner
         dense_path = *preferred_guide_path;
         dense_path.front() = start_pt;
         dense_path.back() = safe_goal;
-        if (!sparsifyGuidePath(dense_path, guide_path))
+        if (!state_to_state_initializer.sparsifyGuidePath(dense_path, guide_path))
         {
           guide_path = dense_path;
         }
       }
-      else if (!prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
+      else if (!state_to_state_initializer.prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
       {
         ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot prepare local A* path for ESDF");
         return false;
       }
 
-      if (guide_path.empty() && !sparsifyGuidePath(dense_path, guide_path))
+      if (guide_path.empty() && !state_to_state_initializer.sparsifyGuidePath(dense_path, guide_path))
       {
         ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot sparsify ESDF guide path");
         return false;
@@ -2740,17 +2247,17 @@ namespace ego_planner
       Eigen::MatrixXd guide_inner_pts;
       Eigen::VectorXd guide_durations;
       MINCOTraj3D guide_init_traj;
-      if (!buildInitStateFromGuidePath(start_pt,
-                                       start_vel,
-                                       start_acc,
-                                       safe_goal,
-                                       local_target_vel,
-                                       guide_path,
-                                       guide_init_traj,
-                                       guide_inner_pts,
-                                       guide_durations,
-                                       headState,
-                                       tailState))
+      if (!state_to_state_initializer.buildInitStateFromGuidePath(start_pt,
+                                                                  start_vel,
+                                                                  start_acc,
+                                                                  safe_goal,
+                                                                  local_target_vel,
+                                                                  guide_path,
+                                                                  guide_init_traj,
+                                                                  guide_inner_pts,
+                                                                  guide_durations,
+                                                                  headState,
+                                                                  tailState))
       {
         ROS_WARN("FAIL_ESDF_INIT: failed to build guide-based initial trajectory.");
         return false;
@@ -2767,19 +2274,19 @@ namespace ego_planner
         Eigen::MatrixXd warm_inner_pts;
         Eigen::VectorXd warm_durations;
         MINCOBoundaryState3D warm_head, warm_tail;
-        const bool warm_ok = computeInitState(start_pt,
-                                              start_vel,
-                                              start_acc,
-                                              safe_goal,
-                                              local_target_vel,
-                                              false,
-                                              false,
-                                              ts,
-                                              warm_traj,
-                                              warm_inner_pts,
-                                              warm_durations,
-                                              warm_head,
-                                              warm_tail);
+        const bool warm_ok = state_to_state_initializer.computeInitState(start_pt,
+                                                                         start_vel,
+                                                                         start_acc,
+                                                                         safe_goal,
+                                                                         local_target_vel,
+                                                                         false,
+                                                                         false,
+                                                                         ts,
+                                                                         warm_traj,
+                                                                         warm_inner_pts,
+                                                                         warm_durations,
+                                                                         warm_head,
+                                                                         warm_tail);
 
         if (warm_ok && warm_durations.size() > 0)
         {
@@ -2808,7 +2315,7 @@ namespace ego_planner
                warm_start_used ? "warm_duration+guide_inner" : "guide_only",
                guide_path.size(),
                static_cast<long>(durations.size()));
-      const double init_min_sdf = computeTrajectoryMinSdf(initTraj);
+      const double init_min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(initTraj);
       const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
       const bool init_esdf_free = init_min_sdf >= esdf_tol;
       ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
@@ -2817,9 +2324,19 @@ namespace ego_planner
     }
     else
     {
-      if (!computeInitState(start_pt, start_vel, start_acc, safe_target_pt, local_target_vel,
-                            flag_polyInit, flag_randomPolyTraj, ts,
-                            initTraj, innerPts, durations, headState, tailState))
+      if (!state_to_state_initializer.computeInitState(start_pt,
+                                                       start_vel,
+                                                       start_acc,
+                                                       safe_target_pt,
+                                                       local_target_vel,
+                                                       flag_polyInit,
+                                                       flag_randomPolyTraj,
+                                                       ts,
+                                                       initTraj,
+                                                       innerPts,
+                                                       durations,
+                                                       headState,
+                                                       tailState))
       {
         return false;
       }
@@ -2893,7 +2410,7 @@ namespace ego_planner
       {
         MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
         ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f inside_corridor=%s",
-                 computeTrajectoryMinSdf(opt_traj),
+                 state_to_state_initializer.computeTrajectoryMinSdf(opt_traj),
                  ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
         setLocalTrajFromOpt(opt_traj, touch_goal);
         if (is_tracking_task)
@@ -2922,7 +2439,7 @@ namespace ego_planner
         const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
         ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
                  ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
-                 computeTrajectoryMinSdf(opt_traj),
+                 state_to_state_initializer.computeTrajectoryMinSdf(opt_traj),
                  ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
       }
     }
@@ -2948,7 +2465,7 @@ namespace ego_planner
       if (flag_success)
       {
         MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
-        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        const double min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(opt_traj);
         const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
         const bool esdf_free = min_sdf >= esdf_tol;
         ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f",
@@ -2977,7 +2494,7 @@ namespace ego_planner
       else
       {
         const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
-        const double min_sdf = computeTrajectoryMinSdf(opt_traj);
+        const double min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(opt_traj);
         const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
         ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
                  (min_sdf >= esdf_tol) ? "yes" : "no",
@@ -3119,139 +2636,6 @@ namespace ego_planner
     }
 
     return flag_success;
-  }
-
-  bool EGOPlannerManager::computeInitState(
-      const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
-      const Eigen::Vector3d &local_target_pt, const Eigen::Vector3d &local_target_vel,
-      const bool flag_polyInit, const bool flag_randomPolyTraj, const double &ts,
-      MINCOTraj3D &initTraj, Eigen::MatrixXd &outInnerPts, Eigen::VectorXd &outDurations,
-      MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState)
-  {
-    static bool flag_first_call = true;
-
-    if (flag_first_call || flag_polyInit)
-    {
-      flag_first_call = false;
-
-      Eigen::MatrixXd innerPs(3, 0);
-      Eigen::VectorXd piece_dur_vec;
-      int piece_nums;
-      constexpr double init_of_init_totaldur = 2.0;
-      headState = makeBoundaryState(start_pt, start_vel, start_acc);
-      tailState = makeBoundaryState(local_target_pt, local_target_vel, Eigen::Vector3d::Zero());
-
-      if (!flag_randomPolyTraj)
-      {
-        piece_nums = 1;
-        piece_dur_vec.resize(1);
-        piece_dur_vec(0) = init_of_init_totaldur;
-      }
-      else
-      {
-        Eigen::Vector3d horizen_dir = ((start_pt - local_target_pt).cross(Eigen::Vector3d(0, 0, 1))).normalized();
-        Eigen::Vector3d vertical_dir = ((start_pt - local_target_pt).cross(horizen_dir)).normalized();
-        innerPs.resize(3, 1);
-        innerPs = (start_pt + local_target_pt) / 2 +
-                  (((double)rand()) / RAND_MAX - 0.5) *
-                      (start_pt - local_target_pt).norm() *
-                      horizen_dir * 0.8 * (-0.978 / (continous_failures_count_ + 0.989) + 0.989) +
-                  (((double)rand()) / RAND_MAX - 0.5) *
-                      (start_pt - local_target_pt).norm() *
-                      vertical_dir * 0.4 * (-0.978 / (continous_failures_count_ + 0.989) + 0.989);
-
-        piece_nums = 2;
-        piece_dur_vec.resize(2);
-        piece_dur_vec = Eigen::Vector2d(init_of_init_totaldur / 2, init_of_init_totaldur / 2);
-      }
-
-      // Generate init of init trajectory
-      MINCOTraj3D initOfInitTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
-
-      // Generate the real init trajectory
-      double dist = (headState.col(0) - tailState.col(0)).norm();
-      piece_nums = round(dist / pp_.polyTraj_piece_length);
-      if (piece_nums < 2)
-        piece_nums = 2;
-      double piece_dur = init_of_init_totaldur / (double)piece_nums;
-      piece_dur_vec.resize(piece_nums);
-      piece_dur_vec = Eigen::VectorXd::Constant(piece_nums, ts);
-      innerPs.resize(3, piece_nums - 1);
-      
-      int id = 0;
-      double t_s = piece_dur, t_e = init_of_init_totaldur - piece_dur / 2;
-   
-      for (double t = t_s; t < t_e; t += piece_dur)
-      {
-        innerPs.col(id++) = initOfInitTraj.evaluate(t, 0);
-      }
-      
-      if (id != piece_nums - 1)
-      {
-        ROS_ERROR("Should not happen! x_x");
-        return false;
-      }
-
-      initTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
-
-      outInnerPts = innerPs;
-      outDurations = piece_dur_vec;
-    }
-    else
-    {
-      if (traj_.global_traj.last_glb_t_of_lc_tgt < 0.0)
-      {
-        ROS_ERROR("You are initialzing a trajectory from a previous optimal trajectory, but no previous trajectories up to now.");
-        return false;
-      }
-
-      double passed_t_on_lctraj = ros::Time::now().toSec() - traj_.local_traj.start_time;
-      double t_to_lc_end = traj_.local_traj.duration - passed_t_on_lctraj;
-      if (t_to_lc_end < 0)
-      {
-        ROS_INFO("t_to_lc_end < 0, exit and wait for another call.");
-        return false;
-      }
-      
-      double t_to_lc_tgt = t_to_lc_end +
-                           (traj_.global_traj.glb_t_of_lc_tgt - traj_.global_traj.last_glb_t_of_lc_tgt);
-      double dist = (start_pt - local_target_pt).norm();
-      int piece_nums = ceil(dist / pp_.polyTraj_piece_length);
-      if (piece_nums < 2)
-        piece_nums = 2;
-
-      headState = makeBoundaryState(start_pt, start_vel, start_acc);
-      tailState = makeBoundaryState(local_target_pt, local_target_vel, Eigen::Vector3d::Zero());
-
-      Eigen::MatrixXd innerPs(3, piece_nums - 1);
-      Eigen::VectorXd piece_dur_vec = Eigen::VectorXd::Constant(piece_nums, t_to_lc_tgt / piece_nums);
-
-      double t = piece_dur_vec(0);
-      for (int i = 0; i < piece_nums - 1; ++i)
-      {
-        if (t < t_to_lc_end)
-        {
-          innerPs.col(i) = traj_.local_traj.traj.evaluate(t + passed_t_on_lctraj, 0);
-        }
-        else if (t <= t_to_lc_tgt)
-        {
-          double glb_t = t - t_to_lc_end + traj_.global_traj.last_glb_t_of_lc_tgt - traj_.global_traj.global_start_time;
-          innerPs.col(i) = traj_.global_traj.traj.evaluate(glb_t, 0);
-        }
-        else
-        {
-          ROS_ERROR("Should not happen! x_x 0x88 t=%.2f, t_to_lc_end=%.2f, t_to_lc_tgt=%.2f", t, t_to_lc_end, t_to_lc_tgt);
-        }
-
-        t += piece_dur_vec(i + 1);
-      }
-
-      initTraj = generateMINCOTraj(headState, tailState, innerPs, piece_dur_vec);
-      outInnerPts = innerPs;
-      outDurations = piece_dur_vec;
-    }
-
-    return true;
   }
 
   bool EGOPlannerManager::setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal)

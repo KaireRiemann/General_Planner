@@ -25,6 +25,57 @@ bool mapWindowReady(const GridMap::Ptr &map)
   return ((high - low).array() > 6.0 * res).all();
 }
 
+bool lineOfSightFree(const ego_planner::core::PlanningContext &context,
+                     const Eigen::Vector3d &from,
+                     const Eigen::Vector3d &to,
+                     const double max_dist)
+{
+  if (!context.grid_map || !mapWindowReady(context.grid_map))
+  {
+    return true;
+  }
+
+  const double dist = (to - from).norm();
+  if (max_dist > 0.0 && dist > max_dist)
+  {
+    return false;
+  }
+
+  const Eigen::Vector3d low = context.grid_map->getUpdatedBoxLow();
+  const Eigen::Vector3d high = context.grid_map->getUpdatedBoxHigh();
+  if ((from.array() < low.array()).any() || (from.array() > high.array()).any() ||
+      (to.array() < low.array()).any() || (to.array() > high.array()).any())
+  {
+    return false;
+  }
+
+  if (dist < 1.0e-6)
+  {
+    return context.grid_map->getInflateOccupancy(from) == 0;
+  }
+
+  const double resolution = std::max(context.grid_map->getResolution(), 1.0e-3);
+  RayCaster ray_caster;
+  if (!ray_caster.setInput((from - low) / resolution, (to - low) / resolution))
+  {
+    return context.grid_map->getInflateOccupancy(from) == 0 &&
+           context.grid_map->getInflateOccupancy(to) == 0;
+  }
+
+  Eigen::Vector3d ray_idx;
+  while (ray_caster.step(ray_idx))
+  {
+    const Eigen::Vector3d world_pt =
+        low + (ray_idx.array() + 0.5).matrix() * resolution;
+    if (context.grid_map->getInflateOccupancy(world_pt) != 0)
+    {
+      return false;
+    }
+  }
+
+  return context.grid_map->getInflateOccupancy(to) == 0;
+}
+
 bool sparsifyGuidePath(const ego_planner::core::PlanningContext &context,
                        const std::vector<Eigen::Vector3d> &dense_path,
                        std::vector<Eigen::Vector3d> &sparse_path)
@@ -309,6 +360,103 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
   }
 
   return buildFromWaypoints(dense_path, artifact);
+}
+
+bool GuidePathService::buildTrackingGuideFromWaypoints(const core::PlanningContext &context,
+                                                       const std::vector<Eigen::Vector3d> &waypoints,
+                                                       const double connect_dist,
+                                                       GuidePathArtifact &artifact) const
+{
+  artifact.points.clear();
+  artifact.times.clear();
+  if (waypoints.size() < 2)
+  {
+    return false;
+  }
+
+  std::vector<Eigen::Vector3d> dense_guide;
+  dense_guide.reserve(waypoints.size());
+  dense_guide.push_back(waypoints.front());
+  for (std::size_t i = 1; i < waypoints.size(); ++i)
+  {
+    const Eigen::Vector3d &next_wp = waypoints[i];
+    if ((next_wp - dense_guide.back()).norm() < 1.0e-3)
+    {
+      continue;
+    }
+
+    if (lineOfSightFree(context, dense_guide.back(), next_wp, connect_dist))
+    {
+      dense_guide.push_back(next_wp);
+      continue;
+    }
+
+    Eigen::Vector3d safe_start = dense_guide.back();
+    Eigen::Vector3d safe_goal = next_wp;
+    if (!sanitizePoint(context, dense_guide.back(), safe_start) ||
+        !sanitizePoint(context, next_wp, safe_goal) ||
+        context.jps_astar == nullptr)
+    {
+      return false;
+    }
+
+    std::vector<Eigen::Vector3d> segment_path;
+    if (!context.jps_astar->search(safe_start, safe_goal, segment_path) ||
+        segment_path.size() < 2)
+    {
+      return false;
+    }
+
+    if ((segment_path.front() - dense_guide.back()).norm() > 1.0e-3)
+    {
+      segment_path.insert(segment_path.begin(), dense_guide.back());
+    }
+    if ((segment_path.back() - next_wp).norm() > 1.0e-3)
+    {
+      segment_path.push_back(next_wp);
+    }
+
+    for (std::size_t j = 1; j < segment_path.size(); ++j)
+    {
+      if ((segment_path[j] - dense_guide.back()).norm() > 1.0e-3)
+      {
+        dense_guide.push_back(segment_path[j]);
+      }
+    }
+  }
+
+  if (dense_guide.size() < 2)
+  {
+    return false;
+  }
+
+  std::vector<Eigen::Vector3d> shortcut_path;
+  shortcut_path.reserve(dense_guide.size());
+  std::size_t anchor_idx = 0;
+  shortcut_path.push_back(dense_guide.front());
+  while (anchor_idx + 1 < dense_guide.size())
+  {
+    std::size_t next_idx = anchor_idx + 1;
+    for (std::size_t cand = dense_guide.size(); cand-- > anchor_idx + 1;)
+    {
+      if (lineOfSightFree(context, dense_guide[anchor_idx], dense_guide[cand], -1.0))
+      {
+        next_idx = cand;
+        break;
+      }
+    }
+
+    if ((dense_guide[next_idx] - shortcut_path.back()).norm() > 1.0e-3)
+    {
+      shortcut_path.push_back(dense_guide[next_idx]);
+    }
+    anchor_idx = next_idx;
+  }
+
+  std::vector<Eigen::Vector3d> sparse_path;
+  const auto &final_points =
+      sparsifyGuidePath(context, shortcut_path, sparse_path) ? sparse_path : shortcut_path;
+  return buildFromWaypoints(final_points, artifact);
 }
 
 bool GuidePathService::buildFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,

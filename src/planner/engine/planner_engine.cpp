@@ -253,7 +253,32 @@ bool PlannerEngine::solveTask(const core::PlanningContext &context,
 bool PlannerEngine::solveProblem(const core::PlanningProblem &problem,
                                  core::PlanningSolution &solution)
 {
-  return backend_solver_ && backend_solver_->solve(problem, solution);
+  const core::TaskType task_type =
+      problem.task_definition.type != core::TaskType::UNKNOWN
+          ? problem.task_definition.type
+          : problem.task.type;
+
+  switch (task_type)
+  {
+  case core::TaskType::STATE_TO_STATE:
+    return solveStateToStateCompiledProblem(problem, solution);
+  case core::TaskType::TRACKING:
+    return solveTrackingCompiledProblem(problem, solution);
+  case core::TaskType::PERCHING:
+    return solvePerchingLegacy(problem, solution);
+  case core::TaskType::UNKNOWN:
+  default:
+    break;
+  }
+
+  if (backend_solver_ != nullptr)
+  {
+    return backend_solver_->solve(problem, solution);
+  }
+
+  solution.success = false;
+  solution.message = "planner engine has no backend solver for unknown task";
+  return false;
 }
 
 bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
@@ -262,7 +287,7 @@ bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
   switch (problem.task.type)
   {
   case core::TaskType::STATE_TO_STATE:
-    return solveStateToStateLegacy(problem.task, solution);
+    return solveStateToStateCompiledProblem(problem, solution);
   case core::TaskType::TRACKING:
     return solveTrackingLegacyTask(problem.task, solution);
   case core::TaskType::PERCHING:
@@ -274,45 +299,6 @@ bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
     solution.message = "legacy compatibility rejected unknown task type";
     return false;
   }
-}
-
-bool PlannerEngine::solveStateToStateLegacy(const core::TaskSpec &task,
-                                            core::PlanningSolution &solution)
-{
-  if (planner_manager_ == nullptr)
-  {
-    solution.success = false;
-    solution.message = "null planner manager";
-    return false;
-  }
-
-  const bool success = planner_manager_->reboundReplan(task.start_pt,
-                                                       task.start_vel,
-                                                       task.start_acc,
-                                                       task.goal_pt,
-                                                       task.goal_vel,
-                                                       task.flag_poly_init,
-                                                       task.flag_random_poly_traj,
-                                                       task.touch_goal,
-                                                       task.force_plain,
-                                                       nullptr,
-                                                       task.preferred_guide_path.empty() ? nullptr : &task.preferred_guide_path,
-                                                       nullptr);
-  solution.success = success;
-  solution.used_legacy_adapter = true;
-  solution.touch_goal = task.touch_goal;
-  solution.message = success ? "legacy state-to-state solve success" : "legacy state-to-state solve failed";
-  if (success)
-  {
-    solution.trajectory = planner_manager_->traj_.local_traj.traj;
-    if (planner_manager_->traj_.local_traj.has_yaw_ref)
-    {
-      solution.has_yaw_ref = true;
-      solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
-      solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
-    }
-  }
-  return success;
 }
 
 bool PlannerEngine::solveTrackingLegacyTask(const core::TaskSpec &task,
@@ -399,7 +385,9 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
 
   if (!planner_manager_->enable_compiled_state2state_)
   {
-    return solveStateToStateLegacy(problem.task, solution);
+    ROS_WARN_THROTTLE(2.0,
+                      "[PlannerEngine] manager/enable_compiled_state2state=false is deprecated; "
+                      "state-to-state now always uses the compiled PlannerEngine path.");
   }
 
   const core::TaskDefinition &task_definition = problem.task_definition;
@@ -1068,6 +1056,10 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
   {
     const Eigen::MatrixXd opt_display = sampleTrajectoryForDisplay(opt_traj, 0.02);
     planner_manager_->visualization_->displayOptimalList(opt_display, 3);
+    // if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+    // {
+    //   planner_manager_->visualization_->displayCorridor();
+    // }
   }
   return true;
 }

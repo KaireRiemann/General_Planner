@@ -90,6 +90,14 @@ struct TaskDefinition
     task.touch_goal = runtime_policy.touch_goal || goal.touch_goal;
     task.flag_poly_init = runtime_policy.flag_poly_init;
     task.flag_random_poly_traj = runtime_policy.flag_random_poly_traj;
+    task.enable_keep_current = runtime_policy.enable_keep_current;
+    task.enable_successor_planning = runtime_policy.enable_successor_planning;
+    task.keep_lookahead = runtime_policy.keep_lookahead;
+    task.min_rest_time = runtime_policy.min_rest_time;
+    task.successor_lead_time = runtime_policy.successor_lead_time;
+    task.successor_horizon_ratio = runtime_policy.successor_horizon_ratio;
+    task.successor_target_shift_thresh = runtime_policy.successor_target_shift_thresh;
+    task.successor_near_goal_hold_radius = runtime_policy.successor_near_goal_hold_radius;
     task.force_plain =
         space_model_policy.force_plain ||
         space_model_policy.preferred == SpaceModelPreference::PLAIN;
@@ -180,6 +188,14 @@ struct TaskDefinition
     definition.runtime_policy.flag_poly_init = task.flag_poly_init;
     definition.runtime_policy.flag_random_poly_traj = task.flag_random_poly_traj;
     definition.runtime_policy.preserve_legacy_compatibility = true;
+    definition.runtime_policy.enable_keep_current = task.enable_keep_current;
+    definition.runtime_policy.enable_successor_planning = task.enable_successor_planning;
+    definition.runtime_policy.keep_lookahead = task.keep_lookahead;
+    definition.runtime_policy.min_rest_time = task.min_rest_time;
+    definition.runtime_policy.successor_lead_time = task.successor_lead_time;
+    definition.runtime_policy.successor_horizon_ratio = task.successor_horizon_ratio;
+    definition.runtime_policy.successor_target_shift_thresh = task.successor_target_shift_thresh;
+    definition.runtime_policy.successor_near_goal_hold_radius = task.successor_near_goal_hold_radius;
 
     definition.space_model_policy.force_plain = task.force_plain;
     switch (task.type)

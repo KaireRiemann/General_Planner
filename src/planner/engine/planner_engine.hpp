@@ -48,8 +48,6 @@ public:
                            core::PlanningSolution &solution) override;
 
 private:
-  bool solveStateToStateLegacy(const core::TaskSpec &task,
-                               core::PlanningSolution &solution);
   bool solveTrackingLegacyTask(const core::TaskSpec &task,
                                core::PlanningSolution &solution);
   bool solvePerchingLegacyTask(const core::TaskSpec &task,

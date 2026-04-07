@@ -37,6 +37,14 @@ struct TaskSpec
   bool prefer_esdf{false};
   bool flag_poly_init{false};
   bool flag_random_poly_traj{false};
+  bool enable_keep_current{true};
+  bool enable_successor_planning{true};
+  double keep_lookahead{0.8};
+  double min_rest_time{0.8};
+  double successor_lead_time{0.8};
+  double successor_horizon_ratio{0.65};
+  double successor_target_shift_thresh{0.35};
+  double successor_near_goal_hold_radius{0.5};
 
   // Tracking semantics are stored explicitly in the task.
   cost_functional::TrackingReference tracking_reference;

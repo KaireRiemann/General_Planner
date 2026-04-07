@@ -42,6 +42,11 @@ public:
                               const core::TaskSpec &task,
                               GuidePathArtifact &artifact) const;
 
+  bool buildTrackingGuideFromWaypoints(const core::PlanningContext &context,
+                                       const std::vector<Eigen::Vector3d> &waypoints,
+                                       double connect_dist,
+                                       GuidePathArtifact &artifact) const;
+
   bool buildFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
                           GuidePathArtifact &artifact) const;
 

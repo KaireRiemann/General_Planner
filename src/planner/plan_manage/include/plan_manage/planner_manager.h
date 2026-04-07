@@ -16,6 +16,7 @@
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
+#include <solver/state_to_state_initializer.hpp>
 #include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
@@ -82,8 +83,9 @@ namespace ego_planner
     TrajContainer traj_;
 
   private:
-    // Legacy task bridges are retained only so PlannerEngine can preserve
-    // compatibility paths while planner_manager stays a resource host.
+    // Legacy task bridges are retained only for non-migrated compatibility paths
+    // such as tracking/perching legacy solve adapters. State-to-state no longer
+    // relies on planner_manager for unified solve ownership.
     bool reboundReplan(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,
@@ -103,19 +105,7 @@ namespace ego_planner
         const bool force_plain = false);
 
     // Legacy frontend / seed helpers remain here only for compatibility flows.
-    bool computeInitState(
-        const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
-        const Eigen::Vector3d &start_acc, const Eigen::Vector3d &local_target_pt,
-        const Eigen::Vector3d &local_target_vel, const bool flag_polyInit,
-        const bool flag_randomPolyTraj, const double &ts,
-        MINCOTraj3D &initTraj, Eigen::MatrixXd &innerPts, Eigen::VectorXd &durations,
-        MINCOBoundaryState3D &headState, MINCOBoundaryState3D &tailState);
-    bool prepareLocalGuideAndCorridor(const Eigen::Vector3d &start_pt,
-                                      const Eigen::Vector3d &start_vel,
-                                      const Eigen::Vector3d &goal_pt,
-                                      std::vector<Eigen::Vector3d> &guide_path,
-                                      spatial_map::PolyhedraH &corridor_hpolys,
-                                      bool force_refresh = false);
+    // The authoritative state-to-state initialization path lives in solver/state_to_state_initializer.*.
     bool pointInsidePolytope(const Eigen::Vector3d &pt,
                              const spatial_map::PolyhedronH &hpoly,
                              double margin = 0.0) const;
@@ -124,11 +114,7 @@ namespace ego_planner
                              double margin = 0.0) const;
 
     // Frontend / seed helpers that still back the legacy replan path.
-    bool sanitizeLocalTarget(const Eigen::Vector3d &raw_target,
-                             Eigen::Vector3d &safe_target) const;
     bool mapWindowReady() const;
-    bool sparsifyGuidePath(const std::vector<Eigen::Vector3d> &dense_path,
-                           std::vector<Eigen::Vector3d> &sparse_path) const;
     bool buildTrackingAnchorCandidates(const cost_functional::TrackingReference &reference,
                                        const Eigen::Vector3d &start_pt,
                                        const Eigen::Vector3d &start_vel,
@@ -156,21 +142,6 @@ namespace ego_planner
                                               const Eigen::Vector3d &start_vel,
                                               std::vector<cost_functional::TrackingSemanticGuide> &hypotheses) const;
     bool buildTrackingVisibleFanRegions(cost_functional::TrackingSemanticGuide &semantic_guide) const;
-    bool buildGuidePathFromWaypoints(const std::vector<Eigen::Vector3d> &waypoints,
-                                     std::vector<Eigen::Vector3d> &guide_path) const;
-    bool buildInitStateFromGuidePath(const Eigen::Vector3d &start_pt,
-                                     const Eigen::Vector3d &start_vel,
-                                     const Eigen::Vector3d &start_acc,
-                                     const Eigen::Vector3d &target_pt,
-                                     const Eigen::Vector3d &target_vel,
-                                     const std::vector<Eigen::Vector3d> &guide_path,
-                                     MINCOTraj3D &init_traj,
-                                     Eigen::MatrixXd &inner_pts,
-                                     Eigen::VectorXd &durations,
-                                     MINCOBoundaryState3D &head_state,
-                                     MINCOBoundaryState3D &tail_state) const;
-    bool generateSafeFlightCorridor(const std::vector<Eigen::Vector3d> &guide_path,
-                                    spatial_map::PolyhedraH &corridor_hpolys) const;
     bool generateTrackingSafeFlightCorridor(const cost_functional::TrackingSemanticGuide &semantic_guide,
                                             spatial_map::PolyhedraH &corridor_hpolys,
                                             Eigen::VectorXi &corridor_piece_idx) const;
@@ -183,22 +154,6 @@ namespace ego_planner
                                               Eigen::VectorXd &durations,
                                               Eigen::VectorXi &corridor_piece_idx,
                                               std::vector<double> *inner_clearances = nullptr) const;
-    bool buildCorridorAwareInitialGuess(const Eigen::Vector3d &start_pt,
-                                        const Eigen::Vector3d &start_vel,
-                                        const Eigen::Vector3d &goal_pt,
-                                        const spatial_map::PolyhedraH &corridor_hpolys,
-                                        Eigen::MatrixXd &inner_pts,
-                                        Eigen::VectorXd &durations,
-                                        Eigen::VectorXi &corridor_piece_idx,
-                                        std::vector<Eigen::Vector3d> &transition_points,
-                                        std::vector<double> &inner_clearances) const;
-    bool assembleInitialGuessFromAnchors(const std::vector<Eigen::Vector3d> &anchors,
-                                         Eigen::MatrixXd &inner_pts,
-                                         Eigen::VectorXd &durations,
-                                         std::vector<double> *inner_clearances = nullptr) const;
-
-    bool applyWarmStartTimingProfile(const Eigen::VectorXd &warm_durations,
-                                     Eigen::VectorXd &durations) const;
 
     double estimateObstacleClearance(const Eigen::Vector3d &pt,
                                      double search_radius,
@@ -206,14 +161,9 @@ namespace ego_planner
     bool lineOfSightFree(const Eigen::Vector3d &from,
                          const Eigen::Vector3d &to,
                          double max_dist = -1.0) const;
-    double computeTrajectoryMinSdf(const MINCOTraj3D &traj) const;
     void reportCorridorFailure(CorridorFailureType type,
                                const std::string &detail);
-
-    bool prepareLocalAStarPath(const Eigen::Vector3d &start_pt,
-                             const Eigen::Vector3d &goal_pt,
-                             std::vector<Eigen::Vector3d> &dense_path,
-                             Eigen::Vector3d &safe_goal) const;
+    solver::StateToStateInitResources makeStateToStateInitResources() const;
 
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;

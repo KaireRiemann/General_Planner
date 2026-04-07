@@ -1,5 +1,8 @@
 #include <plan_manage/ego_replan_fsm.h>
 
+#include <chrono>
+#include <thread>
+
 namespace ego_planner
 {
 
@@ -189,7 +192,7 @@ namespace ego_planner
       while (ros::ok() && count++ < 2000)
       {
         ros::spinOnce();
-        ros::Duration(0.001).sleep();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
 
       readGivenWpsAndPlan();
@@ -386,10 +389,14 @@ namespace ego_planner
 
         if (decision == StateToStateRuntimeDecision::EMERGENCY_STOP)
         {
+          have_pending_state2state_target_selection_ = false;
+          pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
           changeFSMExecState(EMERGENCY_STOP, "FSM");
         }
         else if (decision == StateToStateRuntimeDecision::ARRIVED_AND_HOLD)
         {
+          have_pending_state2state_target_selection_ = false;
+          pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
           have_target_ = false;
           have_trigger_ = false;
           if (target_type_ == TARGET_TYPE::PRESET_TARGET)
@@ -403,7 +410,24 @@ namespace ego_planner
                  (decision == StateToStateRuntimeDecision::REPLAN_IMMEDIATE ||
                   decision == StateToStateRuntimeDecision::PREPARE_SUCCESSOR))
         {
+          have_pending_state2state_target_selection_ =
+              (decision == StateToStateRuntimeDecision::PREPARE_SUCCESSOR) &&
+              decision_debug.preview_valid &&
+              decision_debug.preview_selection.valid;
+          if (have_pending_state2state_target_selection_)
+          {
+            pending_state2state_target_selection_ = decision_debug.preview_selection;
+          }
+          else
+          {
+            pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
+          }
           changeFSMExecState(REPLAN_TRAJ, "FSM");
+        }
+        else
+        {
+          have_pending_state2state_target_selection_ = false;
+          pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
         }
         break;
       }
@@ -792,6 +816,14 @@ namespace ego_planner
                                                     double t_cur,
                                                     std::string *reason)
   {
+    const bool enable_keep_current =
+        have_active_state2state_runtime_policy_
+            ? active_state2state_runtime_policy_.enable_keep_current
+            : state2state_keep_current_traj_;
+    const double keep_lookahead =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.2, active_state2state_runtime_policy_.keep_lookahead)
+            : state2state_keep_lookahead_;
     const auto set_reason = [&](const std::string &msg)
     {
       if (reason != nullptr)
@@ -817,7 +849,13 @@ namespace ego_planner
       return false;
     }
 
-    const double lookahead = std::min(state2state_keep_lookahead_, remaining_t);
+    if (!enable_keep_current)
+    {
+      set_reason("keep_current_disabled");
+      return false;
+    }
+
+    const double lookahead = std::min(keep_lookahead, remaining_t);
     if (!currentTrajStillUsable(lookahead))
     {
       set_reason("future_collision_or_invalid");
@@ -839,8 +877,37 @@ namespace ego_planner
                                                         double t_cur,
                                                         std::string *reason,
                                                         double *preview_target_shift,
-                                                        bool *preview_valid)
+                                                        bool *preview_valid,
+                                                        runtime::LocalTargetSelection *preview_selection)
   {
+    const bool enable_keep_current =
+        have_active_state2state_runtime_policy_
+            ? active_state2state_runtime_policy_.enable_keep_current
+            : state2state_keep_current_traj_;
+    const bool enable_successor_planning =
+        have_active_state2state_runtime_policy_
+            ? active_state2state_runtime_policy_.enable_successor_planning
+            : state2state_successor_enable_;
+    const double min_rest_time =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.1, active_state2state_runtime_policy_.min_rest_time)
+            : state2state_min_rest_time_;
+    const double successor_lead_time =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.15, active_state2state_runtime_policy_.successor_lead_time)
+            : state2state_successor_lead_time_;
+    const double successor_horizon_ratio =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.1, std::min(0.95, active_state2state_runtime_policy_.successor_horizon_ratio))
+            : state2state_successor_horizon_ratio_;
+    const double successor_target_shift_thresh =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.05, active_state2state_runtime_policy_.successor_target_shift_thresh)
+            : state2state_successor_target_shift_thresh_;
+    const double successor_near_goal_hold_radius =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.1, active_state2state_runtime_policy_.successor_near_goal_hold_radius)
+            : state2state_successor_near_goal_hold_radius_;
     const auto set_reason = [&](const std::string &msg)
     {
       if (reason != nullptr)
@@ -857,8 +924,12 @@ namespace ego_planner
     {
       *preview_valid = false;
     }
+    if (preview_selection != nullptr)
+    {
+      *preview_selection = runtime::LocalTargetSelection{};
+    }
 
-    if (!state2state_successor_enable_)
+    if (!enable_successor_planning)
     {
       set_reason("successor_disabled");
       return false;
@@ -871,12 +942,12 @@ namespace ego_planner
 
     const double remaining_t = std::max(0.0, info->duration - t_cur);
     const double progress = info->duration > 1.0e-6 ? t_cur / info->duration : 1.0;
-    if (touch_goal_ || (final_goal_ - odom_pos_).norm() < state2state_successor_near_goal_hold_radius_)
+    if (touch_goal_ || (final_goal_ - odom_pos_).norm() < successor_near_goal_hold_radius)
     {
       set_reason("near_goal_hold");
       return false;
     }
-    if (!state2state_keep_current_traj_)
+    if (!enable_keep_current)
     {
       set_reason("keep_policy_disabled");
       return true;
@@ -886,7 +957,7 @@ namespace ego_planner
       set_reason("missing_planned_targets");
       return true;
     }
-    if (remaining_t < state2state_min_rest_time_)
+    if (remaining_t < min_rest_time)
     {
       set_reason("remaining_time_short");
       return true;
@@ -910,12 +981,16 @@ namespace ego_planner
                                                 preview))
     {
       set_reason("preview_failed");
-      return remaining_t <= state2state_successor_lead_time_;
+      return remaining_t <= successor_lead_time;
     }
 
     if (preview_valid != nullptr)
     {
       *preview_valid = true;
+    }
+    if (preview_selection != nullptr)
+    {
+      *preview_selection = preview;
     }
 
     const double target_shift = (preview.local_target_pos - planned_local_target_pt_).norm();
@@ -927,21 +1002,21 @@ namespace ego_planner
     const double target_time_advance =
         have_prev_target_time ? (preview.next_glb_t_of_lc_tgt - planned_local_target_glb_t_) : 0.0;
     const double target_time_shift_thresh =
-        std::max(0.20, 0.5 * state2state_successor_lead_time_);
+        std::max(0.20, 0.5 * successor_lead_time);
     const bool successor_horizon_window =
-        remaining_t <= planning_horizen_ * state2state_successor_horizon_ratio_;
+        remaining_t <= planning_horizen_ * successor_horizon_ratio;
 
-    if (remaining_t <= state2state_successor_lead_time_)
+    if (remaining_t <= successor_lead_time)
     {
       set_reason("lead_time_window");
       return true;
     }
     if (progress >= state2state_successor_min_progress_ &&
         successor_horizon_window &&
-        (target_shift >= state2state_successor_target_shift_thresh_ ||
+        (target_shift >= successor_target_shift_thresh ||
          target_time_advance >= target_time_shift_thresh))
     {
-      set_reason(target_shift >= state2state_successor_target_shift_thresh_
+      set_reason(target_shift >= successor_target_shift_thresh
                      ? "preview_target_shift_advanced"
                      : "preview_target_time_advanced");
       return true;
@@ -1032,7 +1107,8 @@ namespace ego_planner
                                            t_cur,
                                            &successor_reason,
                                            &local_debug.preview_target_shift,
-                                           &local_debug.preview_valid))
+                                           &local_debug.preview_valid,
+                                           &local_debug.preview_selection))
     {
       local_debug.decision = StateToStateRuntimeDecision::PREPARE_SUCCESSOR;
       local_debug.successor_preparation = true;
@@ -1112,6 +1188,10 @@ namespace ego_planner
   {
     have_planned_local_target_ = false;
     have_planned_final_goal_ = false;
+    have_pending_state2state_target_selection_ = false;
+    have_active_state2state_runtime_policy_ = false;
+    active_state2state_runtime_policy_ = core::RuntimePolicy{};
+    pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
     last_safety_replan_attempt_time_ = -1.0;
     planned_local_target_pt_.setZero();
     planned_local_target_glb_t_ = -1.0;
@@ -1122,7 +1202,7 @@ namespace ego_planner
     planned_tracking_ref_end_.setZero();
   }
 
-  bool EGOReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
+  bool EGOReplanFSM::callCurrentTaskPlan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
     if (use_tracking_task_)
     {
@@ -1180,15 +1260,25 @@ namespace ego_planner
     }
     else
     {
-      const bool preview_ok =
-          local_target_selector_ &&
-          local_target_selector_->peekLocalTarget(planner_manager_->traj_,
-                                                 planning_horizen_,
-                                                 planner_manager_->pp_.max_vel_,
-                                                 start_pt_,
-                                                 final_goal_,
-                                                 target_selection);
-      if (preview_ok)
+      const bool use_cached_preview =
+          have_pending_state2state_target_selection_ &&
+          pending_state2state_target_selection_.valid;
+
+      if (use_cached_preview)
+      {
+        target_selection = pending_state2state_target_selection_;
+      }
+      else if (local_target_selector_)
+      {
+        local_target_selector_->peekLocalTarget(planner_manager_->traj_,
+                                               planning_horizen_,
+                                               planner_manager_->pp_.max_vel_,
+                                               start_pt_,
+                                               final_goal_,
+                                               target_selection);
+      }
+
+      if (target_selection.valid)
       {
         local_target_pt_ = target_selection.local_target_pos;
         local_target_vel_ = target_selection.local_target_vel;
@@ -1200,6 +1290,15 @@ namespace ego_planner
         local_target_vel_ = Eigen::Vector3d::Zero();
         touch_goal_ = true;
       }
+
+      ROS_INFO_THROTTLE(0.8,
+                        "[FSM] state2state_plan_target preview_used=%s target=[%.2f %.2f %.2f] touch_goal=%s next_glb_t=%.2f",
+                        use_cached_preview ? "yes" : "no",
+                        local_target_pt_.x(),
+                        local_target_pt_.y(),
+                        local_target_pt_.z(),
+                        touch_goal_ ? "yes" : "no",
+                        target_selection.valid ? target_selection.next_glb_t_of_lc_tgt : -1.0);
     }
 
     if (tracking_active && !planning_tracking_reference.valid())
@@ -1325,6 +1424,18 @@ namespace ego_planner
                                                      task_prefer_corridor,
                                                      task_prefer_esdf);
 
+    if (!tracking_active)
+    {
+      task_definition.runtime_policy.enable_keep_current = state2state_keep_current_traj_;
+      task_definition.runtime_policy.enable_successor_planning = state2state_successor_enable_;
+      task_definition.runtime_policy.keep_lookahead = state2state_keep_lookahead_;
+      task_definition.runtime_policy.min_rest_time = state2state_min_rest_time_;
+      task_definition.runtime_policy.successor_lead_time = state2state_successor_lead_time_;
+      task_definition.runtime_policy.successor_horizon_ratio = state2state_successor_horizon_ratio_;
+      task_definition.runtime_policy.successor_target_shift_thresh = state2state_successor_target_shift_thresh_;
+      task_definition.runtime_policy.successor_near_goal_hold_radius = state2state_successor_near_goal_hold_radius_;
+    }
+
     core::PlanningSolution planning_solution;
     const bool plan_success = task_executor_
                                   ? task_executor_->execute(planning_context, task_definition, planning_solution)
@@ -1367,12 +1478,16 @@ namespace ego_planner
         {
           local_target_selector_->commitLocalTarget(planner_manager_->traj_, target_selection);
         }
+        have_pending_state2state_target_selection_ = false;
+        pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
         planned_local_target_pt_ = local_target_pt_;
         planned_local_target_glb_t_ =
             target_selection.valid
                 ? target_selection.next_glb_t_of_lc_tgt
                 : planner_manager_->traj_.global_traj.glb_t_of_lc_tgt;
         planned_final_goal_ = final_goal_;
+        active_state2state_runtime_policy_ = task_definition.runtime_policy;
+        have_active_state2state_runtime_policy_ = true;
         have_planned_local_target_ = true;
         have_planned_final_goal_ = true;
         have_planned_tracking_target_now_ = false;
@@ -1380,6 +1495,12 @@ namespace ego_planner
       }
 
       return true;
+    }
+
+    if (!tracking_active)
+    {
+      have_pending_state2state_target_selection_ = false;
+      pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
     }
 
     if (!task_force_plain)
@@ -1401,13 +1522,11 @@ namespace ego_planner
     start_vel_ = odom_vel_;
     start_acc_.setZero();
 
-    bool flag_random_poly_init;
-    if (timesOfConsecutiveStateCalls().first == 1)
-      flag_random_poly_init = false;
+    bool flag_random_poly_init = timesOfConsecutiveStateCalls().first > 1;
 
     for (int i = 0; i < trial_times; i++)
     {
-      if (callReboundReplan(true, flag_random_poly_init))
+      if (callCurrentTaskPlan(true, flag_random_poly_init))
       {
         return true;
       }
@@ -1424,16 +1543,16 @@ namespace ego_planner
     start_vel_ = info->traj.evaluate(t_abs, 1);
     start_acc_ = info->traj.evaluate(t_abs, 2);
 
-    bool success = callReboundReplan(false, false);
+    bool success = callCurrentTaskPlan(false, false);
 
     if (!success)
     {
-      success = callReboundReplan(true, false);
+      success = callCurrentTaskPlan(true, false);
       if (!success)
       {
         for (int i = 0; i < trial_times; i++)
         {
-          success = callReboundReplan(true, true);
+          success = callCurrentTaskPlan(true, true);
           if (success) break;
         }
         if (!success) return false;
@@ -1482,7 +1601,7 @@ namespace ego_planner
         while (exec_state_ != EXEC_TRAJ)
         {
           ros::spinOnce();
-          ros::Duration(0.001).sleep();
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         changeFSMExecState(REPLAN_TRAJ, "TRIG");
       }
@@ -1568,7 +1687,7 @@ namespace ego_planner
     for (size_t i = 0; i < (size_t)waypoint_num_; i++)
     {
       visualization_->displayGoalPoint(wps_[i], Eigen::Vector4d(0, 0.5, 0.5, 1), 0.3, i);
-      ros::Duration(0.001).sleep();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     wpt_id_ = 0;
     planNextWaypoint(wps_[wpt_id_]);

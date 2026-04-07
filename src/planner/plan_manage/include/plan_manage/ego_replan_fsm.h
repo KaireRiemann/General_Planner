@@ -93,6 +93,7 @@ namespace ego_planner
       double remaining_time{0.0};
       double progress_ratio{0.0};
       double preview_target_shift{0.0};
+      runtime::LocalTargetSelection preview_selection;
       std::string reason;
     };
 
@@ -180,6 +181,10 @@ namespace ego_planner
     Eigen::Vector3d planned_final_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
+    runtime::LocalTargetSelection pending_state2state_target_selection_;
+    bool have_pending_state2state_target_selection_{false};
+    core::RuntimePolicy active_state2state_runtime_policy_;
+    bool have_active_state2state_runtime_policy_{false};
 
     double last_replan_time_{-1.0};
     double last_safety_replan_attempt_time_{-1.0};
@@ -238,11 +243,12 @@ namespace ego_planner
                                             double t_cur,
                                             std::string *reason = nullptr,
                                             double *preview_target_shift = nullptr,
-                                            bool *preview_valid = nullptr);
+                                            bool *preview_valid = nullptr,
+                                            runtime::LocalTargetSelection *preview_selection = nullptr);
     StateToStateRuntimeDecision evaluateStateToStateDecision(const LocalTrajData *info,
                                                              double t_cur,
                                                              StateToStateDecisionDebug *debug = nullptr);
-    bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj);
+    bool callCurrentTaskPlan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);
 
