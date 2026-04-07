@@ -2,7 +2,14 @@
     <arg name="map_size_x" value="200.0"/>
     <arg name="map_size_y" value="200.0"/>
     <arg name="map_size_z" value="3.0"/>
-    <arg name="odom_topic" value="visual_slam/odom"/>
+    <arg name="odom_topic" value="/iris_0/mavros/vision_odom/odom"/>
+    <arg name="raw_cloud_topic" value="/iris_0/velodyne_points"/>
+    <arg name="world_cloud_topic" value="/iris_0/points_world"/>
+    <arg name="cloud_topic" value="$(arg world_cloud_topic)"/>
+    <!-- <arg name="cloud_topic" value="/unused_depth_topic"/> -->
+    <arg name="depth_topic" value="/unused_depth_topic"/>
+    <arg name="camera_pose_topic" value="/iris_0/mavros/vision_pose/pose"/>
+    <arg name="world_frame" value="world"/>
     <arg name="launch_prefix" default=""/>
 
     <arg name="init_x" value="-15.0"/>
@@ -15,7 +22,19 @@
 
     <arg name="enable_esdf" value="true"/>
 
-    <include file="$(find ego_planner)/launch/include/run_in_sim.xml">
+    <node pkg="ego_planner" type="body_to_world" name="drone_0_body_to_world" output="screen">
+        <param name="odom_topic" value="$(arg odom_topic)"/>
+        <param name="cloud_in_topic" value="$(arg raw_cloud_topic)"/>
+        <param name="cloud_out_topic" value="$(arg world_cloud_topic)"/>
+        <param name="world_frame" value="$(arg world_frame)"/>
+        <param name="source_in_body_frame" value="true"/>
+        <param name="filter_near_enable" value="true"/>
+        <param name="filter_near_radius" value="0.45"/>
+        <param name="filter_ground_enable" value="true"/>
+        <param name="filter_ground_z" value="0.05"/>
+    </node>
+
+    <include file="$(find ego_planner)/launch/include/run_in_real.xml">
         <arg name="drone_id" value="0"/>
         <arg name="init_x" value="$(arg init_x)"/>
         <arg name="init_y" value="$(arg init_y)"/>
@@ -24,6 +43,10 @@
         <arg name="map_size_y" value="$(arg map_size_y)"/>
         <arg name="map_size_z" value="$(arg map_size_z)"/>
         <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="sensor_topics_absolute" value="true"/>
+        <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+        <arg name="depth_topic" value="$(arg depth_topic)"/>
+        <arg name="camera_pose_topic" value="$(arg camera_pose_topic)"/>
         <arg name="launch_prefix" value="$(arg launch_prefix)"/>
         <arg name="flight_type" value="1"/>
         <arg name="point_num" value="1"/>
@@ -31,11 +54,16 @@
         <arg name="target0_y" value="$(arg target_y)"/>
         <arg name="target0_z" value="$(arg target_z)"/>
         <arg name="use_sfc_corridor" value="false"/>
-        <arg name="use_esdf" value="true"/>
+        <arg name="use_esdf" value="false"/>
         <arg name="enable_esdf" value="$(arg enable_esdf)"/>
     </include>
 
+    <!-- PX4 + body_to_world cloud mode tuning -->
+    <param name="/drone_0_ego_planner_node/grid_map/apply_cam_extrinsic_on_odom" value="false"/>
+    <param name="/drone_0_ego_planner_node/grid_map/esdf_slice_follow_odom" value="true"/>
+    <param name="/drone_0_ego_planner_node/grid_map/esdf_slice_z_offset" value="0.0"/>
+
     <node name="rviz" pkg="rviz" type="rviz" output="screen"
-        args="-d $(find ego_planner)/launch/include/default_esdf.rviz">
+        args="-d $(find ego_planner)/launch/include/default.rviz">
     </node>
 </launch>

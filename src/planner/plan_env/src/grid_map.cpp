@@ -11,6 +11,8 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/pose_type", mp_.pose_type_, 1);
   node_.param("grid_map/frame_id", mp_.frame_id_, string("world"));
   node_.param("grid_map/odom_depth_timeout", mp_.odom_depth_timeout_, 1.0);
+  node_.param("grid_map/freeze_odom_after_depth", freeze_odom_after_depth_, false);
+  node_.param("grid_map/apply_cam_extrinsic_on_odom", apply_cam_extrinsic_on_odom_, true);
 
   node_.param("grid_map/resolution", mp_.resolution_, -1.0);
   node_.param("grid_map/local_update_range_x", mp_.local_update_range3d_(0), -1.0);
@@ -45,6 +47,8 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/show_occ_time", mp_.show_occ_time_, false);
   node_.param("grid_map/show_esdf_time", mp_.show_esdf_time_, false);
   node_.param("grid_map/esdf_slice_height", mp_.esdf_slice_height_, 1.0);
+  node_.param("grid_map/esdf_slice_follow_odom", esdf_slice_follow_odom_, false);
+  node_.param("grid_map/esdf_slice_z_offset", esdf_slice_z_offset_, 0.0);
 
   mp_.inf_grid_ = ceil((mp_.obstacles_inflation_ - 1e-5) / mp_.resolution_);
   if (mp_.inf_grid_ > 4)
@@ -581,11 +585,21 @@ void GridMap::depthOdomCallback(const sensor_msgs::ImageConstPtr &img,
   body2world(2, 3) = odom->pose.pose.position.z;
   body2world(3, 3) = 1.0;
 
-  Eigen::Matrix4d cam_T = body2world * md_.cam2body_;
-  md_.camera_pos_(0) = cam_T(0, 3);
-  md_.camera_pos_(1) = cam_T(1, 3);
-  md_.camera_pos_(2) = cam_T(2, 3);
-  md_.camera_r_m_ = cam_T.block<3, 3>(0, 0);
+  if (apply_cam_extrinsic_on_odom_)
+  {
+    Eigen::Matrix4d cam_T = body2world * md_.cam2body_;
+    md_.camera_pos_(0) = cam_T(0, 3);
+    md_.camera_pos_(1) = cam_T(1, 3);
+    md_.camera_pos_(2) = cam_T(2, 3);
+    md_.camera_r_m_ = cam_T.block<3, 3>(0, 0);
+  }
+  else
+  {
+    md_.camera_pos_(0) = odom->pose.pose.position.x;
+    md_.camera_pos_(1) = odom->pose.pose.position.y;
+    md_.camera_pos_(2) = odom->pose.pose.position.z;
+    md_.camera_r_m_ = body_r_m;
+  }
 
   /* get depth image */
   cv_bridge::CvImagePtr cv_ptr;
@@ -609,8 +623,9 @@ void GridMap::depthOdomCallback(const sensor_msgs::ImageConstPtr &img,
 
 void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
 {
-  if (md_.flag_have_ever_received_depth_)
+  if (freeze_odom_after_depth_ && md_.flag_have_ever_received_depth_)
   {
+    ROS_WARN_THROTTLE(2.0, "grid_map: freeze_odom_after_depth=true, odom callback is disabled after first depth frame.");
     indep_odom_sub_.shutdown();
     return;
   }
@@ -1211,8 +1226,11 @@ void GridMap::publishESDF()
     return;
 
   pcl::PointCloud<pcl::PointXYZI> cloud;
+  const double slice_target_z = esdf_slice_follow_odom_
+                                    ? (md_.camera_pos_(2) + esdf_slice_z_offset_)
+                                    : mp_.esdf_slice_height_;
   const double slice_z = std::max(md_.ringbuffer_inf_lowbound3d_(2) + 0.5 * mp_.resolution_,
-                                  std::min(mp_.esdf_slice_height_,
+                                  std::min(slice_target_z,
                                            md_.ringbuffer_inf_upbound3d_(2) - 0.5 * mp_.resolution_));
 
   if (md_.ringbuffer_inf_upbound3d_(0) - md_.ringbuffer_inf_lowbound3d_(0) <= mp_.resolution_ ||

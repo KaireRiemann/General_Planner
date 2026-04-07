@@ -81,3 +81,7 @@ add_dependencies(traj_server ${catkin_EXPORTED_TARGETS})
 add_executable(tracking_target_sim src/tracking_target_sim.cpp)
 target_link_libraries(tracking_target_sim ${catkin_LIBRARIES})
 add_dependencies(tracking_target_sim ${catkin_EXPORTED_TARGETS})
+
+add_executable(body_to_world src/body_to_world.cpp)
+target_link_libraries(body_to_world ${catkin_LIBRARIES})
+add_dependencies(body_to_world ${catkin_EXPORTED_TARGETS})

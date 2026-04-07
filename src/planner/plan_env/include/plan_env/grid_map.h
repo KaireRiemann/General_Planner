@@ -252,6 +252,10 @@ private:
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
   ros::Publisher map_pub_, map_inf_pub_, esdf_pub_;
   ros::Timer occ_timer_, esdf_timer_, vis_timer_, fading_timer_;
+  bool freeze_odom_after_depth_{false};
+  bool apply_cam_extrinsic_on_odom_{true};
+  bool esdf_slice_follow_odom_{false};
+  double esdf_slice_z_offset_{0.0};
 
   //
   uniform_real_distribution<double> rand_noise_;
