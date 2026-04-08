@@ -15,6 +15,11 @@ Vector3d pos_des,vel_des,acc_des;
 double yaw_des = 0.0;
 cascadePID quad_PID(20);
 
+ros::Time last_pose_cmd_time;
+ros::Time last_position_cmd_time;
+bool has_pose_cmd = false;
+bool has_position_cmd = false;
+
 ros::Time t_init,t2;
 
 nav_msgs::Odometry current_odom, last_odom;
@@ -36,6 +41,8 @@ void cmd_callback(const geometry_msgs::PoseStamped& msg)
 {
     pose_cmd = msg;
     control_flag = 1;
+    has_pose_cmd = true;
+    last_pose_cmd_time = ros::Time::now();
 }
 
 void fuel_position_cmd_callback(const quadrotor_msgs::PositionCommand::ConstPtr& cmd) {
@@ -44,6 +51,8 @@ void fuel_position_cmd_callback(const quadrotor_msgs::PositionCommand::ConstPtr&
   acc_des = Eigen::Vector3d(cmd->acceleration.x, cmd->acceleration.y, cmd->acceleration.z);
 
   yaw_des = cmd->yaw;
+  has_position_cmd = true;
+  last_position_cmd_time = ros::Time::now();
 }
 
 void run_control(const ros::TimerEvent& event)
@@ -68,7 +77,11 @@ void run_control(const ros::TimerEvent& event)
 
         // ROS_INFO("set des angle");
 
-        if(control_flag == 1)
+        const ros::Time t_now = ros::Time::now();
+        const bool traj_cmd_fresh = has_position_cmd && (t_now - last_position_cmd_time).toSec() < 0.2;
+        const bool pose_cmd_fresh = has_pose_cmd && (t_now - last_pose_cmd_time).toSec() < 0.5;
+
+        if(!traj_cmd_fresh && control_flag == 1 && pose_cmd_fresh)
         {
             pos_des << pose_cmd.pose.position.x, pose_cmd.pose.position.y, pose_cmd.pose.position.z;
             
@@ -81,7 +94,7 @@ void run_control(const ros::TimerEvent& event)
             x_body = R_des * x_body;
 
             yaw_des = atan2(x_body(1),x_body(0));//pose_cmd.pose.orientation.z
-            t2 = ros::Time::now();
+            t2 = t_now;
             // yaw_des = 3.1415926;//20.8 * (t2-t_init).toSec()
         }
         

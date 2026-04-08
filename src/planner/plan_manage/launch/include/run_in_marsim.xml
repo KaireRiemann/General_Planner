@@ -37,6 +37,11 @@
     <arg name="odom_topic"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="global_map_topic" default="/map_generator/global_cloud"/>
+    <arg name="use_uav_extra_model" default="true"/>
+    <arg name="enable_manual_takeover" default="false"/>
+    <arg name="mesh_resource" default="package://odom_visualization/meshes/yunque.dae"/>
+    <arg name="robot_scale" default="1.0"/>
+    <arg name="downsample_resolution" default="0.1"/>
 
     <include file="$(find ego_planner)/launch/include/advanced_param.xml">
         <arg name="drone_id" value="$(arg drone_id)"/>
@@ -103,9 +108,14 @@
         <arg name="odometry_topic" value="$(arg odom_topic)"/>
         <arg name="lidar_type" value="$(arg lidar_type)"/>
         <arg name="global_map_topic" value="$(arg global_map_topic)"/>
+        <arg name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+        <arg name="mesh_resource" value="$(arg mesh_resource)"/>
+        <arg name="robot_scale" value="$(arg robot_scale)"/>
+        <arg name="downsample_resolution" value="$(arg downsample_resolution)"/>
     </include>
 
-    <include file="$(find manual_take_over)/launch/take_over_drone.launch">
+    <include if="$(arg enable_manual_takeover)"
+             file="$(find manual_take_over)/launch/take_over_drone.launch">
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="cmd_topic" value="drone_$(arg drone_id)_planning/pos_cmd"/>
     </include>

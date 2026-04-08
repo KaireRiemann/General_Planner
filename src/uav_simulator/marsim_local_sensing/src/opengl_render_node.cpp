@@ -634,7 +634,7 @@ void renderSensedPoints(const ros::TimerEvent& event)
       geometry_msgs::PoseStamped totaltime_pub;
       totaltime_pub.pose.position.x = accumulate(comp_time_vec.begin(),comp_time_vec.end(),0.0)/comp_time_vec.size();
       comp_time_pub.publish(totaltime_pub);
-      ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp,totaltime_pub.pose.position.x);
+      //ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp,totaltime_pub.pose.position.x);
     }else{
       comp_time_count++;
     }

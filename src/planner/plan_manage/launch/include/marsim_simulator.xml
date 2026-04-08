@@ -9,6 +9,10 @@
     <arg name="drone_id"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="global_map_topic" default="/map_generator/global_cloud"/>
+    <arg name="use_uav_extra_model" default="true"/>
+    <arg name="mesh_resource" default="package://odom_visualization/meshes/yunque.dae"/>
+    <arg name="robot_scale" default="1.0"/>
+    <arg name="downsample_resolution" default="0.1"/>
 
     <node pkg="mars_drone_sim"
           name="drone_$(arg drone_id)_marsim_dynamics"
@@ -40,7 +44,6 @@
         <param name="damping_ratio" value="1.0"/>
         <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
         <remap from="~cmd_RPM" to="/drone_$(arg drone_id)_cmdRPM"/>
-        <remap from="~cmd_pose" to="/goal"/>
         <remap from="~position_cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
     </node>
 
@@ -50,12 +53,13 @@
           output="screen">
         <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
         <remap from="~cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
+        <param name="mesh_resource" value="$(arg mesh_resource)"/>
         <param name="color/a" value="1.0"/>
         <param name="color/r" value="0.0"/>
-        <param name="color/g" value="0.0"/>
-        <param name="color/b" value="0.0"/>
+        <param name="color/g" value="1.0"/>
+        <param name="color/b" value="1.0"/>
         <param name="covariance_scale" value="100.0"/>
-        <param name="robot_scale" value="0.35"/>
+        <param name="robot_scale" value="$(arg robot_scale)"/>
         <param name="tf45" value="false"/>
         <param name="drone_id" value="$(arg drone_id)"/>
     </node>
@@ -85,13 +89,13 @@
             <param name="use_vlp32_pattern" value="0"/>
             <param name="use_minicf_pattern" value="0"/>
             <param name="use_os128_pattern" value="0"/>
-            <param name="downsample_res" value="0.1"/>
+            <param name="downsample_res" value="$(arg downsample_resolution)"/>
             <param name="dynobj_enable" value="0"/>
             <param name="dynobject_size" value="0.8"/>
             <param name="dynobject_num" value="10"/>
             <param name="dyn_mode" value="0"/>
             <param name="dyn_velocity" value="1.0"/>
-            <param name="use_uav_extra_model" value="1"/>
+            <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
             <param name="collisioncheck_enable" value="0"/>
             <param name="collision_range" value="0.3"/>
             <param name="output_pcd" value="0"/>
@@ -126,13 +130,13 @@
             <param name="use_vlp32_pattern" value="0"/>
             <param name="use_minicf_pattern" value="1"/>
             <param name="use_os128_pattern" value="0"/>
-            <param name="downsample_res" value="0.1"/>
+            <param name="downsample_res" value="$(arg downsample_resolution)"/>
             <param name="dynobj_enable" value="0"/>
             <param name="dynobject_size" value="0.8"/>
             <param name="dynobject_num" value="10"/>
             <param name="dyn_mode" value="0"/>
             <param name="dyn_velocity" value="1.0"/>
-            <param name="use_uav_extra_model" value="1"/>
+            <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
             <param name="collisioncheck_enable" value="0"/>
             <param name="collision_range" value="0.3"/>
             <param name="output_pcd" value="0"/>

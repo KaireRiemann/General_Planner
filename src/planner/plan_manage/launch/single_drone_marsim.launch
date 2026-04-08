@@ -1,40 +1,67 @@
 <launch>
     <arg name="map_size_x" default="200.0"/>
     <arg name="map_size_y" default="200.0"/>
-    <arg name="map_size_z" default="3.0"/>
-    <arg name="odom_topic" default="visual_slam/odom"/>
+    <arg name="map_size_z" default="5.0"/>
+    <arg name="odom_topic" default="lidar_slam/odom"/>
     <arg name="launch_prefix" default=""/>
+    <arg name="flight_type" default="1"/>
 
-    <arg name="init_x" default="-15.0"/>
+    <arg name="init_x" default="0.0"/>
     <arg name="init_y" default="0.0"/>
     <arg name="init_z" default="1.0"/>
 
-    <arg name="use_esdf" default="true"/>
+    <arg name="use_esdf" default="false"/>
     <arg name="use_sfc_corridor" default="false"/>
-    <arg name="enable_esdf" default="true"/>
+    <arg name="enable_esdf" default="false"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="rviz" default="true"/>
 
-    <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
-        <param name="map/x_size" value="26"/>
-        <param name="map/y_size" value="20"/>
-        <param name="map/z_size" value="3"/>
-        <param name="map/resolution" value="0.1"/>
-        <param name="ObstacleShape/seed" value="1"/>
-        <param name="map/obs_num" value="100"/>
-        <param name="ObstacleShape/lower_rad" value="0.5"/>
-        <param name="ObstacleShape/upper_rad" value="0.7"/>
-        <param name="ObstacleShape/lower_hei" value="0.0"/>
-        <param name="ObstacleShape/upper_hei" value="3.0"/>
-        <param name="map/circle_num" value="100"/>
-        <param name="ObstacleShape/radius_l" value="0.7"/>
-        <param name="ObstacleShape/radius_h" value="0.5"/>
-        <param name="ObstacleShape/z_l" value="0.7"/>
-        <param name="ObstacleShape/z_h" value="0.8"/>
-        <param name="ObstacleShape/theta" value="0.5"/>
-        <param name="pub_rate" value="1.0"/>
-        <param name="min_distance" value="0.8"/>
-    </node>
+    <arg name="use_static_map" default="true"/>
+    <arg name="map_name" default="$(find map_generator)/resource/small_forest01cutoff.pcd"/>
+    <arg name="downsample_resolution" default="0.1"/>
+    <arg name="map_offset_x" default="0.0"/>
+    <arg name="map_offset_y" default="0.0"/>
+    <arg name="map_offset_z" default="0.0"/>
+    <arg name="use_uav_extra_model" default="true"/>
+    <arg name="enable_manual_takeover" default="false"/>
+
+    <group if="$(arg use_static_map)">
+        <node pkg="map_generator"
+              name="map_pub"
+              type="map_pub"
+              output="screen"
+              args="$(arg map_name)">
+            <param name="add_boundary" value="0"/>
+            <param name="is_bridge" value="0"/>
+            <param name="downsample_res" value="$(arg downsample_resolution)"/>
+            <param name="map_offset_x" value="$(arg map_offset_x)"/>
+            <param name="map_offset_y" value="$(arg map_offset_y)"/>
+            <param name="map_offset_z" value="$(arg map_offset_z)"/>
+        </node>
+    </group>
+
+    <group unless="$(arg use_static_map)">
+        <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
+            <param name="map/x_size" value="26"/>
+            <param name="map/y_size" value="20"/>
+            <param name="map/z_size" value="3"/>
+            <param name="map/resolution" value="0.1"/>
+            <param name="ObstacleShape/seed" value="1"/>
+            <param name="map/obs_num" value="100"/>
+            <param name="ObstacleShape/lower_rad" value="0.5"/>
+            <param name="ObstacleShape/upper_rad" value="0.7"/>
+            <param name="ObstacleShape/lower_hei" value="0.0"/>
+            <param name="ObstacleShape/upper_hei" value="3.0"/>
+            <param name="map/circle_num" value="100"/>
+            <param name="ObstacleShape/radius_l" value="0.7"/>
+            <param name="ObstacleShape/radius_h" value="0.5"/>
+            <param name="ObstacleShape/z_l" value="0.7"/>
+            <param name="ObstacleShape/z_h" value="0.8"/>
+            <param name="ObstacleShape/theta" value="0.5"/>
+            <param name="pub_rate" value="1.0"/>
+            <param name="min_distance" value="0.8"/>
+        </node>
+    </group>
 
     <include file="$(find ego_planner)/launch/include/run_in_marsim.xml">
         <arg name="drone_id" value="0"/>
@@ -46,24 +73,30 @@
         <arg name="map_size_z" value="$(arg map_size_z)"/>
         <arg name="odom_topic" value="$(arg odom_topic)"/>
         <arg name="launch_prefix" value="$(arg launch_prefix)"/>
-        <arg name="flight_type" value="2"/>
-        <arg name="point_num" value="4"/>
+        <arg name="flight_type" value="$(arg flight_type)"/>
+        <arg name="point_num" value="0"/>
         <arg name="target0_x" value="0.0"/>
-        <arg name="target0_y" value="8.0"/>
-        <arg name="target0_z" value="1.0"/>
-        <arg name="target1_x" value="8.0"/>
+        <arg name="target0_y" value="0.0"/>
+        <arg name="target0_z" value="0.0"/>
+        <arg name="target1_x" value="0.0"/>
         <arg name="target1_y" value="0.0"/>
-        <arg name="target1_z" value="1.0"/>
+        <arg name="target1_z" value="0.0"/>
         <arg name="target2_x" value="0.0"/>
-        <arg name="target2_y" value="-8.0"/>
-        <arg name="target2_z" value="1.0"/>
-        <arg name="target3_x" value="-8.0"/>
+        <arg name="target2_y" value="0.0"/>
+        <arg name="target2_z" value="0.0"/>
+        <arg name="target3_x" value="0.0"/>
         <arg name="target3_y" value="0.0"/>
-        <arg name="target3_z" value="1.0"/>
+        <arg name="target3_z" value="0.0"/>
         <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)"/>
         <arg name="use_esdf" value="$(arg use_esdf)"/>
         <arg name="enable_esdf" value="$(arg enable_esdf)"/>
         <arg name="lidar_type" value="$(arg lidar_type)"/>
+        <arg name="global_map_topic" value="/map_generator/global_cloud"/>
+        <arg name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+        <arg name="enable_manual_takeover" value="$(arg enable_manual_takeover)"/>
+        <arg name="mesh_resource" value="package://odom_visualization/meshes/yunque.dae"/>
+        <arg name="robot_scale" value="1.0"/>
+        <arg name="downsample_resolution" value="$(arg downsample_resolution)"/>
     </include>
 
     <node if="$(arg rviz)"
@@ -71,5 +104,5 @@
           pkg="rviz"
           type="rviz"
           output="screen"
-          args="-d $(find ego_planner)/launch/include/default_esdf.rviz"/>
+          args="-d $(find ego_planner)/launch/include/marsim_mid360.rviz"/>
 </launch>
