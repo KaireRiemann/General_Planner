@@ -75,6 +75,8 @@ add_message_files(
   PolynomialTrajectory.msg
   LQRTrajectory.msg
   GoalSet.msg
+  TakeoffLand.msg
+  Px4ctrlDebug.msg
 )
 
 generate_messages(
@@ -107,4 +109,3 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 #     decode_msgs 
 #     encode_msgs
 # )
-

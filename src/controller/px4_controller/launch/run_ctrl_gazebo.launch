@@ -1,0 +1,16 @@
+<launch>
+  <arg name="drone_id" default="0"/>
+  <arg name="mavros_ns" default="/iris_0/mavros"/>
+  <arg name="odom_topic" default="/iris_0/mavros/vision_odom/odom"/>
+  <arg name="cmd_topic" default="/drone_0_planning/pos_cmd"/>
+
+  <include file="$(find px4_controller)/launch/run_ctrl.launch">
+    <arg name="mavros_ns" value="$(arg mavros_ns)"/>
+    <arg name="odom_topic" value="$(arg odom_topic)"/>
+    <arg name="cmd_topic" value="$(arg cmd_topic)"/>
+    <arg name="config_file" value="$(find px4_controller)/config/ctrl_param_gazebo.yaml"/>
+    <arg name="takeoff_land_topic" value="/drone_$(arg drone_id)_px4_controller/takeoff_land"/>
+    <arg name="traj_start_trigger_topic" value="/drone_$(arg drone_id)_traj_start_trigger"/>
+    <arg name="debug_topic" value="/drone_$(arg drone_id)_debugPx4ctrl"/>
+  </include>
+</launch>

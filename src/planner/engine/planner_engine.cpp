@@ -188,6 +188,18 @@ int countEnabledFeasibleSets(const ego_planner::core::PlanningProblem &problem,
   return count;
 }
 
+void populateInitArtifacts(const ego_planner::solver::StateToStateInitializationResult &init_result,
+                           ego_planner::core::PlanningSolution &solution)
+{
+  solution.has_init_artifacts = init_result.success;
+  solution.active_space_model = init_result.selected_mode;
+  solution.init_source = init_result.init_source;
+  solution.guide_path = init_result.guide_path;
+  solution.dense_path = init_result.dense_path;
+  solution.corridor_hpolys = init_result.corridor_hpolys;
+  solution.corridor_piece_idx = init_result.corridor_piece_idx;
+}
+
 } // namespace
 
 namespace ego_planner::engine
@@ -210,16 +222,16 @@ solver::StateToStateInitResources PlannerEngine::makeStateToStateInitResources()
 
   resources.plan_params = &planner_manager_->pp_;
   resources.traj_container = &planner_manager_->traj_;
-  resources.continuous_failures_count = &planner_manager_->continous_failures_count_;
+  resources.continuous_failures_count = planner_manager_->getContinuousFailuresCountPtr();
   resources.grid_map = planner_manager_->grid_map_;
-  resources.jps_astar = planner_manager_->jps_astar_.get();
-  resources.optimizer = planner_manager_->ploy_traj_opt_.get();
-  resources.guide_min_clearance = planner_manager_->guide_min_clearance_;
-  resources.guide_sparse_min_inner = planner_manager_->guide_sparse_min_inner_;
-  resources.guide_sparse_max_inner = planner_manager_->guide_sparse_max_inner_;
-  resources.guide_turn_angle_deg = planner_manager_->guide_turn_angle_deg_;
-  resources.sfc_progress = planner_manager_->sfc_progress_;
-  resources.sfc_range = planner_manager_->sfc_range_;
+  resources.jps_astar = planner_manager_->getJpsAstar();
+  resources.optimizer = planner_manager_->getOptimizer();
+  resources.guide_min_clearance = planner_manager_->getGuideMinClearance();
+  resources.guide_sparse_min_inner = planner_manager_->getGuideSparseMinInner();
+  resources.guide_sparse_max_inner = planner_manager_->getGuideSparseMaxInner();
+  resources.guide_turn_angle_deg = planner_manager_->getGuideTurnAngleDeg();
+  resources.sfc_progress = planner_manager_->getSfcProgress();
+  resources.sfc_range = planner_manager_->getSfcRange();
   return resources;
 }
 
@@ -331,10 +343,10 @@ bool PlannerEngine::solveTrackingLegacyTask(const core::TaskSpec &task,
       solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
       solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
     }
-    if (planner_manager_->have_active_tracking_semantic_guide_)
+    if (planner_manager_->hasActiveTrackingSemanticGuide())
     {
       solution.has_tracking_semantic_guide = true;
-      solution.tracking_semantic_guide = planner_manager_->active_tracking_semantic_guide_;
+      solution.tracking_semantic_guide = planner_manager_->getActiveTrackingSemanticGuide();
     }
   }
   return success;
@@ -383,15 +395,10 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     return false;
   }
 
-  if (!planner_manager_->enable_compiled_state2state_)
-  {
-    ROS_WARN_THROTTLE(2.0,
-                      "[PlannerEngine] manager/enable_compiled_state2state=false is deprecated; "
-                      "state-to-state now always uses the compiled PlannerEngine path.");
-  }
-
   const core::TaskDefinition &task_definition = problem.task_definition;
   const core::TaskSpec &task = problem.task;
+  auto *optimizer = planner_manager_->getOptimizer();
+  const auto visualization = planner_manager_->getVisualization();
 
   bool compiled_use_corridor = false;
   bool compiled_use_esdf = false;
@@ -420,7 +427,8 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   }
 
   const char *manager_default_mode =
-      managerDefaultModeString(planner_manager_->use_sfc_corridor_, planner_manager_->use_esdf_);
+      managerDefaultModeString(planner_manager_->managerPrefersCorridor(),
+                               planner_manager_->managerPrefersEsdf());
   const char *compiled_active_mode =
       activeSpaceModelString(problem.active_space_model);
   const char *task_pref =
@@ -433,14 +441,13 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
            compiled_active_mode,
            mode_str,
            compiled_force_plain ? "yes" : "no",
-           planner_manager_->allow_compiled_state2state_legacy_fallback_ ? "enabled" : "disabled",
+           "disabled",
            problem.references.guide_path.size(),
            corridor_set_count,
            seedKindString(problem.seed.kind),
            problem.seed.corridor_aware ? "yes" : "no",
            problem.feasible_sets.size());
 
-  bool fallback_attempted = false;
   const auto fillCompiledFailure = [&](const std::string &reason) -> bool
   {
     solution.success = false;
@@ -449,74 +456,18 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     solution.message =
         std::string("compiled state-to-state solve failed; active_mode=") +
         mode_str +
-        " fallback_attempted=" + (fallback_attempted ? "yes" : "no") +
-        " reason=" + reason;
-    ROS_WARN("[CompiledS2S] active_mode=%s fallback_to_legacy=%s reason=%s",
+        " fallback_attempted=no reason=" + reason;
+    ROS_WARN("[CompiledS2S] active_mode=%s fallback_to_legacy=no reason=%s",
              compiled_active_mode,
-             fallback_attempted ? "attempted" : "no",
              reason.c_str());
     return false;
-  };
-
-  const auto runModePinnedLegacyFallback =
-      [&](const std::string &reason,
-          const std::vector<Eigen::Vector3d> *preferred_guide_path) -> bool
-  {
-    if (!planner_manager_->allow_compiled_state2state_legacy_fallback_)
-    {
-      return fillCompiledFailure(reason);
-    }
-
-    fallback_attempted = true;
-    ROS_WARN("[CompiledS2S] fallback_to_legacy=yes active_mode=%s reason=%s",
-             compiled_active_mode,
-             reason.c_str());
-
-    const bool prev_use_corridor = planner_manager_->use_sfc_corridor_;
-    const bool prev_use_esdf = planner_manager_->use_esdf_;
-    planner_manager_->use_sfc_corridor_ = compiled_use_corridor;
-    planner_manager_->use_esdf_ = compiled_use_esdf;
-    const bool ok = planner_manager_->reboundReplan(task.start_pt,
-                                                    task.start_vel,
-                                                    task.start_acc,
-                                                    task.goal_pt,
-                                                    task.goal_vel,
-                                                    task.flag_poly_init,
-                                                    task.flag_random_poly_traj,
-                                                    task.touch_goal,
-                                                    compiled_force_plain,
-                                                    nullptr,
-                                                    preferred_guide_path,
-                                                    nullptr);
-    planner_manager_->use_sfc_corridor_ = prev_use_corridor;
-    planner_manager_->use_esdf_ = prev_use_esdf;
-
-    if (!ok)
-    {
-      return fillCompiledFailure(reason + "; mode-preserving legacy fallback also failed");
-    }
-
-    solution.success = true;
-    solution.used_legacy_adapter = true;
-    solution.touch_goal = task_definition.runtime_policy.touch_goal;
-    solution.message =
-        std::string("compiled state-to-state fallback success; active_mode=") +
-        mode_str + " reason=" + reason;
-    solution.trajectory = planner_manager_->traj_.local_traj.traj;
-    if (planner_manager_->traj_.local_traj.has_yaw_ref)
-    {
-      solution.has_yaw_ref = true;
-      solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
-      solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
-    }
-    return true;
   };
 
   if (problem.representation != core::RepresentationKind::MINCO ||
       !problem.start_boundary.valid ||
       !problem.terminal_boundary.valid)
   {
-    return runModePinnedLegacyFallback("compiled problem is missing valid MINCO boundaries", nullptr);
+    return fillCompiledFailure("compiled problem is missing valid MINCO boundaries");
   }
 
   state_to_state_initializer_.setResources(makeStateToStateInitResources());
@@ -546,9 +497,9 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     }
     const std::string init_failure =
         init_result.message.empty() ? init_result.failure_reason : init_result.message;
-    return runModePinnedLegacyFallback("compiled stable initialization failed: " + init_failure,
-                                       init_result.guide_path.size() >= 2 ? &init_result.guide_path : nullptr);
+    return fillCompiledFailure("compiled stable initialization failed: " + init_failure);
   }
+  populateInitArtifacts(init_result, solution);
 
   MINCOBoundaryState3D &headState = init_result.head_state;
   MINCOBoundaryState3D &tailState = init_result.tail_state;
@@ -565,13 +516,11 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
 
   if (durations.size() <= 0 || !durations.allFinite())
   {
-    return runModePinnedLegacyFallback("compiled stable initialization returned invalid durations",
-                                       active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+    return fillCompiledFailure("compiled stable initialization returned invalid durations");
   }
   if (innerPts.cols() != std::max(0, static_cast<int>(durations.size()) - 1))
   {
-    return runModePinnedLegacyFallback("compiled stable initialization returned invalid inner-point layout",
-                                       active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+    return fillCompiledFailure("compiled stable initialization returned invalid inner-point layout");
   }
 
   if (compiled_use_corridor)
@@ -580,16 +529,14 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     {
       planner_manager_->reportCorridorFailure(EGOPlannerManager::FAIL_CORRIDOR_GENERATION,
                                               "compiled stable initialization did not produce corridor geometry");
-      return runModePinnedLegacyFallback("compiled corridor mode has no corridor after stable initialization",
-                                         active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+      return fillCompiledFailure("compiled corridor mode has no corridor after stable initialization");
     }
     if (corridor_piece_idx.size() != static_cast<int>(corridor_hpolys.size()) ||
         corridor_piece_idx.sum() != durations.size())
     {
       planner_manager_->reportCorridorFailure(EGOPlannerManager::FAIL_CORRIDOR_INIT,
                                               "compiled stable initialization has invalid corridor piece allocation");
-      return runModePinnedLegacyFallback("compiled stable corridor init has invalid piece layout",
-                                         active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+      return fillCompiledFailure("compiled stable corridor init has invalid piece layout");
     }
   }
 
@@ -609,18 +556,17 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
            corridor_hpolys.size(),
            static_cast<long>(durations.size()));
 
-  planner_manager_->ploy_traj_opt_->setIfTouchGoal(task_definition.runtime_policy.touch_goal);
+  optimizer->setIfTouchGoal(task_definition.runtime_policy.touch_goal);
 
   Eigen::MatrixXd cstr_pts =
-      initTraj.getInitConstraintPoints(planner_manager_->ploy_traj_opt_->get_cps_num_prePiece_());
+      initTraj.getInitConstraintPoints(optimizer->get_cps_num_prePiece_());
   std::vector<std::pair<int, int>> segments;
   if (!compiled_use_corridor && !compiled_use_esdf)
   {
-    if (planner_manager_->ploy_traj_opt_->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) ==
+    if (optimizer->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) ==
         PolyTrajOptimizer::CHK_RET::ERR)
     {
-      return runModePinnedLegacyFallback("compiled plain seed failed initial collision checking",
-                                         active_guide_path.size() >= 2 ? &active_guide_path : nullptr);
+      return fillCompiledFailure("compiled plain seed failed initial collision checking");
     }
   }
 
@@ -630,37 +576,37 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   {
     point_set.push_back(cstr_pts.col(i));
   }
-  if (planner_manager_->visualization_)
+  if (visualization)
   {
     if (compiled_use_esdf)
     {
       if (!display_path.empty())
       {
-        planner_manager_->visualization_->displayGlobalPathList(display_path, 0.08, 1);
+        visualization->displayGlobalPathList(display_path, 0.08, 1);
       }
       if (!active_guide_path.empty())
       {
-        planner_manager_->visualization_->displayFrontendList(active_guide_path, 0.10, 1);
+        visualization->displayFrontendList(active_guide_path, 0.10, 1);
       }
     }
     else if (compiled_use_corridor)
     {
       if (!display_path.empty())
       {
-        planner_manager_->visualization_->displayGlobalPathList(display_path, 0.08, 0);
+        visualization->displayGlobalPathList(display_path, 0.08, 0);
       }
       if (!active_guide_path.empty())
       {
-        planner_manager_->visualization_->displayFrontendList(active_guide_path, 0.12, 0);
+        visualization->displayFrontendList(active_guide_path, 0.12, 0);
       }
       if (!corridor_hpolys.empty())
       {
         std::vector<Eigen::Vector3d> tri, edges;
         buildCorridorVisualization(corridor_hpolys, tri, edges);
-        planner_manager_->visualization_->displayCorridor(tri, edges, 0);
+        visualization->displayCorridor(tri, edges, 0);
       }
     }
-    planner_manager_->visualization_->displayInitPathList(point_set, 0.2, 0);
+    visualization->displayInitPathList(point_set, 0.2, 0);
   }
 
   const ros::Time t_start = ros::Time::now();
@@ -670,37 +616,35 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   if (compiled_use_corridor)
   {
     double final_cost = 0.0;
-    flag_success = planner_manager_->ploy_traj_opt_->optimizeTrajectory(headState,
-                                                                        tailState,
-                                                                        innerPts,
-                                                                        durations,
-                                                                        corridor_hpolys,
-                                                                        &corridor_piece_idx,
-                                                                        final_cost);
+    flag_success = optimizer->optimizeTrajectory(headState,
+                                                 tailState,
+                                                 innerPts,
+                                                 durations,
+                                                 corridor_hpolys,
+                                                 &corridor_piece_idx,
+                                                 final_cost);
 
     if (flag_success)
     {
-      const MINCOTraj3D opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      const MINCOTraj3D opt_traj = optimizer->getTrajectory();
       ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f inside_corridor=%s",
                state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj),
-               planner_manager_->ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
+               optimizer->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
       planner_manager_->setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
-      planner_manager_->have_active_tracking_semantic_guide_ = false;
-      planner_manager_->active_tracking_semantic_guide_.clear();
-      planner_manager_->active_tracking_corridor_.clear();
+      planner_manager_->clearActiveTrackingArtifacts();
       cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
-      if (planner_manager_->visualization_)
+      if (visualization)
       {
-        planner_manager_->visualization_->displayOptimalList(cstr_pts, 0);
+        visualization->displayOptimalList(cstr_pts, 0);
       }
     }
     else
     {
-      const MINCOTraj3D &opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      const MINCOTraj3D &opt_traj = optimizer->getTrajectory();
       ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
-               planner_manager_->ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
+               optimizer->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
                state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj),
-               planner_manager_->ploy_traj_opt_->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
+               optimizer->isTrajectoryInsideCorridor(opt_traj, corridor_hpolys, 0.0) ? "yes" : "no");
       planner_manager_->reportCorridorFailure(EGOPlannerManager::FAIL_CORRIDOR_OPT,
                                               "compiled corridor optimization rejected seed");
     }
@@ -708,14 +652,14 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   else if (compiled_use_esdf)
   {
     double final_cost = 0.0;
-    flag_success = planner_manager_->ploy_traj_opt_->optimizeTrajectoryWithDistanceField(headState,
-                                                                                          tailState,
-                                                                                          innerPts,
-                                                                                          durations,
-                                                                                          final_cost);
+    flag_success = optimizer->optimizeTrajectoryWithDistanceField(headState,
+                                                                  tailState,
+                                                                  innerPts,
+                                                                  durations,
+                                                                  final_cost);
     if (flag_success)
     {
-      const MINCOTraj3D opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      const MINCOTraj3D opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
       const double esdf_tol =
           planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0;
@@ -723,18 +667,16 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
                min_sdf >= esdf_tol ? "yes" : "no",
                min_sdf);
       planner_manager_->setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
-      planner_manager_->have_active_tracking_semantic_guide_ = false;
-      planner_manager_->active_tracking_semantic_guide_.clear();
-      planner_manager_->active_tracking_corridor_.clear();
+      planner_manager_->clearActiveTrackingArtifacts();
       cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
-      if (planner_manager_->visualization_)
+      if (visualization)
       {
-        planner_manager_->visualization_->displayOptimalList(cstr_pts, 0);
+        visualization->displayOptimalList(cstr_pts, 0);
       }
     }
     else
     {
-      const MINCOTraj3D &opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      const MINCOTraj3D &opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
       ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
                min_sdf >= (planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0) ? "yes" : "no",
@@ -743,7 +685,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   }
   else if (planner_manager_->pp_.use_multitopology_trajs)
   {
-    std::vector<Types::ConstraintPoints> trajs = planner_manager_->ploy_traj_opt_->distinctiveTrajs(segments);
+    std::vector<Types::ConstraintPoints> trajs = optimizer->distinctiveTrajs(segments);
     Eigen::VectorXi success = Eigen::VectorXi::Zero(static_cast<int>(trajs.size()));
     double final_cost = 0.0;
     double min_cost = 999999.0;
@@ -751,25 +693,25 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
 
     for (int i = static_cast<int>(trajs.size()) - 1; i >= 0; --i)
     {
-      planner_manager_->ploy_traj_opt_->setConstraintPoints(trajs[static_cast<std::size_t>(i)]);
-      planner_manager_->ploy_traj_opt_->setUseMultitopologyTrajs(true);
-      if (planner_manager_->ploy_traj_opt_->optimizeTrajectory(headState,
-                                                               tailState,
-                                                               innerPts,
-                                                               durations,
-                                                               final_cost))
+      optimizer->setConstraintPoints(trajs[static_cast<std::size_t>(i)]);
+      optimizer->setUseMultitopologyTrajs(true);
+      if (optimizer->optimizeTrajectory(headState,
+                                        tailState,
+                                        innerPts,
+                                        durations,
+                                        final_cost))
       {
         success(i) = true;
         if (final_cost < min_cost)
         {
           min_cost = final_cost;
-          best_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+          best_traj = optimizer->getTrajectory();
           flag_success = true;
         }
 
-        const MINCOTraj3D vis_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+        const MINCOTraj3D vis_traj = optimizer->getTrajectory();
         const Eigen::MatrixXd ctrl_pts_temp =
-            vis_traj.getInitConstraintPoints(planner_manager_->ploy_traj_opt_->get_cps_num_prePiece_());
+            vis_traj.getInitConstraintPoints(optimizer->get_cps_num_prePiece_());
         std::vector<Eigen::Vector3d> vis_pts;
         vis_pts.reserve(static_cast<std::size_t>(ctrl_pts_temp.cols()));
         for (int j = 0; j < ctrl_pts_temp.cols(); ++j)
@@ -784,41 +726,41 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     {
       planner_manager_->setLocalTrajFromOpt(best_traj, task_definition.runtime_policy.touch_goal);
       cstr_pts = sampleTrajectoryForDisplay(best_traj, 0.02);
-      if (planner_manager_->visualization_)
+      if (visualization)
       {
-        planner_manager_->visualization_->displayOptimalList(cstr_pts, 0);
+        visualization->displayOptimalList(cstr_pts, 0);
       }
     }
   }
   else
   {
     double final_cost = 0.0;
-    flag_success = planner_manager_->ploy_traj_opt_->optimizeTrajectory(headState,
-                                                                        tailState,
-                                                                        innerPts,
-                                                                        durations,
-                                                                        final_cost);
+    flag_success = optimizer->optimizeTrajectory(headState,
+                                                 tailState,
+                                                 innerPts,
+                                                 durations,
+                                                 final_cost);
 
     if (flag_success)
     {
-      MINCOTraj3D opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      MINCOTraj3D opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
       ROS_INFO("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f corridor_check=n/a",
-               planner_manager_->ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
+               optimizer->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
                min_sdf);
       planner_manager_->setLocalTrajFromOpt(opt_traj, task_definition.runtime_policy.touch_goal);
       cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
-      if (planner_manager_->visualization_)
+      if (visualization)
       {
-        planner_manager_->visualization_->displayOptimalList(cstr_pts, 0);
+        visualization->displayOptimalList(cstr_pts, 0);
       }
     }
     else
     {
-      const MINCOTraj3D &opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+      const MINCOTraj3D &opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
       ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f corridor_check=n/a",
-               planner_manager_->ploy_traj_opt_->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
+               optimizer->isTrajectoryCollisionFree(opt_traj) ? "yes" : "no",
                min_sdf);
     }
   }
@@ -856,6 +798,9 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     solution.message = "null planner manager";
     return false;
   }
+
+  auto *optimizer = planner_manager_->getOptimizer();
+  const auto visualization = planner_manager_->getVisualization();
 
   if (problem.representation != core::RepresentationKind::MINCO ||
       !problem.start_boundary.valid ||
@@ -930,6 +875,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     }
     return false;
   }
+  populateInitArtifacts(init_result, solution);
 
   ROS_INFO("[CompiledTrackingInit] active_mode=%s init_source=%s final_guide_pts=%zu final_corridor_polys=%zu final_init_pieces=%ld",
            active_mode,
@@ -938,28 +884,28 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
            init_result.corridor_hpolys.size(),
            static_cast<long>(init_result.durations.size()));
 
-  planner_manager_->ploy_traj_opt_->setIfTouchGoal(false);
+  optimizer->setIfTouchGoal(false);
 
-  if (planner_manager_->visualization_)
+  if (visualization)
   {
     const std::vector<Eigen::Vector3d> &display_path =
         init_result.dense_path.empty() ? init_result.guide_path : init_result.dense_path;
     if (!display_path.empty())
     {
-      planner_manager_->visualization_->displayGlobalPathList(display_path, 0.08, 3);
+      visualization->displayGlobalPathList(display_path, 0.08, 3);
     }
     if (!init_result.guide_path.empty())
     {
-      planner_manager_->visualization_->displayFrontendList(init_result.guide_path, 0.10, 3);
+      visualization->displayFrontendList(init_result.guide_path, 0.10, 3);
     }
     if (!init_result.corridor_hpolys.empty())
     {
       std::vector<Eigen::Vector3d> tri, edges;
       buildCorridorVisualization(init_result.corridor_hpolys, tri, edges);
-      planner_manager_->visualization_->displayCorridor(tri, edges, 3);
+      visualization->displayCorridor(tri, edges, 3);
     }
     const Eigen::MatrixXd init_display =
-        init_result.init_traj.getInitConstraintPoints(planner_manager_->ploy_traj_opt_->get_cps_num_prePiece_());
+        init_result.init_traj.getInitConstraintPoints(optimizer->get_cps_num_prePiece_());
     std::vector<Eigen::Vector3d> init_pts;
     init_pts.reserve(static_cast<std::size_t>(std::max<Eigen::Index>(0, init_display.cols())));
     for (int i = 0; i < init_display.cols(); ++i)
@@ -968,7 +914,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     }
     if (!init_pts.empty())
     {
-      planner_manager_->visualization_->displayInitPathList(init_pts, 0.16, 3);
+      visualization->displayInitPathList(init_pts, 0.16, 3);
     }
   }
 
@@ -984,7 +930,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
       solution.message = "compiled tracking corridor mode missing corridor geometry";
       return false;
     }
-    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectory(
+    ok = optimizer->optimizeTrackingTrajectory(
         init_result.head_state,
         init_result.tail_state,
         init_result.inner_points,
@@ -995,7 +941,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
         final_cost);
     break;
   case core::ActiveSpaceModel::ESDF:
-    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectoryWithDistanceField(
+    ok = optimizer->optimizeTrackingTrajectoryWithDistanceField(
         init_result.head_state,
         init_result.tail_state,
         init_result.inner_points,
@@ -1008,7 +954,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
   case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
   case core::ActiveSpaceModel::PLAIN:
   default:
-    ok = planner_manager_->ploy_traj_opt_->optimizeTrackingTrajectory(
+    ok = optimizer->optimizeTrackingTrajectory(
         init_result.head_state,
         init_result.tail_state,
         init_result.inner_points,
@@ -1030,11 +976,9 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     return false;
   }
 
-  const MINCOTraj3D opt_traj = planner_manager_->ploy_traj_opt_->getTrajectory();
+  const MINCOTraj3D opt_traj = optimizer->getTrajectory();
   planner_manager_->setLocalTrajFromOpt(opt_traj, false);
-  planner_manager_->have_active_tracking_semantic_guide_ = false;
-  planner_manager_->active_tracking_semantic_guide_.clear();
-  planner_manager_->active_tracking_corridor_.clear();
+  planner_manager_->clearActiveTrackingArtifacts();
 
   const double yaw0 =
       (problem.start_boundary.velocity.head<2>().norm() > 1.0e-3)
@@ -1052,10 +996,10 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
   solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
   solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
 
-  if (planner_manager_->visualization_)
+  if (visualization)
   {
     const Eigen::MatrixXd opt_display = sampleTrajectoryForDisplay(opt_traj, 0.02);
-    planner_manager_->visualization_->displayOptimalList(opt_display, 3);
+    visualization->displayOptimalList(opt_display, 3);
     // if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
     // {
     //   planner_manager_->visualization_->displayCorridor();

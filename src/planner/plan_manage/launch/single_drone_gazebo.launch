@@ -21,6 +21,10 @@
     <arg name="target_z" value="1.0"/>
 
     <arg name="enable_esdf" value="true"/>
+    <!-- <arg name="enable_px4_controller" value="true"/>
+    <arg name="controller_mavros_ns" value="/iris_0/mavros"/>
+    <arg name="controller_odom_topic" value="$(arg odom_topic)"/>
+    <arg name="controller_cmd_topic" value="/drone_0_planning/pos_cmd"/> -->
 
     <node pkg="ego_planner" type="body_to_world" name="drone_0_body_to_world" output="screen">
         <param name="odom_topic" value="$(arg odom_topic)"/>
@@ -54,7 +58,7 @@
         <arg name="target0_y" value="$(arg target_y)"/>
         <arg name="target0_z" value="$(arg target_z)"/>
         <arg name="use_sfc_corridor" value="false"/>
-        <arg name="use_esdf" value="false"/>
+        <arg name="use_esdf" value="true"/>
         <arg name="enable_esdf" value="$(arg enable_esdf)"/>
     </include>
 
@@ -63,7 +67,14 @@
     <param name="/drone_0_ego_planner_node/grid_map/esdf_slice_follow_odom" value="true"/>
     <param name="/drone_0_ego_planner_node/grid_map/esdf_slice_z_offset" value="0.0"/>
 
+    <!-- <include if="$(arg enable_px4_controller)" file="$(find px4_controller)/launch/run_ctrl_gazebo.launch">
+        <arg name="drone_id" value="0"/>
+        <arg name="mavros_ns" value="$(arg controller_mavros_ns)"/>
+        <arg name="odom_topic" value="$(arg controller_odom_topic)"/>
+        <arg name="cmd_topic" value="$(arg controller_cmd_topic)"/>
+    </include> -->
+
     <node name="rviz" pkg="rviz" type="rviz" output="screen"
-        args="-d $(find ego_planner)/launch/include/default.rviz">
+        args="-d $(find ego_planner)/launch/include/default_esdf.rviz">
     </node>
 </launch>

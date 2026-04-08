@@ -1,0 +1,21 @@
+<launch>
+  <arg name="mavros_ns" default="/mavros"/>
+  <arg name="odom_topic" default="/odom"/>
+  <arg name="cmd_topic" default="/position_cmd"/>
+  <arg name="config_file" default="$(find px4_controller)/config/ctrl_param_fpv.yaml"/>
+  <arg name="takeoff_land_topic" default="/px4_controller/takeoff_land"/>
+  <arg name="traj_start_trigger_topic" default="/traj_start_trigger"/>
+  <arg name="debug_topic" default="/debugPx4ctrl"/>
+
+  <node pkg="px4_controller" type="px4_controller_node" name="px4_controller" output="screen">
+    <remap from="~odom" to="$(arg odom_topic)"/>
+    <remap from="~cmd" to="$(arg cmd_topic)"/>
+
+    <param name="mavros_ns" value="$(arg mavros_ns)"/>
+    <param name="takeoff_land_topic" value="$(arg takeoff_land_topic)"/>
+    <param name="traj_start_trigger_topic" value="$(arg traj_start_trigger_topic)"/>
+    <param name="debug_topic" value="$(arg debug_topic)"/>
+
+    <rosparam command="load" file="$(arg config_file)"/>
+  </node>
+</launch>

@@ -11,13 +11,10 @@
 #include <traj_utils/DataDisp.h>
 #include <plan_env/grid_map.h>
 #include <SpatialMap/SFCCommonTypes.hpp>
-#include <SpatialMap/CorridorInit.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
-#include <solver/state_to_state_initializer.hpp>
-#include "plan_manage/tracking_yaw_planner.hpp"
 
 namespace ego_planner
 {
@@ -70,6 +67,14 @@ namespace ego_planner
     inline CorridorFailureType getLastCorridorFailureType(void) const { return last_corridor_failure_type_; }
     inline const std::string &getLastCorridorFailureTag(void) const { return last_corridor_failure_tag_; }
     inline JPSAStar *getJpsAstar(void) const { return jps_astar_.get(); }
+    inline PolyTrajOptimizer *getOptimizer(void) const { return ploy_traj_opt_.get(); }
+    inline PlanningVisualization::Ptr getVisualization(void) const { return visualization_; }
+    inline int *getContinuousFailuresCountPtr(void) { return &continous_failures_count_; }
+    inline bool managerPrefersCorridor(void) const { return use_sfc_corridor_; }
+    inline bool managerPrefersEsdf(void) const { return use_esdf_; }
+    inline bool hasActiveTrackingSemanticGuide(void) const { return have_active_tracking_semantic_guide_; }
+    inline const cost_functional::TrackingSemanticGuide &getActiveTrackingSemanticGuide(void) const { return active_tracking_semantic_guide_; }
+    void clearActiveTrackingArtifacts();
     inline double getGuideMinClearance(void) const { return guide_min_clearance_; }
     inline int getGuideSparseMinInner(void) const { return guide_sparse_min_inner_; }
     inline int getGuideSparseMaxInner(void) const { return guide_sparse_max_inner_; }
@@ -163,7 +168,6 @@ namespace ego_planner
                          double max_dist = -1.0) const;
     void reportCorridorFailure(CorridorFailureType type,
                                const std::string &detail);
-    solver::StateToStateInitResources makeStateToStateInitResources() const;
 
     PlanningVisualization::Ptr visualization_;
     PolyTrajOptimizer::Ptr ploy_traj_opt_;
@@ -196,8 +200,6 @@ namespace ego_planner
     double tracking_time_align_alpha_{0.55};
     double tracking_visible_yaw_half_span_deg_{35.0};
     double tracking_visible_z_half_span_{0.50};
-    bool enable_compiled_state2state_{false};
-    bool allow_compiled_state2state_legacy_fallback_{false};
     mutable bool have_tracking_anchor_dir_{false};
     mutable Eigen::Vector3d last_tracking_anchor_dir_{Eigen::Vector3d::UnitX()};
     mutable cost_functional::TrackingSemanticGuide active_tracking_semantic_guide_;

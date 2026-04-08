@@ -1,7 +1,9 @@
 #include <plan_manage/planner_manager.h>
+#include <plan_manage/tracking_yaw_planner.hpp>
 #include <SFCGenerator/sfc_gen.hpp>
 #include <SFCGenerator/geo_utils.hpp>
 #include <SFCGenerator/quickhull.hpp>
+#include <solver/state_to_state_initializer.hpp>
 #include "visualization_msgs/Marker.h"
 
 #include <array>
@@ -16,6 +18,25 @@ namespace ego_planner
 {
   namespace
   {
+    solver::StateToStateInitResources buildStateToStateInitResources(const EGOPlannerManager &manager)
+    {
+      solver::StateToStateInitResources resources;
+      resources.plan_params = &manager.pp_;
+      resources.traj_container = &manager.traj_;
+      resources.continuous_failures_count =
+          const_cast<EGOPlannerManager &>(manager).getContinuousFailuresCountPtr();
+      resources.grid_map = manager.grid_map_;
+      resources.jps_astar = manager.getJpsAstar();
+      resources.optimizer = manager.getOptimizer();
+      resources.guide_min_clearance = manager.getGuideMinClearance();
+      resources.guide_sparse_min_inner = manager.getGuideSparseMinInner();
+      resources.guide_sparse_max_inner = manager.getGuideSparseMaxInner();
+      resources.guide_turn_angle_deg = manager.getGuideTurnAngleDeg();
+      resources.sfc_progress = manager.getSfcProgress();
+      resources.sfc_range = manager.getSfcRange();
+      return resources;
+    }
+
     struct EdgeLess
     {
       bool operator()(const std::pair<int, int> &lhs, const std::pair<int, int> &rhs) const
@@ -306,10 +327,6 @@ namespace ego_planner
     nh.param("manager/tracking_time_align_alpha", tracking_time_align_alpha_, 0.55);
     nh.param("manager/tracking_visible_yaw_half_span_deg", tracking_visible_yaw_half_span_deg_, 35.0);
     nh.param("manager/tracking_visible_z_half_span", tracking_visible_z_half_span_, 0.50);
-    nh.param("manager/enable_compiled_state2state", enable_compiled_state2state_, true);
-    nh.param("manager/allow_compiled_state2state_legacy_fallback",
-             allow_compiled_state2state_legacy_fallback_,
-             false);
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_anchor_future_time_ = std::max(0.0, tracking_anchor_future_time_);
@@ -323,7 +340,8 @@ namespace ego_planner
     tracking_viewpoint_clearance_ = std::max(0.0, tracking_viewpoint_clearance_);
     const char *mode_name = managerDefaultModeString(use_sfc_corridor_, use_esdf_);
     ROS_INFO("Manager default obstacle preference: %s", mode_name);
-    //ROS_INFO("PlannerEngine owns task-level solve orchestration; manager/enable_compiled_state2state is kept only for backward compatibility.");
+    // PlannerEngine owns the unified state-to-state solve path. Manager-level
+    // obstacle flags are only default preferences/capabilities now.
 
     nh.setParam("grid_map/local_update_range_x", pp_.planning_horizen_);
     nh.setParam("grid_map/local_update_range_y", pp_.planning_horizen_);
@@ -393,24 +411,6 @@ namespace ego_planner
     return use_esdf_;
   }
 
-  solver::StateToStateInitResources EGOPlannerManager::makeStateToStateInitResources() const
-  {
-    solver::StateToStateInitResources resources;
-    resources.plan_params = &pp_;
-    resources.traj_container = &traj_;
-    resources.continuous_failures_count = &continous_failures_count_;
-    resources.grid_map = grid_map_;
-    resources.jps_astar = jps_astar_.get();
-    resources.optimizer = ploy_traj_opt_.get();
-    resources.guide_min_clearance = guide_min_clearance_;
-    resources.guide_sparse_min_inner = guide_sparse_min_inner_;
-    resources.guide_sparse_max_inner = guide_sparse_max_inner_;
-    resources.guide_turn_angle_deg = guide_turn_angle_deg_;
-    resources.sfc_progress = sfc_progress_;
-    resources.sfc_range = sfc_range_;
-    return resources;
-  }
-
   void EGOPlannerManager::reportCorridorFailure(CorridorFailureType type,
                                                 const std::string &detail)
   {
@@ -449,6 +449,13 @@ namespace ego_planner
     {
       ROS_WARN("%s: %s", last_corridor_failure_tag_.c_str(), detail.c_str());
     }
+  }
+
+  void EGOPlannerManager::clearActiveTrackingArtifacts()
+  {
+    have_active_tracking_semantic_guide_ = false;
+    active_tracking_semantic_guide_.clear();
+    active_tracking_corridor_.clear();
   }
 
   double EGOPlannerManager::estimateObstacleClearance(const Eigen::Vector3d &pt,
@@ -895,7 +902,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *anchor_target_vels,
       std::vector<double> *anchor_times) const
   {
-    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
+    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
     anchor_candidates.clear();
     if (anchor_target_vels != nullptr)
     {
@@ -1036,7 +1043,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *viewpoint_target_vels,
       std::vector<double> *viewpoint_times) const
   {
-    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
+    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
     target_samples.clear();
     viewpoint_series.clear();
     if (viewpoint_target_vels != nullptr)
@@ -1846,9 +1853,7 @@ namespace ego_planner
         planning_reference.t_yaw_ref = yaw_plan.t;
         planning_reference.yaw_ref = yaw_plan.yaw;
         traj_.setLocalYawRef(yaw_plan.t, yaw_plan.yaw);
-        have_active_tracking_semantic_guide_ = false;
-        active_tracking_semantic_guide_.clear();
-        active_tracking_corridor_.clear();
+        clearActiveTrackingArtifacts();
         return true;
       }
     }
@@ -1883,7 +1888,7 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     Eigen::Vector3d safe_target_pt = local_target_pt;
-    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
+    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
     const bool is_tracking_task = (tracking_ref != nullptr && tracking_ref->valid());
     if (tracking_ref != nullptr && !tracking_ref->valid())
     {
@@ -2424,9 +2429,7 @@ namespace ego_planner
         }
         else
         {
-          have_active_tracking_semantic_guide_ = false;
-          active_tracking_semantic_guide_.clear();
-          active_tracking_corridor_.clear();
+          clearActiveTrackingArtifacts();
         }
         cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
         if (visualization_)
@@ -2481,9 +2484,7 @@ namespace ego_planner
         }
         else if (!is_tracking_task)
         {
-          have_active_tracking_semantic_guide_ = false;
-          active_tracking_semantic_guide_.clear();
-          active_tracking_corridor_.clear();
+          clearActiveTrackingArtifacts();
         }
         cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
         if (visualization_)
@@ -2549,9 +2550,7 @@ namespace ego_planner
       if (flag_success)
       {
         setLocalTrajFromOpt(best_traj, touch_goal);
-        have_active_tracking_semantic_guide_ = false;
-        active_tracking_semantic_guide_.clear();
-        active_tracking_corridor_.clear();
+        clearActiveTrackingArtifacts();
         cstr_pts = best_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
         if (visualization_)
         {
@@ -2590,9 +2589,7 @@ namespace ego_planner
         }
         else if (!is_tracking_task)
         {
-          have_active_tracking_semantic_guide_ = false;
-          active_tracking_semantic_guide_.clear();
-          active_tracking_corridor_.clear();
+          clearActiveTrackingArtifacts();
         }
         
         cstr_pts = opt_traj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());

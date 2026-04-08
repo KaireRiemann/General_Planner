@@ -132,7 +132,7 @@
         <param name="grid_map/local_update_range_x" value="5.5" />
         <param name="grid_map/local_update_range_y" value="5.5" />
         <param name="grid_map/local_update_range_z" value="2.0" /> <!-- different meaning between grid_map.cpp and grid_map_bigmap.cpp -->
-        <param name="grid_map/obstacles_inflation" value="0.1" />
+        <param name="grid_map/obstacles_inflation" value="0.2" />
         <param name="grid_map/local_map_margin" value="10"/>
         <param name="grid_map/enable_virtual_wall" value="true"/>
         <param name="grid_map/virtual_ceil" value="3.0"/>
@@ -191,8 +191,6 @@
         <param name="manager/tracking_viewpoint_connect_dist" value="1.5" type="double"/>
         <param name="manager/tracking_viewpoint_clearance" value="0.15" type="double"/>
         <param name="manager/drone_id" value="$(arg drone_id)"/>
-        <param name="manager/enable_compiled_state2state" value="true"/>
-        <param name="manager/allow_compiled_state2state_legacy_fallback" value="false"/>
         <!-- trajectory optimization -->
         <param name="optimization/constraint_points_perPiece" value="5" type="int"/>
         <param name="optimization/weight_obstacle" value="10000.0" type="double"/>

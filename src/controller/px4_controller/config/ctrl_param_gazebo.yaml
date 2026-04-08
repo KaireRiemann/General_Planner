@@ -1,0 +1,64 @@
+#########################################################################
+# General_Planner PX4 Gazebo defaults
+#########################################################################
+
+mass: 1.50
+gra: 9.81
+pose_solver: 1
+ctrl_freq_max: 100.0
+use_bodyrate_ctrl: false
+max_manual_vel: 0.8
+max_angle: 30
+low_voltage: 14.8
+auto_hover_on_start: true
+
+rc_reverse:
+  roll: false
+  pitch: false
+  yaw: false
+  throttle: false
+
+auto_takeoff_land:
+  enable: false
+  enable_auto_arm: false
+  no_RC: true
+  takeoff_height: 0.8
+  takeoff_land_speed: 0.3
+
+thrust_model:
+  print_value: false
+  accurate_thrust_model: false
+  K1: 0.7583
+  K2: 1.6942
+  K3: 0.6786
+  hover_percentage: 0.35
+
+gain:
+  Kp0: 3.5
+  Kp1: 3.5
+  Kp2: 4.0
+  Kv0: 2.0
+  Kv1: 2.0
+  Kv2: 2.5
+  Kvi0: 0.0
+  Kvi1: 0.0
+  Kvi2: 0.0
+  Kvd0: 0.0
+  Kvd1: 0.0
+  Kvd2: 0.0
+  KAngR: 20.0
+  KAngP: 20.0
+  KAngY: 20.0
+
+rotor_drag:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+  k_thrust_horz: 0.0
+
+msg_timeout:
+  odom: 0.5
+  rc: 1.0
+  cmd: 0.5
+  imu: 0.5
+  bat: 1.0
