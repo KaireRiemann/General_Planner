@@ -12,9 +12,9 @@ int main(int argc, char **argv)
   EGOReplanFSM rebo_replan;
   rebo_replan.init(nh);
 
-  ros::AsyncSpinner async_spinner(4);
-  async_spinner.start();
-  ros::waitForShutdown();
-
+  ros::spin();
+  // ros::AsyncSpinner async_spinner(4);
+  // async_spinner.start();
+  // ros::waitForShutdown();
   return 0;
 }

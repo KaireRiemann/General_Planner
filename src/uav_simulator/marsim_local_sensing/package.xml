@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>marsim_local_sensing_node</name>
+  <version>0.1.0</version>
+  <description>The MARSIM local sensing package adapted for General_Planner.</description>
+  <author>Fanze Kong</author>
+  <maintainer email="jackykongfz@gmail.com">Fanze Kong</maintainer>
+  <license>GPLv3</license>
+
+  <!-- Dependencies which this package needs to build itself. -->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- Dependencies needed to compile this package. -->
+  <build_depend>cmake_modules</build_depend> <!-- for FindEigen.cmake -->
+  <build_depend>roscpp</build_depend>
+  <build_depend>roslib</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>pcl_ros</build_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>quadrotor_msgs</build_depend>
+  <build_depend>tf2_ros</build_depend>
+
+  <!-- Dependencies needed after this package is compiled. -->
+  <build_export_depend>roscpp</build_export_depend>
+  <build_export_depend>roslib</build_export_depend>
+  <build_export_depend>cv_bridge</build_export_depend>
+  <build_export_depend>pcl_ros</build_export_depend>
+  <build_export_depend>pcl_conversions</build_export_depend>
+  <build_export_depend>sensor_msgs</build_export_depend>
+  <build_export_depend>geometry_msgs</build_export_depend>
+  <build_export_depend>nav_msgs</build_export_depend>
+  <build_export_depend>quadrotor_msgs</build_export_depend>
+  <build_export_depend>tf2_ros</build_export_depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>roslib</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>pcl_ros</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>quadrotor_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+</package>

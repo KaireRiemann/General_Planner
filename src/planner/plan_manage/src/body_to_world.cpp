@@ -28,9 +28,9 @@ public:
   explicit BodyToWorldNode(ros::NodeHandle &nh)
       : nh_(nh)
   {
-    nh_.param<std::string>("odom_topic", odom_topic_, "/iris_0/mavros/local_position/odom");
-    nh_.param<std::string>("cloud_in_topic", cloud_in_topic_, "/iris_0/realsense/depth_camera/depth/points");
-    nh_.param<std::string>("cloud_out_topic", cloud_out_topic_, "/iris_0/realsense/depth_camera/depth/points_world");
+    nh_.param<std::string>("odom_topic", odom_topic_, "/iris_0/mavros/vision_odom/odom");
+    nh_.param<std::string>("cloud_in_topic", cloud_in_topic_, "/iris_0/velodyne_points");
+    nh_.param<std::string>("cloud_out_topic", cloud_out_topic_, "/iris_0/points_world");
     nh_.param<std::string>("world_frame", world_frame_, "world");
     nh_.param("filter_near_enable", filter_near_enable_, true);
     nh_.param("filter_near_radius", filter_near_radius_, 0.45);

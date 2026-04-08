@@ -57,8 +57,8 @@
         <arg name="target0_x" value="$(arg target_x)"/>
         <arg name="target0_y" value="$(arg target_y)"/>
         <arg name="target0_z" value="$(arg target_z)"/>
-        <arg name="use_sfc_corridor" value="false"/>
-        <arg name="use_esdf" value="true"/>
+        <arg name="use_sfc_corridor" value="true"/>
+        <arg name="use_esdf" value="false"/>
         <arg name="enable_esdf" value="$(arg enable_esdf)"/>
     </include>
 
@@ -75,6 +75,6 @@
     </include> -->
 
     <node name="rviz" pkg="rviz" type="rviz" output="screen"
-        args="-d $(find ego_planner)/launch/include/default_esdf.rviz">
+        args="-d $(find ego_planner)/launch/include/default_sfc.rviz">
     </node>
 </launch>

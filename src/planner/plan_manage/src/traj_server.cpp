@@ -15,7 +15,7 @@ ros::Publisher pos_cmd_pub;
 
 quadrotor_msgs::PositionCommand cmd;
 
-#define FLIP_YAW_AT_END 1
+#define FLIP_YAW_AT_END 0
 #define TURN_YAW_TO_CENTER_AT_END 0
 
 bool receive_traj_ = false;

@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Status1
         - /simulation_map1/Autocompute Value Bounds1
+        - /drone01
         - /drone01/Planning1/drone_path1
         - /drone01/Planning1/drone_path1/Offset1
         - /drone01/Mapping1/map inflate1
@@ -178,14 +179,14 @@ Visualization Manager:
             - Alpha: 1
               Autocompute Intensity Bounds: true
               Autocompute Value Bounds:
-                Max Value: 2.8399999141693115
-                Min Value: 0.03999999910593033
+                Max Value: 2.950000047683716
+                Min Value: -0.05000000074505806
                 Value: true
               Axis: Z
               Channel Name: intensity
               Class: rviz/PointCloud2
               Color: 29; 108; 212
-              Color Transformer: FlatColor
+              Color Transformer: AxisColor
               Decay Time: 0
               Enabled: true
               Invert Rainbow: false
@@ -197,7 +198,7 @@ Visualization Manager:
               Selectable: false
               Size (Pixels): 3
               Size (m): 0.10000000149011612
-              Style: Flat Squares
+              Style: Squares
               Topic: /drone_0_ego_planner_node/grid_map/occupancy_inflate
               Unreliable: false
               Use Fixed Frame: true
@@ -385,17 +386,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 1.8392597436904907
-        Y: -6.51273775100708
-        Z: -1.1761690984712914e-05
+        X: -10.422638893127441
+        Y: -4.923964977264404
+        Z: -1.5576388250337914e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.429796814918518
+      Pitch: 1.0597971677780151
       Target Frame: <Fixed Frame>
-      Yaw: 4.671462535858154
+      Yaw: 4.441461086273193
     Saved:
       - Class: rviz/FPS
         Enable Stereo Rendering:

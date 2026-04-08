@@ -1,0 +1,144 @@
+<launch>
+    <arg name="init_x_"/>
+    <arg name="init_y_"/>
+    <arg name="init_z_"/>
+    <arg name="map_size_x_"/>
+    <arg name="map_size_y_"/>
+    <arg name="map_size_z_"/>
+    <arg name="odometry_topic"/>
+    <arg name="drone_id"/>
+    <arg name="lidar_type" default="mid360"/>
+    <arg name="global_map_topic" default="/map_generator/global_cloud"/>
+
+    <node pkg="mars_drone_sim"
+          name="drone_$(arg drone_id)_marsim_dynamics"
+          type="quadrotor_dynamics_node"
+          output="screen">
+        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+        <remap from="~cmd_RPM" to="/drone_$(arg drone_id)_cmdRPM"/>
+        <remap from="~imu" to="/drone_$(arg drone_id)_imu"/>
+        <param name="mass" value="1.9"/>
+        <param name="simulation_rate" value="200"/>
+        <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
+        <param name="init_state_x" value="$(arg init_x_)"/>
+        <param name="init_state_y" value="$(arg init_y_)"/>
+        <param name="init_state_z" value="$(arg init_z_)"/>
+    </node>
+
+    <node pkg="cascadePID"
+          name="drone_$(arg drone_id)_marsim_cascade_pid"
+          type="cascadePID_node"
+          output="screen">
+        <param name="drone_id" value="$(arg drone_id)"/>
+        <param name="controller_rate" value="200"/>
+        <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
+        <param name="init_state_x" value="$(arg init_x_)"/>
+        <param name="init_state_y" value="$(arg init_y_)"/>
+        <param name="init_state_z" value="$(arg init_z_)"/>
+        <param name="init_state_yaw" value="0.0"/>
+        <param name="angle_stable_time" value="0.5"/>
+        <param name="damping_ratio" value="1.0"/>
+        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+        <remap from="~cmd_RPM" to="/drone_$(arg drone_id)_cmdRPM"/>
+        <remap from="~cmd_pose" to="/goal"/>
+        <remap from="~position_cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
+    </node>
+
+    <node pkg="odom_visualization"
+          name="drone_$(arg drone_id)_odom_visualization"
+          type="odom_visualization"
+          output="screen">
+        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+        <remap from="~cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.0"/>
+        <param name="color/g" value="0.0"/>
+        <param name="color/b" value="0.0"/>
+        <param name="covariance_scale" value="100.0"/>
+        <param name="robot_scale" value="0.35"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="$(arg drone_id)"/>
+    </node>
+
+    <group if="$(eval lidar_type == 'avia')">
+        <node pkg="marsim_local_sensing_node"
+              type="pcl_render_node"
+              name="drone_$(arg drone_id)_marsim_pcl_render_node"
+              output="screen">
+            <remap from="~global_map" to="$(arg global_map_topic)"/>
+            <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+            <param name="drone_id" value="$(arg drone_id)"/>
+            <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
+            <param name="uav_num" value="1"/>
+            <param name="is_360lidar" value="0"/>
+            <param name="sensing_horizon" value="30.0"/>
+            <param name="sensing_rate" value="10.0"/>
+            <param name="estimation_rate" value="10.0"/>
+            <param name="polar_resolution" value="0.2"/>
+            <param name="yaw_fov" value="70.4"/>
+            <param name="vertical_fov" value="77.2"/>
+            <param name="min_raylength" value="1.0"/>
+            <param name="livox_linestep" value="1.4"/>
+            <param name="curvature_limit" value="100.0"/>
+            <param name="hash_cubesize" value="5.0"/>
+            <param name="use_avia_pattern" value="1"/>
+            <param name="use_vlp32_pattern" value="0"/>
+            <param name="use_minicf_pattern" value="0"/>
+            <param name="use_os128_pattern" value="0"/>
+            <param name="downsample_res" value="0.1"/>
+            <param name="dynobj_enable" value="0"/>
+            <param name="dynobject_size" value="0.8"/>
+            <param name="dynobject_num" value="10"/>
+            <param name="dyn_mode" value="0"/>
+            <param name="dyn_velocity" value="1.0"/>
+            <param name="use_uav_extra_model" value="1"/>
+            <param name="collisioncheck_enable" value="0"/>
+            <param name="collision_range" value="0.3"/>
+            <param name="output_pcd" value="0"/>
+            <param name="map/x_size" value="$(arg map_size_x_)"/>
+            <param name="map/y_size" value="$(arg map_size_y_)"/>
+            <param name="map/z_size" value="$(arg map_size_z_)"/>
+        </node>
+    </group>
+
+    <group unless="$(eval lidar_type == 'avia')">
+        <node pkg="marsim_local_sensing_node"
+              type="pcl_render_node"
+              name="drone_$(arg drone_id)_marsim_pcl_render_node"
+              output="screen">
+            <remap from="~global_map" to="$(arg global_map_topic)"/>
+            <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
+            <param name="drone_id" value="$(arg drone_id)"/>
+            <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
+            <param name="uav_num" value="1"/>
+            <param name="is_360lidar" value="1"/>
+            <param name="sensing_horizon" value="15.0"/>
+            <param name="sensing_rate" value="10.0"/>
+            <param name="estimation_rate" value="10.0"/>
+            <param name="polar_resolution" value="0.2"/>
+            <param name="yaw_fov" value="360.0"/>
+            <param name="vertical_fov" value="90.0"/>
+            <param name="min_raylength" value="1.0"/>
+            <param name="livox_linestep" value="1.4"/>
+            <param name="curvature_limit" value="100.0"/>
+            <param name="hash_cubesize" value="5.0"/>
+            <param name="use_avia_pattern" value="0"/>
+            <param name="use_vlp32_pattern" value="0"/>
+            <param name="use_minicf_pattern" value="1"/>
+            <param name="use_os128_pattern" value="0"/>
+            <param name="downsample_res" value="0.1"/>
+            <param name="dynobj_enable" value="0"/>
+            <param name="dynobject_size" value="0.8"/>
+            <param name="dynobject_num" value="10"/>
+            <param name="dyn_mode" value="0"/>
+            <param name="dyn_velocity" value="1.0"/>
+            <param name="use_uav_extra_model" value="1"/>
+            <param name="collisioncheck_enable" value="0"/>
+            <param name="collision_range" value="0.3"/>
+            <param name="output_pcd" value="0"/>
+            <param name="map/x_size" value="$(arg map_size_x_)"/>
+            <param name="map/y_size" value="$(arg map_size_y_)"/>
+            <param name="map/z_size" value="$(arg map_size_z_)"/>
+        </node>
+    </group>
+</launch>
