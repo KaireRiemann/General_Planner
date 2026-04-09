@@ -42,20 +42,29 @@
     <arg name="mesh_resource" default="package://odom_visualization/meshes/yunque.dae"/>
     <arg name="robot_scale" default="1.0"/>
     <arg name="downsample_resolution" default="0.1"/>
+    <arg name="filter_near_enable" default="true"/>
+    <arg name="filter_near_radius" default="0.45"/>
+    <arg name="filter_ground_enable" default="true"/>
+    <arg name="filter_ground_z" default="0.05"/>
 
     <include file="$(find ego_planner)/launch/include/advanced_param.xml">
+        <arg name="use_cloud_input_only" value="true"/>
         <arg name="drone_id" value="$(arg drone_id)"/>
         <arg name="map_size_x_" value="$(arg map_size_x)"/>
         <arg name="map_size_y_" value="$(arg map_size_y)"/>
         <arg name="map_size_z_" value="$(arg map_size_z)"/>
         <arg name="odometry_topic" value="$(arg odom_topic)"/>
-        <arg name="camera_pose_topic" value="marsim_pcl_render_node/sensor_pose"/>
-        <arg name="depth_topic" value="marsim_pcl_render_node/depth_img"/>
+        <arg name="camera_pose_topic" value="unused_camera_pose_topic"/>
+        <arg name="depth_topic" value="unused_depth_topic"/>
         <arg name="cloud_topic" value="marsim_pcl_render_node/cloud"/>
         <arg name="cx" value="321.04638671875"/>
         <arg name="cy" value="243.44969177246094"/>
         <arg name="fx" value="387.229248046875"/>
         <arg name="fy" value="387.229248046875"/>
+        <arg name="cloud_filter_near_enable" value="$(arg filter_near_enable)"/>
+        <arg name="cloud_filter_near_radius" value="$(arg filter_near_radius)"/>
+        <arg name="cloud_filter_ground_enable" value="$(arg filter_ground_enable)"/>
+        <arg name="cloud_filter_ground_z" value="$(arg filter_ground_z)"/>
         <arg name="max_vel" value="1.5"/>
         <arg name="max_acc" value="6.0"/>
         <arg name="max_jer" value="20.0"/>

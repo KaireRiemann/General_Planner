@@ -71,6 +71,11 @@ struct MappingParameters
   bool show_occ_time_;
   bool show_esdf_time_;
   double esdf_slice_height_;
+  bool use_cloud_input_only_;
+  bool cloud_filter_near_enable_;
+  double cloud_filter_near_radius_;
+  bool cloud_filter_ground_enable_;
+  double cloud_filter_ground_z_;
 };
 
 // intermediate mapping data for fusion

@@ -49,6 +49,13 @@ void GridMap::initMap(ros::NodeHandle &nh)
   node_.param("grid_map/esdf_slice_height", mp_.esdf_slice_height_, 1.0);
   node_.param("grid_map/esdf_slice_follow_odom", esdf_slice_follow_odom_, false);
   node_.param("grid_map/esdf_slice_z_offset", esdf_slice_z_offset_, 0.0);
+  node_.param("grid_map/use_cloud_input_only", mp_.use_cloud_input_only_, false);
+  node_.param("grid_map/cloud_filter_near_enable", mp_.cloud_filter_near_enable_, true);
+  node_.param("grid_map/cloud_filter_near_radius", mp_.cloud_filter_near_radius_, 0.45);
+  node_.param("grid_map/cloud_filter_ground_enable", mp_.cloud_filter_ground_enable_, false);
+  node_.param("grid_map/cloud_filter_ground_z", mp_.cloud_filter_ground_z_, 0.05);
+
+  mp_.cloud_filter_near_radius_ = std::max(0.0, mp_.cloud_filter_near_radius_);
 
   mp_.inf_grid_ = ceil((mp_.obstacles_inflation_ - 1e-5) / mp_.resolution_);
   if (mp_.inf_grid_ > 4)
@@ -75,6 +82,13 @@ void GridMap::initMap(ros::NodeHandle &nh)
   cout << "min log: " << mp_.clamp_min_log_ << endl;
   cout << "max: " << mp_.clamp_max_log_ << endl;
   cout << "thresh log: " << mp_.min_occupancy_log_ << endl;
+  ROS_INFO("grid_map input mode: %s",
+           mp_.use_cloud_input_only_ ? "cloud-only" : "depth+odom/cloud hybrid");
+  ROS_INFO("grid_map occ visualization filter: near=%s(%.2fm) ground=%s(z<=%.2f)",
+           mp_.cloud_filter_near_enable_ ? "on" : "off",
+           mp_.cloud_filter_near_radius_,
+           mp_.cloud_filter_ground_enable_ ? "on" : "off",
+           mp_.cloud_filter_ground_z_);
 
   // initialize data buffers
   Eigen::Vector3i map_voxel_num3i = 2 * mp_.local_update_range3i_;
@@ -107,26 +121,30 @@ void GridMap::initMap(ros::NodeHandle &nh)
       0.0, 0.0, 0.0, 1.0;
 
   /* init callback */
-  depth_sub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(node_, "grid_map/depth", 50));
   extrinsic_sub_ = node_.subscribe<nav_msgs::Odometry>(
       "/vins_estimator/extrinsic", 10, &GridMap::extrinsicCallback, this); //sub
 
-  if (mp_.pose_type_ == POSE_STAMPED)
+  if (!mp_.use_cloud_input_only_)
   {
-    pose_sub_.reset(
-        new message_filters::Subscriber<geometry_msgs::PoseStamped>(node_, "grid_map/pose", 25));
+    depth_sub_.reset(new message_filters::Subscriber<sensor_msgs::Image>(node_, "grid_map/depth", 50));
 
-    sync_image_pose_.reset(new message_filters::Synchronizer<SyncPolicyImagePose>(
-        SyncPolicyImagePose(100), *depth_sub_, *pose_sub_));
-    sync_image_pose_->registerCallback(boost::bind(&GridMap::depthPoseCallback, this, _1, _2));
-  }
-  else if (mp_.pose_type_ == ODOMETRY)
-  {
-    odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(node_, "grid_map/odom", 100, ros::TransportHints().tcpNoDelay()));
+    if (mp_.pose_type_ == POSE_STAMPED)
+    {
+      pose_sub_.reset(
+          new message_filters::Subscriber<geometry_msgs::PoseStamped>(node_, "grid_map/pose", 25));
 
-    sync_image_odom_.reset(new message_filters::Synchronizer<SyncPolicyImageOdom>(
-        SyncPolicyImageOdom(100), *depth_sub_, *odom_sub_));
-    sync_image_odom_->registerCallback(boost::bind(&GridMap::depthOdomCallback, this, _1, _2));
+      sync_image_pose_.reset(new message_filters::Synchronizer<SyncPolicyImagePose>(
+          SyncPolicyImagePose(100), *depth_sub_, *pose_sub_));
+      sync_image_pose_->registerCallback(boost::bind(&GridMap::depthPoseCallback, this, _1, _2));
+    }
+    else if (mp_.pose_type_ == ODOMETRY)
+    {
+      odom_sub_.reset(new message_filters::Subscriber<nav_msgs::Odometry>(node_, "grid_map/odom", 100, ros::TransportHints().tcpNoDelay()));
+
+      sync_image_odom_.reset(new message_filters::Synchronizer<SyncPolicyImageOdom>(
+          SyncPolicyImageOdom(100), *depth_sub_, *odom_sub_));
+      sync_image_odom_->registerCallback(boost::bind(&GridMap::depthOdomCallback, this, _1, _2));
+    }
   }
 
   // use odometry and point cloud
@@ -654,8 +672,6 @@ void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
 
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
 {
-  /* Note: no obstalce elimination in this function! */
-
   if (!md_.has_odom_)
   {
     std::cout << "grid_map: no odom!" << std::endl;
@@ -674,7 +690,7 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
   moveRingBuffer();
 
   pcl::PointXYZ pt;
-  Eigen::Vector3d p3d, p3d_inf;
+  Eigen::Vector3d p3d;
   for (size_t i = 0; i < latest_cloud.points.size(); ++i)
   {
     pt = latest_cloud.points[i];
@@ -1155,11 +1171,11 @@ bool GridMap::checkDepthOdomNeedupdate()
 
 void GridMap::publishMap()
 {
-
   if (map_pub_.getNumSubscribers() <= 0)
     return;
 
   Eigen::Vector3d heading = (md_.camera_r_m_ * md_.cam2body_.block<3, 3>(0, 0).transpose()).block<3, 1>(0, 0);
+  const double near_radius_sq = mp_.cloud_filter_near_radius_ * mp_.cloud_filter_near_radius_;
   pcl::PointCloud<pcl::PointXYZ> cloud;
   double lbz = mp_.enable_virtual_walll_ ? max(md_.ringbuffer_lowbound3d_(2), mp_.virtual_ground_) : md_.ringbuffer_lowbound3d_(2);
   double ubz = mp_.enable_virtual_walll_ ? min(md_.ringbuffer_upbound3d_(2), mp_.virtual_ceil_) : md_.ringbuffer_upbound3d_(2);
@@ -1168,11 +1184,16 @@ void GridMap::publishMap()
       for (double yd = md_.ringbuffer_lowbound3d_(1) + mp_.resolution_ / 2; yd <= md_.ringbuffer_upbound3d_(1); yd += mp_.resolution_)
         for (double zd = lbz + mp_.resolution_ / 2; zd <= ubz; zd += mp_.resolution_)
         {
-          Eigen::Vector3d relative_dir = (Eigen::Vector3d(xd, yd, zd) - md_.camera_pos_);
+          const Eigen::Vector3d pos(xd, yd, zd);
+          Eigen::Vector3d relative_dir = pos - md_.camera_pos_;
+          if (mp_.cloud_filter_near_enable_ && relative_dir.squaredNorm() <= near_radius_sq)
+            continue;
+          if (mp_.cloud_filter_ground_enable_ && pos.z() <= mp_.cloud_filter_ground_z_)
+            continue;
           if (heading.dot(relative_dir.normalized()) > 0.5)
           {
-            if (md_.occupancy_buffer_[globalIdx2BufIdx(pos2GlobalIdx(Eigen::Vector3d(xd, yd, zd)))] >= mp_.min_occupancy_log_)
-              cloud.push_back(pcl::PointXYZ(xd, yd, zd));
+            if (md_.occupancy_buffer_[globalIdx2BufIdx(pos2GlobalIdx(pos))] >= mp_.min_occupancy_log_)
+              cloud.push_back(pcl::PointXYZ(pos.x(), pos.y(), pos.z()));
           }
         }
 
@@ -1188,11 +1209,11 @@ void GridMap::publishMap()
 
 void GridMap::publishMapInflate()
 {
-
   if (map_inf_pub_.getNumSubscribers() <= 0)
     return;
 
   Eigen::Vector3d heading = (md_.camera_r_m_ * md_.cam2body_.block<3, 3>(0, 0).transpose()).block<3, 1>(0, 0);
+  const double near_radius_sq = mp_.cloud_filter_near_radius_ * mp_.cloud_filter_near_radius_;
   pcl::PointCloud<pcl::PointXYZ> cloud;
   double lbz = mp_.enable_virtual_walll_ ? max(md_.ringbuffer_inf_lowbound3d_(2), mp_.virtual_ground_) : md_.ringbuffer_inf_lowbound3d_(2);
   double ubz = mp_.enable_virtual_walll_ ? min(md_.ringbuffer_inf_upbound3d_(2), mp_.virtual_ceil_) : md_.ringbuffer_inf_upbound3d_(2);
@@ -1202,11 +1223,16 @@ void GridMap::publishMapInflate()
       for (double yd = md_.ringbuffer_inf_lowbound3d_(1) + mp_.resolution_ / 2; yd < md_.ringbuffer_inf_upbound3d_(1); yd += mp_.resolution_)
         for (double zd = lbz + mp_.resolution_ / 2; zd < ubz; zd += mp_.resolution_)
         {
-          Eigen::Vector3d relative_dir = (Eigen::Vector3d(xd, yd, zd) - md_.camera_pos_);
+          const Eigen::Vector3d pos(xd, yd, zd);
+          Eigen::Vector3d relative_dir = pos - md_.camera_pos_;
+          if (mp_.cloud_filter_near_enable_ && relative_dir.squaredNorm() <= near_radius_sq)
+            continue;
+          if (mp_.cloud_filter_ground_enable_ && pos.z() <= mp_.cloud_filter_ground_z_)
+            continue;
           if (heading.dot(relative_dir.normalized()) > 0.5)
           {
-            if (md_.occupancy_buffer_inflate_[globalIdx2InfBufIdx(pos2GlobalIdx(Eigen::Vector3d(xd, yd, zd)))])
-              cloud.push_back(pcl::PointXYZ(xd, yd, zd));
+            if (md_.occupancy_buffer_inflate_[globalIdx2InfBufIdx(pos2GlobalIdx(pos))])
+              cloud.push_back(pcl::PointXYZ(pos.x(), pos.y(), pos.z()));
           }
         }
 

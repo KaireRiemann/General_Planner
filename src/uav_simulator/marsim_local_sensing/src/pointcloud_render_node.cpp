@@ -1950,7 +1950,6 @@ int main(int argc, char **argv)
 
   // UAV_odom_sub = nh.subscribe("/other_quad/lidar_slam/odom", 1000, UAVOdomCallback);
 
-
   // subscribe point cloud
   global_map_sub = nh.subscribe("global_map", 1, rcvGlobalPointCloudCallBack);
   odom_sub = nh.subscribe("odometry", 50, rcvOdometryCallbck);
@@ -1960,7 +1959,7 @@ int main(int argc, char **argv)
   pub_intercloud = nh.advertise<sensor_msgs::PointCloud2>("sensor_cloud", 10);
   pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("cloud", 10);
   pub_pose = nh.advertise<geometry_msgs::PoseStamped>("sensor_pose", 10);
-  pub_uavcloud = nh.advertise<sensor_msgs::PointCloud2>("uav_cloud", 10); //扫描机身的点云
+  pub_uavcloud = nh.advertise<sensor_msgs::PointCloud2>("uav_cloud", 10); 
   depth_img_pub_ = nh.advertise<sensor_msgs::Image>("depth_img", 10);
   comp_time_pub = nh.advertise<geometry_msgs::PoseStamped>("simulator_compute_time", 10);
   double sensing_duration = 1.0 / sensing_rate;

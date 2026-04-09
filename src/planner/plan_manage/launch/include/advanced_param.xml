@@ -40,6 +40,11 @@
     <arg name="tracking_target_goal_topic" default="/tracking/target_goal"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sensor_topics_absolute" default="false"/>
+    <arg name="use_cloud_input_only" default="false"/>
+    <arg name="cloud_filter_near_enable" default="true"/>
+    <arg name="cloud_filter_near_radius" default="0.45"/>
+    <arg name="cloud_filter_ground_enable" default="false"/>
+    <arg name="cloud_filter_ground_z" default="0.05"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
     <arg name="sfc_range" default="0.8"/>
@@ -63,10 +68,10 @@
         <remap unless="$(arg sensor_topics_absolute)" from="~grid_map/odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
         <remap if="$(arg sensor_topics_absolute)" from="~grid_map/cloud" to="$(arg cloud_topic)"/>
         <remap unless="$(arg sensor_topics_absolute)" from="~grid_map/cloud" to="/drone_$(arg drone_id)_$(arg cloud_topic)"/>
-        <remap if="$(arg sensor_topics_absolute)" from="~grid_map/pose" to="$(arg camera_pose_topic)"/>
-        <remap unless="$(arg sensor_topics_absolute)" from="~grid_map/pose" to="/drone_$(arg drone_id)_$(arg camera_pose_topic)"/>
-        <remap if="$(arg sensor_topics_absolute)" from="~grid_map/depth" to="$(arg depth_topic)"/>
-        <remap unless="$(arg sensor_topics_absolute)" from="~grid_map/depth" to="/drone_$(arg drone_id)_$(arg depth_topic)"/>
+        <remap if="$(eval arg('use_cloud_input_only') != 'true' and arg('sensor_topics_absolute') == 'true')" from="~grid_map/pose" to="$(arg camera_pose_topic)"/>
+        <remap if="$(eval arg('use_cloud_input_only') != 'true' and arg('sensor_topics_absolute') != 'true')" from="~grid_map/pose" to="/drone_$(arg drone_id)_$(arg camera_pose_topic)"/>
+        <remap if="$(eval arg('use_cloud_input_only') != 'true' and arg('sensor_topics_absolute') == 'true')" from="~grid_map/depth" to="$(arg depth_topic)"/>
+        <remap if="$(eval arg('use_cloud_input_only') != 'true' and arg('sensor_topics_absolute') != 'true')" from="~grid_map/depth" to="/drone_$(arg drone_id)_$(arg depth_topic)"/>
         <!-- planning fsm -->
         <param name="fsm/flight_type" value="$(arg flight_type)" type="int"/>
         <param name="fsm/thresh_replan_time" value="1.0" type="double"/>
@@ -151,6 +156,10 @@
         <param name="grid_map/depth_filter_margin" value="2"/>
         <param name="grid_map/k_depth_scaling_factor" value="1000.0"/>
         <param name="grid_map/skip_pixel" value="2"/>
+        <param name="grid_map/cloud_filter_near_enable" value="$(arg cloud_filter_near_enable)"/>
+        <param name="grid_map/cloud_filter_near_radius" value="$(arg cloud_filter_near_radius)"/>
+        <param name="grid_map/cloud_filter_ground_enable" value="$(arg cloud_filter_ground_enable)"/>
+        <param name="grid_map/cloud_filter_ground_z" value="$(arg cloud_filter_ground_z)"/>
         <!-- local fusion -->
         <param name="grid_map/p_hit" value="0.65"/>
         <param name="grid_map/p_miss" value="0.35"/>
@@ -163,6 +172,7 @@
         <param name="grid_map/visualization_truncate_height" value="1.9"/>
         <param name="grid_map/show_occ_time" value="false"/>
         <param name="grid_map/enable_esdf" value="$(arg enable_esdf)"/>
+        <param name="grid_map/use_cloud_input_only" value="$(arg use_cloud_input_only)"/>
         <param name="grid_map/esdf_slice_follow_odom" value="false"/>
         <param name="grid_map/esdf_slice_z_offset" value="0.0"/>
         <param name="grid_map/pose_type" value="1"/>

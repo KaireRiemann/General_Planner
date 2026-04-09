@@ -11,19 +11,23 @@
     <arg name="init_z" default="1.0"/>
 
     <arg name="use_esdf" default="false"/>
-    <arg name="use_sfc_corridor" default="false"/>
+    <arg name="use_sfc_corridor" default="true"/>
     <arg name="enable_esdf" default="false"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="rviz" default="true"/>
 
     <arg name="use_static_map" default="true"/>
-    <arg name="map_name" default="$(find map_generator)/resource/small_forest01cutoff.pcd"/>
+    <arg name="map_name" default="$(find map_generator)/resource/LibraryLG_01cutoff_sor.pcd"/>
     <arg name="downsample_resolution" default="0.1"/>
     <arg name="map_offset_x" default="0.0"/>
     <arg name="map_offset_y" default="0.0"/>
     <arg name="map_offset_z" default="0.0"/>
     <arg name="use_uav_extra_model" default="true"/>
     <arg name="enable_manual_takeover" default="false"/>
+    <arg name="filter_near_enable" default="true"/>
+    <arg name="filter_near_radius" default="0.50"/>
+    <arg name="filter_ground_enable" default="true"/>
+    <arg name="filter_ground_z" default="0.05"/>
 
     <group if="$(arg use_static_map)">
         <node pkg="map_generator"
@@ -97,6 +101,10 @@
         <arg name="mesh_resource" value="package://odom_visualization/meshes/yunque.dae"/>
         <arg name="robot_scale" value="1.0"/>
         <arg name="downsample_resolution" value="$(arg downsample_resolution)"/>
+        <arg name="filter_near_enable" value="$(arg filter_near_enable)"/>
+        <arg name="filter_near_radius" value="$(arg filter_near_radius)"/>
+        <arg name="filter_ground_enable" value="$(arg filter_ground_enable)"/>
+        <arg name="filter_ground_z" value="$(arg filter_ground_z)"/>
     </include>
 
     <node if="$(arg rviz)"
