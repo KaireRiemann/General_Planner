@@ -1,6 +1,10 @@
 build/
 devel/
+scripts/
+.vscode/
 
 .catkin_workspace
 .mp4
-src/controller/cascadePID/data/log_0.txt
+src/controller/cascadePID/data/*.txt
+src/uav_simulator/map_generator/resource/big_field.pcd
+src/planner/plan_manage/launch/map_vis.launch
