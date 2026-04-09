@@ -147,6 +147,7 @@ namespace ego_planner
     double tracking_prediction_dt_{0.2};
     double tracking_prediction_max_speed_{2.0};
     double tracking_anchor_side_angle_deg_{20.0};
+    Eigen::Vector3d tracking_relative_offset_{Eigen::Vector3d::Zero()};
     bool tracking_relay_goal_{true};
     std::string tracking_target_goal_topic_{"/tracking/target_goal"};
     double tracking_distance_min_{1.5};

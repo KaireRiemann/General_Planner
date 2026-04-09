@@ -113,6 +113,7 @@ namespace ego_planner
 
     using PtsChk_t = std::vector<std::vector<std::pair<double,Eigen::Vector3d>>>;
     void resetSpatialOptimizationContext();
+    void syncConstraintPointStorage(const Eigen::MatrixXd &constraint_points);
 
     //typedef std::vector<std::vector<std::pair<double, Eigen::Vector3d>>> PtsChk_t;
 

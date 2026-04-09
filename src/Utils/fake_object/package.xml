@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>fake_object</name>
+  <version>0.0.0</version>
+  <description>Simple moving object publisher for tracking tests.</description>
+
+  <maintainer email="kaireriemann@example.com">kaireriemann</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>roscpp</build_depend>
+  <build_depend>nav_msgs</build_depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+
+  <export/>
+</package>

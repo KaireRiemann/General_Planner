@@ -259,6 +259,42 @@ Visualization Manager:
       Displays:
         - Class: rviz/Marker
           Enabled: true
+          Marker Topic: /object_odom_visualization/robot
+          Name: object_robot
+          Namespaces:
+            {}
+          Queue Size: 100
+          Value: true
+        - Alpha: 1
+          Buffer Length: 1
+          Class: rviz/Path
+          Color: 242; 97; 34
+          Enabled: true
+          Head Diameter: 0.20000000298023224
+          Head Length: 0.15000000596046448
+          Length: 0.20000000298023224
+          Line Style: Billboards
+          Line Width: 0.07000000029802322
+          Name: object_path
+          Offset:
+            X: 0
+            Y: 0
+            Z: 0
+          Pose Color: 255; 85; 255
+          Pose Style: None
+          Queue Size: 10
+          Radius: 0.029999999329447746
+          Shaft Diameter: 0.05000000074505806
+          Shaft Length: 0.10000000149011612
+          Topic: /object_odom_visualization/path
+          Unreliable: false
+          Value: true
+      Enabled: true
+      Name: TrackingObject
+    - Class: rviz/Group
+      Displays:
+        - Class: rviz/Marker
+          Enabled: true
           Marker Topic: /moving_obstacles_joy0/init_list
           Name: PredictedTrajectories
           Namespaces:

@@ -278,7 +278,7 @@ bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
   case core::TaskType::STATE_TO_STATE:
     return solveStateToStateCompiledProblem(problem, solution);
   case core::TaskType::TRACKING:
-    return solveTrackingLegacyTask(problem.task, solution);
+    return solveTrackingCompiledProblem(problem, solution);
   case core::TaskType::PERCHING:
     return solvePerchingLegacyTask(problem.task, solution);
   case core::TaskType::UNKNOWN:
@@ -786,10 +786,6 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     solution.success = false;
     solution.used_legacy_adapter = false;
     solution.message = "compiled tracking problem has invalid MINCO boundaries";
-    if (problem.prefer_legacy_fallback)
-    {
-      return solveTrackingLegacyTask(problem.task, solution);
-    }
     return false;
   }
 
@@ -808,10 +804,6 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     solution.success = false;
     solution.used_legacy_adapter = false;
     solution.message = "compiled tracking solve missing valid tracking reference";
-    if (problem.prefer_legacy_fallback)
-    {
-      return solveTrackingLegacyTask(problem.task, solution);
-    }
     return false;
   }
 
@@ -824,10 +816,6 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     solution.success = false;
     solution.used_legacy_adapter = false;
     solution.message = "compiled tracking reference normalization failed: " + tracking_ref_reason;
-    if (problem.prefer_legacy_fallback)
-    {
-      return solveTrackingLegacyTask(problem.task, solution);
-    }
     return false;
   }
 
@@ -846,10 +834,6 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
     solution.success = false;
     solution.used_legacy_adapter = false;
     solution.message = "compiled tracking initialization failed: " + init_result.failure_reason;
-    if (problem.prefer_legacy_fallback)
-    {
-      return solveTrackingLegacyTask(problem.task, solution);
-    }
     return false;
   }
   populateInitArtifacts(init_result, solution);
@@ -1000,7 +984,7 @@ bool PlannerEngine::solveTrackingCompiled(const core::PlanningProblem &problem,
 bool PlannerEngine::solveTrackingLegacy(const core::PlanningProblem &problem,
                                         core::PlanningSolution &solution)
 {
-  return solveTrackingLegacyTask(problem.task, solution);
+  return solveTrackingCompiledProblem(problem, solution);
 }
 
 bool PlannerEngine::solvePerchingLegacy(const core::PlanningProblem &problem,

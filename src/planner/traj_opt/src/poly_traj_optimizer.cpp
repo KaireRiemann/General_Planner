@@ -228,6 +228,26 @@ namespace ego_planner
     tracking_semantic_guide_.clear();
   }
 
+  void PolyTrajOptimizer::syncConstraintPointStorage(const Eigen::MatrixXd &constraint_points)
+  {
+    const int cp_num = static_cast<int>(constraint_points.cols());
+    const bool shape_mismatch =
+        cps_.cp_size != cp_num ||
+        static_cast<int>(cps_.base_point.size()) != cp_num ||
+        static_cast<int>(cps_.direction.size()) != cp_num ||
+        static_cast<int>(cps_.flag_temp.size()) != cp_num;
+
+    if (shape_mismatch)
+    {
+      cps_.resize_cp(cp_num);
+    }
+    else
+    {
+      cps_.cp_size = cp_num;
+    }
+    cps_.points = constraint_points;
+  }
+
   // =====================================================
   //  Main optimization loop (decision logic)
   // =====================================================
@@ -1525,6 +1545,23 @@ namespace ego_planner
   // =====================================================
   bool PolyTrajOptimizer::roughlyCheckConstraintPoints(void)
   {
+    if (cps_.points.rows() != 3 || cps_.points.cols() <= 0)
+    {
+      return false;
+    }
+    if (static_cast<int>(cps_.base_point.size()) != cps_.points.cols() ||
+        static_cast<int>(cps_.direction.size()) != cps_.points.cols() ||
+        static_cast<int>(cps_.flag_temp.size()) != cps_.points.cols())
+    {
+      ROS_WARN_THROTTLE(0.5,
+                        "Skip rebound check: constraint-point cache shape mismatch (cols=%ld base=%zu dir=%zu flag=%zu).",
+                        static_cast<long>(cps_.points.cols()),
+                        cps_.base_point.size(),
+                        cps_.direction.size(),
+                        cps_.flag_temp.size());
+      return false;
+    }
+
     int in_id, out_id;
     vector<std::pair<int, int>> segment_ids;
     bool flag_new_obs_valid = false;

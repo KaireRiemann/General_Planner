@@ -189,8 +189,9 @@ namespace ego_planner
             opt->distance_field_cost_manager_);
       }
 
-      opt->cps_.points = opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
-      opt->cps_.cp_size = opt->cps_.points.cols();
+      const Eigen::MatrixXd constraint_points =
+          opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+      opt->syncConstraintPointStorage(constraint_points);
     }
     else
     {
@@ -218,7 +219,9 @@ namespace ego_planner
             opt->cost_manager_);
       }
 
-      opt->cps_.points = opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+      const Eigen::MatrixXd constraint_points =
+          opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+      opt->syncConstraintPointStorage(constraint_points);
 
       if (opt->allowRebound())
       {

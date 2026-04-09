@@ -1,32 +1,51 @@
 <launch>
-    <!-- EGO-Planner-v2 tracking_ws style (adapted to General_Planner unified task pipeline) -->
+    <!-- Generic tracking V2:
+         fake_object(back-and-forth) -> /object_odom -> generic tracking task -> PlannerEngine -->
     <arg name="map_size_x" default="200.0"/>
     <arg name="map_size_y" default="200.0"/>
     <arg name="map_size_z" default="3.0"/>
     <arg name="odom_topic" default="visual_slam/odom"/>
     <arg name="launch_prefix" default=""/>
 
-    <arg name="init_x" default="-12.0"/>
-    <arg name="init_y" default="0.0"/>
-    <arg name="init_z" default="1.0"/>
+    <arg name="init_x" default="-5.0"/>
+    <arg name="init_y" default="-1.0"/>
+    <arg name="init_z" default="1.2"/>
 
-    <!-- Lighter obstacle setting for tracking validation -->
-    <arg name="obs_num" default="16"/>
-    <arg name="circle_num" default="6"/>
-    <arg name="obs_lower_rad" default="0.40"/>
-    <arg name="obs_upper_rad" default="0.58"/>
-    <arg name="obs_min_distance" default="1.5"/>
+    <arg name="obs_num" default="30"/>
+    <arg name="circle_num" default="5"/>
+    <arg name="obs_lower_rad" default="0.45"/>
+    <arg name="obs_upper_rad" default="0.62"/>
+    <arg name="obs_min_distance" default="1.4"/>
 
-    <!-- space model selection -->
-    <arg name="use_esdf" default="false"/>
-    <arg name="use_sfc_corridor" default="true"/>
+    <!-- Keep the default test simple and stable: plain tracking.
+         You can still override these from command line. -->
+    <arg name="use_esdf" default="true"/>
+    <arg name="use_sfc_corridor" default="false"/>
     <arg name="enable_esdf" default="true"/>
 
-    <!-- tracking reference source mode -->
-    <arg name="tracking_reference_mode" default="oracle_reference_mode"/>
-    <arg name="tracking_reference_noise_std" default="0.05"/>
-    <arg name="tracking_reference_velocity_noise_std" default="0.03"/>
-    <arg name="tracking_reference_lag_sec" default="0.10"/>
+    <arg name="tracking_target_odom_topic" default="/object_odom"/>
+    <arg name="tracking_reference_topic" default="/unused_tracking_reference"/>
+    <arg name="tracking_relative_offset_x" default="0.0"/>
+    <arg name="tracking_relative_offset_y" default="2.0"/>
+    <arg name="tracking_relative_offset_z" default="1.0"/>
+
+    <arg name="object_motion_mode" default="line"/>
+    <arg name="object_center_x" default="0.0"/>
+    <arg name="object_center_y" default="0.0"/>
+    <arg name="object_center_z" default="1.0"/>
+    <arg name="object_radius" default="2.2"/>
+    <arg name="object_angular_speed" default="0.35"/>
+    <arg name="object_line_length" default="16.0"/>
+    <arg name="object_line_speed" default="0.9"/>
+    <arg name="object_line_heading_deg" default="0.0"/>
+    <arg name="object_line_start_x" default="-8.0"/>
+    <arg name="object_line_start_y" default="-4.5"/>
+    <arg name="object_line_start_z" default="1.0"/>
+    <arg name="object_line_end_x" default="8.0"/>
+    <arg name="object_line_end_y" default="4.5"/>
+    <arg name="object_line_end_z" default="1.0"/>
+    <arg name="object_figure8_radius" default="2.0"/>
+    <arg name="object_noise_std" default="0.0"/>
 
     <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
         <param name="map/x_size" value="20"/>
@@ -49,6 +68,39 @@
         <param name="min_distance" value="$(arg obs_min_distance)"/>
     </node>
 
+    <include file="$(find fake_object)/launch/object_run.launch">
+        <arg name="motion_mode" value="$(arg object_motion_mode)"/>
+        <arg name="center_x" value="$(arg object_center_x)"/>
+        <arg name="center_y" value="$(arg object_center_y)"/>
+        <arg name="center_z" value="$(arg object_center_z)"/>
+        <arg name="radius" value="$(arg object_radius)"/>
+        <arg name="angular_speed" value="$(arg object_angular_speed)"/>
+        <arg name="line_length" value="$(arg object_line_length)"/>
+        <arg name="line_speed" value="$(arg object_line_speed)"/>
+        <arg name="line_heading_deg" value="$(arg object_line_heading_deg)"/>
+        <arg name="line_start_x" value="$(arg object_line_start_x)"/>
+        <arg name="line_start_y" value="$(arg object_line_start_y)"/>
+        <arg name="line_start_z" value="$(arg object_line_start_z)"/>
+        <arg name="line_end_x" value="$(arg object_line_end_x)"/>
+        <arg name="line_end_y" value="$(arg object_line_end_y)"/>
+        <arg name="line_end_z" value="$(arg object_line_end_z)"/>
+        <arg name="figure8_radius" value="$(arg object_figure8_radius)"/>
+        <arg name="noise_std" value="$(arg object_noise_std)"/>
+        <arg name="yaw_align_velocity" value="true"/>
+    </include>
+
+    <node pkg="odom_visualization" name="object_odom_visualization" type="odom_visualization" output="screen">
+        <remap from="~odom" to="$(arg tracking_target_odom_topic)"/>
+        <param name="color/a" value="1.0"/>
+        <param name="color/r" value="0.95"/>
+        <param name="color/g" value="0.25"/>
+        <param name="color/b" value="0.15"/>
+        <param name="covariance_scale" value="50.0"/>
+        <param name="robot_scale" value="0.22"/>
+        <param name="tf45" value="false"/>
+        <param name="drone_id" value="99"/>
+    </node>
+
     <include file="$(find ego_planner)/launch/include/run_in_sim.xml">
         <arg name="drone_id" value="0"/>
         <arg name="init_x" value="$(arg init_x)"/>
@@ -65,83 +117,17 @@
         <arg name="target0_y" value="0.0"/>
         <arg name="target0_z" value="0.0"/>
         <arg name="use_tracking_task" value="true"/>
-        <arg name="tracking_reference_topic" value="/tracking/reference"/>
-        <arg name="tracking_relay_goal" value="true"/>
+        <arg name="tracking_reference_topic" value="$(arg tracking_reference_topic)"/>
+        <arg name="tracking_target_odom_topic" value="$(arg tracking_target_odom_topic)"/>
+        <arg name="tracking_relay_goal" value="false"/>
         <arg name="tracking_target_goal_topic" value="/tracking/target_goal"/>
+        <arg name="tracking_relative_offset_x" value="$(arg tracking_relative_offset_x)"/>
+        <arg name="tracking_relative_offset_y" value="$(arg tracking_relative_offset_y)"/>
+        <arg name="tracking_relative_offset_z" value="$(arg tracking_relative_offset_z)"/>
         <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)"/>
         <arg name="use_esdf" value="$(arg use_esdf)"/>
         <arg name="enable_esdf" value="$(arg enable_esdf)"/>
     </include>
-
-    <node pkg="ego_planner" type="tracking_target_sim" name="tracking_target_sim" output="screen">
-        <param name="frame_id" value="world"/>
-        <param name="drone_id" value="0"/>
-        <param name="use_jps" value="true"/>
-        <param name="use_external_goal" value="true"/>
-        <param name="external_goal_topic" value="/tracking/target_goal"/>
-
-        <param name="reference_mode" value="$(arg tracking_reference_mode)"/>
-        <param name="reference_noise_std" value="$(arg tracking_reference_noise_std)"/>
-        <param name="reference_velocity_noise_std" value="$(arg tracking_reference_velocity_noise_std)"/>
-        <param name="reference_lag_sec" value="$(arg tracking_reference_lag_sec)"/>
-        <param name="publish_goal_with_id" value="false"/>
-
-        <param name="sim_dt" value="0.02"/>
-        <param name="replan_period" value="0.5"/>
-        <param name="target_speed" value="0.8"/>
-        <param name="goal_ahead_distance" value="3.5"/>
-        <param name="goal_lateral_jitter" value="1.0"/>
-        <param name="goal_vertical_jitter" value="0.0"/>
-        <param name="goal_reach_tolerance" value="0.25"/>
-
-        <param name="horizon_time" value="4.0"/>
-        <param name="horizon_dt" value="0.2"/>
-        <param name="tracking_eval_distance_min" value="1.5"/>
-        <param name="tracking_eval_distance_max" value="4.0"/>
-        <param name="tracking_eval_height_tolerance" value="0.4"/>
-        <param name="tracking_eval_los_clearance" value="0.15"/>
-        <param name="target_box_size" value="0.40"/>
-        <param name="init_offset_x" value="3.0"/>
-        <param name="init_offset_y" value="0.0"/>
-        <param name="init_offset_z" value="0.0"/>
-        <param name="jps_timeout" value="0.08"/>
-        <param name="jps_jump_max_cells" value="6"/>
-        <param name="jps_near_obs_radius" value="1"/>
-
-        <param name="grid_map/resolution" value="0.1"/>
-        <param name="grid_map/local_update_range_x" value="5.5"/>
-        <param name="grid_map/local_update_range_y" value="5.5"/>
-        <param name="grid_map/local_update_range_z" value="2.0"/>
-        <param name="grid_map/obstacles_inflation" value="0.1"/>
-        <param name="grid_map/enable_virtual_wall" value="true"/>
-        <param name="grid_map/virtual_ceil" value="3.0"/>
-        <param name="grid_map/virtual_ground" value="-0.1"/>
-        <param name="grid_map/frame_id" value="world"/>
-        <param name="grid_map/pose_type" value="1"/>
-        <param name="grid_map/fx" value="387.229248046875"/>
-        <param name="grid_map/fy" value="387.229248046875"/>
-        <param name="grid_map/cx" value="321.04638671875"/>
-        <param name="grid_map/cy" value="243.44969177246094"/>
-        <param name="grid_map/use_depth_filter" value="true"/>
-        <param name="grid_map/depth_filter_tolerance" value="0.15"/>
-        <param name="grid_map/depth_filter_mindist" value="0.2"/>
-        <param name="grid_map/depth_filter_margin" value="2"/>
-        <param name="grid_map/k_depth_scaling_factor" value="1000.0"/>
-        <param name="grid_map/skip_pixel" value="2"/>
-        <param name="grid_map/p_hit" value="0.65"/>
-        <param name="grid_map/p_miss" value="0.35"/>
-        <param name="grid_map/p_min" value="0.12"/>
-        <param name="grid_map/p_max" value="0.9"/>
-        <param name="grid_map/p_occ" value="0.8"/>
-        <param name="grid_map/fading_time" value="1000.0"/>
-        <param name="grid_map/min_ray_length" value="0.1"/>
-        <param name="grid_map/enable_esdf" value="$(arg enable_esdf)"/>
-
-        <remap from="grid_map/odom" to="/drone_0_$(arg odom_topic)"/>
-        <remap from="grid_map/cloud" to="/drone_0_pcl_render_node/cloud"/>
-        <remap from="grid_map/pose" to="/drone_0_pcl_render_node/camera_pose"/>
-        <remap from="grid_map/depth" to="/drone_0_pcl_render_node/depth"/>
-    </node>
 
     <node name="rviz" pkg="rviz" type="rviz" output="screen"
           args="-d $(find ego_planner)/launch/include/default_tracking.rviz"/>

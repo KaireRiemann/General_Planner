@@ -13,7 +13,8 @@ class TrackingAnchorSelector
 public:
   void configure(double tracking_d_min,
                  double tracking_d_max,
-                 double side_angle_deg);
+                 double side_angle_deg,
+                 const Eigen::Vector3d &preferred_relative_offset = Eigen::Vector3d::Zero());
 
   void reset();
 
@@ -37,6 +38,8 @@ private:
   double tracking_d_min_{1.5};
   double tracking_d_max_{4.0};
   double side_angle_deg_{20.0};
+  bool use_preferred_relative_offset_{false};
+  Eigen::Vector3d preferred_relative_offset_{Eigen::Vector3d::Zero()};
   bool have_prev_dir_{false};
   Eigen::Vector2d prev_dir_{Eigen::Vector2d::UnitX()};
 };

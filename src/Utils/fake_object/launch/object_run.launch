@@ -1,0 +1,44 @@
+<launch>
+  <arg name="motion_mode" default="line"/>
+  <arg name="publish_rate" default="30.0"/>
+  <arg name="center_x" default="0.0"/>
+  <arg name="center_y" default="0.0"/>
+  <arg name="center_z" default="1.0"/>
+  <arg name="radius" default="2.5"/>
+  <arg name="angular_speed" default="0.35"/>
+  <arg name="line_length" default="6.0"/>
+  <arg name="line_speed" default="0.6"/>
+  <arg name="line_heading_deg" default="0.0"/>
+  <arg name="line_start_x" default="0.0"/>
+  <arg name="line_start_y" default="0.0"/>
+  <arg name="line_start_z" default="1.0"/>
+  <arg name="line_end_x" default="0.0"/>
+  <arg name="line_end_y" default="0.0"/>
+  <arg name="line_end_z" default="1.0"/>
+  <arg name="figure8_radius" default="2.0"/>
+  <arg name="noise_std" default="0.0"/>
+  <arg name="yaw_align_velocity" default="true"/>
+
+  <node pkg="fake_object" type="fake_object" name="fake_object" output="screen">
+    <param name="frame_id" value="world"/>
+    <param name="motion_mode" value="$(arg motion_mode)"/>
+    <param name="publish_rate" value="$(arg publish_rate)"/>
+    <param name="center_x" value="$(arg center_x)"/>
+    <param name="center_y" value="$(arg center_y)"/>
+    <param name="center_z" value="$(arg center_z)"/>
+    <param name="radius" value="$(arg radius)"/>
+    <param name="angular_speed" value="$(arg angular_speed)"/>
+    <param name="line_length" value="$(arg line_length)"/>
+    <param name="line_speed" value="$(arg line_speed)"/>
+    <param name="line_heading_deg" value="$(arg line_heading_deg)"/>
+    <param name="line_start_x" value="$(arg line_start_x)"/>
+    <param name="line_start_y" value="$(arg line_start_y)"/>
+    <param name="line_start_z" value="$(arg line_start_z)"/>
+    <param name="line_end_x" value="$(arg line_end_x)"/>
+    <param name="line_end_y" value="$(arg line_end_y)"/>
+    <param name="line_end_z" value="$(arg line_end_z)"/>
+    <param name="figure8_radius" value="$(arg figure8_radius)"/>
+    <param name="noise_std" value="$(arg noise_std)"/>
+    <param name="yaw_align_velocity" value="$(arg yaw_align_velocity)"/>
+  </node>
+</launch>

@@ -23,11 +23,14 @@ namespace ego_planner::runtime
 
 void TrackingAnchorSelector::configure(const double tracking_d_min,
                                        const double tracking_d_max,
-                                       const double side_angle_deg)
+                                       const double side_angle_deg,
+                                       const Eigen::Vector3d &preferred_relative_offset)
 {
   tracking_d_min_ = std::max(0.2, tracking_d_min);
   tracking_d_max_ = std::max(tracking_d_min_ + 0.2, tracking_d_max);
   side_angle_deg_ = std::max(0.0, side_angle_deg);
+  preferred_relative_offset_ = preferred_relative_offset;
+  use_preferred_relative_offset_ = preferred_relative_offset_.norm() > 1.0e-3;
 }
 
 void TrackingAnchorSelector::reset()
@@ -139,9 +142,34 @@ bool TrackingAnchorSelector::buildAnchorReference(const cost_functional::Trackin
   planning_reference.p_view_ref.resize(planning_reference.p_ref.size(), Eigen::Vector3d::Zero());
   planning_reference.v_view_ref.resize(planning_reference.p_ref.size(), Eigen::Vector3d::Zero());
 
-  const Eigen::Vector3d offset_vec(best_dir.x() * desired_dist,
-                                   best_dir.y() * desired_dist,
-                                   0.0);
+  Eigen::Vector3d offset_vec(best_dir.x() * desired_dist,
+                             best_dir.y() * desired_dist,
+                             0.0);
+  if (use_preferred_relative_offset_)
+  {
+    Eigen::Vector2d heading_xy = Eigen::Vector2d::UnitX();
+    if (!planning_reference.v_ref.empty() &&
+        planning_reference.v_ref.front().head<2>().norm() > 0.1)
+    {
+      heading_xy = planning_reference.v_ref.front().head<2>().normalized();
+    }
+    else if (have_prev_dir_ && prev_dir_.norm() > 1.0e-6)
+    {
+      heading_xy = prev_dir_;
+    }
+
+    const Eigen::Vector2d lateral_xy(-heading_xy.y(), heading_xy.x());
+    const Eigen::Vector2d rel_xy =
+        heading_xy * preferred_relative_offset_.x() +
+        lateral_xy * preferred_relative_offset_.y();
+    offset_vec = Eigen::Vector3d(rel_xy.x(),
+                                 rel_xy.y(),
+                                 preferred_relative_offset_.z());
+    if (rel_xy.norm() > 1.0e-6)
+    {
+      best_dir = rel_xy.normalized();
+    }
+  }
   for (std::size_t i = 0; i < planning_reference.p_ref.size(); ++i)
   {
     planning_reference.p_view_ref[i] = planning_reference.p_ref[i] + offset_vec;

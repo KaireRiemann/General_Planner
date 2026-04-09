@@ -55,6 +55,9 @@ namespace ego_planner
     nh.param("fsm/tracking_prediction_dt", tracking_prediction_dt_, 0.2);
     nh.param("fsm/tracking_prediction_max_speed", tracking_prediction_max_speed_, 2.0);
     nh.param("fsm/tracking_anchor_side_angle_deg", tracking_anchor_side_angle_deg_, 20.0);
+    nh.param("fsm/tracking_relative_offset_x", tracking_relative_offset_.x(), 0.0);
+    nh.param("fsm/tracking_relative_offset_y", tracking_relative_offset_.y(), 0.0);
+    nh.param("fsm/tracking_relative_offset_z", tracking_relative_offset_.z(), 0.0);
     nh.param("fsm/tracking_relay_goal", tracking_relay_goal_, true);
     nh.param("fsm/tracking_target_goal_topic", tracking_target_goal_topic_, std::string("/tracking/target_goal"));
     nh.param("optimization/tracking_distance_min", tracking_distance_min_, 1.5);
@@ -132,7 +135,8 @@ namespace ego_planner
     tracking_anchor_selector_.reset(new runtime::TrackingAnchorSelector());
     tracking_anchor_selector_->configure(tracking_distance_min_,
                                          tracking_distance_max_,
-                                         tracking_anchor_side_angle_deg_);
+                                         tracking_anchor_side_angle_deg_,
+                                         tracking_relative_offset_);
 
     have_trigger_ = use_tracking_task_ ? true : !flag_realworld_experiment_;
     no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
@@ -172,8 +176,12 @@ namespace ego_planner
         waypoint_sub_ = nh.subscribe("/goal", 1, &EGOReplanFSM::waypointCallback, this);
         tracking_target_goal_pub_ = nh.advertise<quadrotor_msgs::GoalSet>(tracking_target_goal_topic_, 1);
       }
-      ROS_INFO("Tracking task enabled. Waiting tracking reference on: %s", tracking_reference_topic_.c_str());
-      ROS_INFO("Tracking target odom fallback enabled on: %s", tracking_target_odom_topic_.c_str());
+      ROS_INFO("Tracking task enabled. reference_topic=%s target_odom_topic=%s relative_offset=[%.2f %.2f %.2f]",
+               tracking_reference_topic_.c_str(),
+               tracking_target_odom_topic_.c_str(),
+               tracking_relative_offset_.x(),
+               tracking_relative_offset_.y(),
+               tracking_relative_offset_.z());
       if (tracking_relay_goal_)
       {
         ROS_INFO("Tracking task goal relay enabled: /goal -> %s", tracking_target_goal_topic_.c_str());
