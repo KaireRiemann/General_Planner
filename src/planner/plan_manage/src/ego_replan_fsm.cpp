@@ -896,6 +896,10 @@ namespace ego_planner
         have_active_state2state_runtime_policy_
             ? std::max(0.15, active_state2state_runtime_policy_.successor_lead_time)
             : state2state_successor_lead_time_;
+    const double successor_min_progress =
+        have_active_state2state_runtime_policy_
+            ? std::max(0.05, std::min(0.95, active_state2state_runtime_policy_.successor_min_progress))
+            : state2state_successor_min_progress_;
     const double successor_horizon_ratio =
         have_active_state2state_runtime_policy_
             ? std::max(0.1, std::min(0.95, active_state2state_runtime_policy_.successor_horizon_ratio))
@@ -972,11 +976,15 @@ namespace ego_planner
     }
 
     runtime::LocalTargetSelection preview;
+    const double preview_start_t =
+        std::min(info->duration,
+                 t_cur + std::max(0.05, 0.35 * successor_lead_time));
+    const Eigen::Vector3d preview_start_pt = info->traj.evaluate(preview_start_t, 0);
     if (!local_target_selector_ ||
         !local_target_selector_->peekLocalTarget(planner_manager_->traj_,
                                                 planning_horizen_,
                                                 planner_manager_->pp_.max_vel_,
-                                                odom_pos_,
+                                                preview_start_pt,
                                                 final_goal_,
                                                 preview))
     {
@@ -1011,7 +1019,7 @@ namespace ego_planner
       set_reason("lead_time_window");
       return true;
     }
-    if (progress >= state2state_successor_min_progress_ &&
+    if (progress >= successor_min_progress &&
         successor_horizon_window &&
         (target_shift >= successor_target_shift_thresh ||
          target_time_advance >= target_time_shift_thresh))
@@ -1022,7 +1030,7 @@ namespace ego_planner
       return true;
     }
 
-    if (progress >= std::min(0.9, state2state_successor_min_progress_ + 0.25) &&
+    if (progress >= std::min(0.9, successor_min_progress + 0.25) &&
         successor_horizon_window)
     {
       set_reason("late_progress_window");
@@ -1431,6 +1439,7 @@ namespace ego_planner
       task_definition.runtime_policy.keep_lookahead = state2state_keep_lookahead_;
       task_definition.runtime_policy.min_rest_time = state2state_min_rest_time_;
       task_definition.runtime_policy.successor_lead_time = state2state_successor_lead_time_;
+      task_definition.runtime_policy.successor_min_progress = state2state_successor_min_progress_;
       task_definition.runtime_policy.successor_horizon_ratio = state2state_successor_horizon_ratio_;
       task_definition.runtime_policy.successor_target_shift_thresh = state2state_successor_target_shift_thresh_;
       task_definition.runtime_policy.successor_near_goal_hold_radius = state2state_successor_near_goal_hold_radius_;
@@ -1443,6 +1452,16 @@ namespace ego_planner
 
     if (plan_success)
     {
+      if (planning_solution.has_init_artifacts)
+      {
+        ROS_INFO("[FSM] solved task type=%s active_mode=%d init_source=%s guide_pts=%zu corridor_polys=%zu",
+                 tracking_active ? "tracking" : "state_to_state",
+                 static_cast<int>(planning_solution.active_space_model),
+                 planning_solution.init_source.c_str(),
+                 planning_solution.guide_path.size(),
+                 planning_solution.corridor_hpolys.size());
+      }
+
       traj_utils::PolyTraj poly_msg;
       polyTraj2ROSMsg(poly_msg);
       poly_traj_pub_.publish(poly_msg);

@@ -18,25 +18,6 @@ namespace ego_planner
 {
   namespace
   {
-    solver::StateToStateInitResources buildStateToStateInitResources(const EGOPlannerManager &manager)
-    {
-      solver::StateToStateInitResources resources;
-      resources.plan_params = &manager.pp_;
-      resources.traj_container = &manager.traj_;
-      resources.continuous_failures_count =
-          const_cast<EGOPlannerManager &>(manager).getContinuousFailuresCountPtr();
-      resources.grid_map = manager.grid_map_;
-      resources.jps_astar = manager.getJpsAstar();
-      resources.optimizer = manager.getOptimizer();
-      resources.guide_min_clearance = manager.getGuideMinClearance();
-      resources.guide_sparse_min_inner = manager.getGuideSparseMinInner();
-      resources.guide_sparse_max_inner = manager.getGuideSparseMaxInner();
-      resources.guide_turn_angle_deg = manager.getGuideTurnAngleDeg();
-      resources.sfc_progress = manager.getSfcProgress();
-      resources.sfc_range = manager.getSfcRange();
-      return resources;
-    }
-
     struct EdgeLess
     {
       bool operator()(const std::pair<int, int> &lhs, const std::pair<int, int> &rhs) const
@@ -456,6 +437,25 @@ namespace ego_planner
     have_active_tracking_semantic_guide_ = false;
     active_tracking_semantic_guide_.clear();
     active_tracking_corridor_.clear();
+  }
+
+  solver::StateToStateInitResources EGOPlannerManager::makeStateToStateInitResources() const
+  {
+    solver::StateToStateInitResources resources;
+    resources.plan_params = &pp_;
+    resources.traj_container = &traj_;
+    resources.continuous_failures_count =
+        const_cast<EGOPlannerManager *>(this)->getContinuousFailuresCountPtr();
+    resources.grid_map = grid_map_;
+    resources.jps_astar = getJpsAstar();
+    resources.optimizer = getOptimizer();
+    resources.guide_min_clearance = getGuideMinClearance();
+    resources.guide_sparse_min_inner = getGuideSparseMinInner();
+    resources.guide_sparse_max_inner = getGuideSparseMaxInner();
+    resources.guide_turn_angle_deg = getGuideTurnAngleDeg();
+    resources.sfc_progress = getSfcProgress();
+    resources.sfc_range = getSfcRange();
+    return resources;
   }
 
   double EGOPlannerManager::estimateObstacleClearance(const Eigen::Vector3d &pt,
@@ -902,7 +902,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *anchor_target_vels,
       std::vector<double> *anchor_times) const
   {
-    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     anchor_candidates.clear();
     if (anchor_target_vels != nullptr)
     {
@@ -1043,7 +1043,7 @@ namespace ego_planner
       std::vector<Eigen::Vector3d> *viewpoint_target_vels,
       std::vector<double> *viewpoint_times) const
   {
-    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     target_samples.clear();
     viewpoint_series.clear();
     if (viewpoint_target_vels != nullptr)
@@ -1888,7 +1888,7 @@ namespace ego_planner
     spatial_map::PolyhedraH corridor_hpolys;
     Eigen::VectorXi corridor_piece_idx;
     Eigen::Vector3d safe_target_pt = local_target_pt;
-    const solver::StateToStateInitializer state_to_state_initializer(buildStateToStateInitResources(*this));
+    const solver::StateToStateInitializer state_to_state_initializer(makeStateToStateInitResources());
     const bool is_tracking_task = (tracking_ref != nullptr && tracking_ref->valid());
     if (tracking_ref != nullptr && !tracking_ref->valid())
     {

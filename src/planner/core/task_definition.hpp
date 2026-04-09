@@ -95,6 +95,7 @@ struct TaskDefinition
     task.keep_lookahead = runtime_policy.keep_lookahead;
     task.min_rest_time = runtime_policy.min_rest_time;
     task.successor_lead_time = runtime_policy.successor_lead_time;
+    task.successor_min_progress = runtime_policy.successor_min_progress;
     task.successor_horizon_ratio = runtime_policy.successor_horizon_ratio;
     task.successor_target_shift_thresh = runtime_policy.successor_target_shift_thresh;
     task.successor_near_goal_hold_radius = runtime_policy.successor_near_goal_hold_radius;
@@ -193,6 +194,7 @@ struct TaskDefinition
     definition.runtime_policy.keep_lookahead = task.keep_lookahead;
     definition.runtime_policy.min_rest_time = task.min_rest_time;
     definition.runtime_policy.successor_lead_time = task.successor_lead_time;
+    definition.runtime_policy.successor_min_progress = task.successor_min_progress;
     definition.runtime_policy.successor_horizon_ratio = task.successor_horizon_ratio;
     definition.runtime_policy.successor_target_shift_thresh = task.successor_target_shift_thresh;
     definition.runtime_policy.successor_near_goal_hold_radius = task.successor_near_goal_hold_radius;

@@ -13,6 +13,7 @@
 #include <SpatialMap/SFCCommonTypes.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
+#include <solver/state_to_state_initializer.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <path_searching/visible_region_graph.hpp>
 
@@ -72,6 +73,7 @@ namespace ego_planner
     inline int *getContinuousFailuresCountPtr(void) { return &continous_failures_count_; }
     inline bool managerPrefersCorridor(void) const { return use_sfc_corridor_; }
     inline bool managerPrefersEsdf(void) const { return use_esdf_; }
+    solver::StateToStateInitResources makeStateToStateInitResources() const;
     inline bool hasActiveTrackingSemanticGuide(void) const { return have_active_tracking_semantic_guide_; }
     inline const cost_functional::TrackingSemanticGuide &getActiveTrackingSemanticGuide(void) const { return active_tracking_semantic_guide_; }
     void clearActiveTrackingArtifacts();
@@ -89,8 +91,8 @@ namespace ego_planner
 
   private:
     // Legacy task bridges are retained only for non-migrated compatibility paths
-    // such as tracking/perching legacy solve adapters. State-to-state no longer
-    // relies on planner_manager for unified solve ownership.
+    // such as tracking/perching legacy solve adapters. State-to-state unified solve
+    // ownership lives in PlannerEngine + StateToStateInitializer.
     bool reboundReplan(
         const Eigen::Vector3d &start_pt, const Eigen::Vector3d &start_vel,
         const Eigen::Vector3d &start_acc, const Eigen::Vector3d &end_pt,

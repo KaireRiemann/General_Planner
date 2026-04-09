@@ -56,7 +56,6 @@ private:
                                         core::PlanningSolution &solution);
   bool solveTrackingCompiledProblem(const core::PlanningProblem &problem,
                                     core::PlanningSolution &solution);
-  solver::StateToStateInitResources makeStateToStateInitResources() const;
 
 private:
   EGOPlannerManager *planner_manager_{nullptr};

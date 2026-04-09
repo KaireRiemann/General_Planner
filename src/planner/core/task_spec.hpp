@@ -42,6 +42,7 @@ struct TaskSpec
   double keep_lookahead{0.8};
   double min_rest_time{0.8};
   double successor_lead_time{0.8};
+  double successor_min_progress{0.55};
   double successor_horizon_ratio{0.65};
   double successor_target_shift_thresh{0.35};
   double successor_near_goal_hold_radius{0.5};

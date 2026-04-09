@@ -212,29 +212,6 @@ PlannerEngine::PlannerEngine(EGOPlannerManager *planner_manager)
   backend_solver_.reset(new optimization::CompatibilityBackendSolver());
 }
 
-solver::StateToStateInitResources PlannerEngine::makeStateToStateInitResources() const
-{
-  solver::StateToStateInitResources resources;
-  if (planner_manager_ == nullptr)
-  {
-    return resources;
-  }
-
-  resources.plan_params = &planner_manager_->pp_;
-  resources.traj_container = &planner_manager_->traj_;
-  resources.continuous_failures_count = planner_manager_->getContinuousFailuresCountPtr();
-  resources.grid_map = planner_manager_->grid_map_;
-  resources.jps_astar = planner_manager_->getJpsAstar();
-  resources.optimizer = planner_manager_->getOptimizer();
-  resources.guide_min_clearance = planner_manager_->getGuideMinClearance();
-  resources.guide_sparse_min_inner = planner_manager_->getGuideSparseMinInner();
-  resources.guide_sparse_max_inner = planner_manager_->getGuideSparseMaxInner();
-  resources.guide_turn_angle_deg = planner_manager_->getGuideTurnAngleDeg();
-  resources.sfc_progress = planner_manager_->getSfcProgress();
-  resources.sfc_range = planner_manager_->getSfcRange();
-  return resources;
-}
-
 bool PlannerEngine::solveTask(const core::PlanningContext &context,
                               const core::TaskDefinition &task_definition,
                               core::PlanningSolution &solution)
@@ -470,7 +447,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     return fillCompiledFailure("compiled problem is missing valid MINCO boundaries");
   }
 
-  state_to_state_initializer_.setResources(makeStateToStateInitResources());
+  state_to_state_initializer_.setResources(planner_manager_->makeStateToStateInitResources());
   solver::StateToStateInitializationResult init_result;
   if (!state_to_state_initializer_.initialize(problem, init_result))
   {
@@ -862,7 +839,7 @@ bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &pr
            problem.references.guide_path.size(),
            seedKindString(problem.seed.kind));
 
-  state_to_state_initializer_.setResources(makeStateToStateInitResources());
+  state_to_state_initializer_.setResources(planner_manager_->makeStateToStateInitResources());
   solver::StateToStateInitializationResult init_result;
   if (!state_to_state_initializer_.initialize(problem, init_result))
   {
