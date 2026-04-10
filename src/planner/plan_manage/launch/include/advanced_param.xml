@@ -104,6 +104,7 @@
         <param name="fsm/safety_replan_emergency_bypass_time" value="0.10" type="double"/>
         <param name="fsm/esdf_runtime_collision_hysteresis" value="0.03" type="double"/>
         <param name="fsm/esdf_runtime_unsafe_consecutive_samples" value="2" type="int"/>
+        <param name="fsm/corridor_plain_fallback_enabled" value="false" type="bool"/>
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
         <param name="fsm/state2state_keep_current_traj" value="true" type="bool"/>

@@ -2,11 +2,13 @@
 #define MINCO_OPTIMIZER_HPP
 
 #include "MINCOTrajectory/MINCOTrajectory.hpp"
+#include "MINCOTrajectory/terminal_mapping.hpp"
 #include <Eigen/Dense>
 #include <algorithm>
 #include <functional>
 #include <memory>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace minco
@@ -116,6 +118,8 @@ public:
 
     InnerPointsMat grad_by_points;
     Eigen::VectorXd grad_by_times;
+    BoundaryState grad_by_head_state;
+    BoundaryState grad_by_tail_state;
 
     SampleBuffer samples;
     Eigen::Matrix<double, DIM, Eigen::Dynamic> sample_grad_p;
@@ -134,6 +138,8 @@ public:
       gdT_time.resize(piece_num);
       grad_by_points.resize(DIM, std::max(0, piece_num - 1));
       grad_by_times.resize(piece_num);
+      grad_by_head_state.setZero();
+      grad_by_tail_state.setZero();
     }
   };
 
@@ -240,6 +246,22 @@ public:
                   TimeCostFunc &&time_cost_func,
                   CostManager &&cost_manager)
   {
+    FixedTerminalMapping<DIM, S> fixed_terminal_mapping;
+    return evaluateWithTerminalMapping(x,
+                                       grad_out,
+                                       std::forward<TimeCostFunc>(time_cost_func),
+                                       std::forward<CostManager>(cost_manager),
+                                       &fixed_terminal_mapping);
+  }
+
+  template <typename TimeCostFunc, typename CostManager>
+  double evaluateWithTerminalMapping(
+      const Eigen::Ref<const Eigen::VectorXd> &x,
+      Eigen::Ref<Eigen::VectorXd> grad_out,
+      TimeCostFunc &&time_cost_func,
+      CostManager &&cost_manager,
+      const TerminalMappingBase<DIM, S> *terminal_mapping)
+  {
     static_assert(optimizer_traits::HasTimeCostInterface<typename std::decay<TimeCostFunc>::type>::value,
                   "TimeCostFunc does not satisfy the required interface.");
 
@@ -287,12 +309,34 @@ public:
     const Eigen::VectorXd gdT_direct_total =
         rho_energy_ * workspace_->gdT_energy + workspace_->gdT_time + workspace_->gdT_integral + workspace_->gdT_sample;
 
-    traj_.propagateGrad(gdC_total,
-                        gdT_direct_total,
-                        workspace_->grad_by_points,
-                        workspace_->grad_by_times);
+    traj_.propagateGradFull(gdC_total,
+                            gdT_direct_total,
+                            workspace_->grad_by_points,
+                            workspace_->grad_by_times,
+                            workspace_->grad_by_head_state,
+                            workspace_->grad_by_tail_state);
+
+    // Fixed-boundary MINCO already has dJ/dT | fixed_tail. For terminal
+    // mappings where tail_state = F(T, ...), add
+    // (d tail_state / dT)^T * (dJ / d tail_state) to the physical time
+    // gradient before mapping dJ/dT back to tau.
+    if (terminal_mapping != nullptr && terminal_mapping->enabled())
+    {
+      terminal_mapping->backwardTerminalTimeGradient(workspace_->grad_by_head_state,
+                                                     workspace_->grad_by_tail_state,
+                                                     workspace_->cache_T,
+                                                     workspace_->grad_by_times);
+    }
 
     writeDecisionGradient(x, grad_out);
+
+    if (terminal_mapping != nullptr && terminal_mapping->enabled())
+    {
+      terminal_mapping->backwardTerminalGradient(workspace_->grad_by_head_state,
+                                                 workspace_->grad_by_tail_state,
+                                                 workspace_->cache_T,
+                                                 grad_out);
+    }
     return total_cost;
   }
 

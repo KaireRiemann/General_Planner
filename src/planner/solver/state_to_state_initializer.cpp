@@ -1317,6 +1317,10 @@ bool StateToStateInitializer::initializeCorridor(const core::PlanningProblem &pr
     result.success = true;
     return true;
   }
+if (result.compiler_hint_attempted)
+  {
+    ROS_WARN("[CompiledS2SInit] corridor compiler hint init failed; retry stable helper.");
+  }
 
   result.stable_helper_attempted = true;
   std::vector<Eigen::Vector3d> guide_path;

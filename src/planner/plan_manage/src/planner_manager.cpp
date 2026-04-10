@@ -2392,6 +2392,10 @@ namespace ego_planner
         }
         else
         {
+          // Tracking currently converts the selected semantic/view anchor into
+          // a fixed hard tailState before entering MINCO. The terminal penalty
+          // in the tracking cost bundle is therefore only an additional soft
+          // shaping term, not a replacement for the hard boundary.
           flag_success = ploy_traj_opt_->optimizeTrackingTrajectory(headState, tailState,
                                                                     innerPts, durations,
                                                                     corridor_hpolys,

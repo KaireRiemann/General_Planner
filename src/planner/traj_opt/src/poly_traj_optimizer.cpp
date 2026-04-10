@@ -497,6 +497,10 @@ namespace ego_planner
     {
       tracking_semantic_guide_ = *tracking_semantic_guide;
     }
+    // Tracking V1/V2 still freezes the selected tracking anchor as a hard
+    // MINCO tail boundary here. Tracking costs are running/soft terms on top
+    // of that fixed-terminal kernel; perching-style terminal mappings are not
+    // enabled unless an outer task explicitly calls the new mapping interface.
     const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
     tracking_task_enabled_ = false;
     tracking_semantic_enabled_ = false;

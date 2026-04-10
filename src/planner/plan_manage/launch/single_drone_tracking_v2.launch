@@ -11,7 +11,7 @@
     <arg name="init_y" default="-1.0"/>
     <arg name="init_z" default="1.2"/>
 
-    <arg name="obs_num" default="30"/>
+    <arg name="obs_num" default="80"/>
     <arg name="circle_num" default="5"/>
     <arg name="obs_lower_rad" default="0.45"/>
     <arg name="obs_upper_rad" default="0.62"/>
@@ -19,9 +19,9 @@
 
     <!-- Keep the default test simple and stable: plain tracking.
          You can still override these from command line. -->
-    <arg name="use_esdf" default="false"/>
-    <arg name="use_sfc_corridor" default="true"/>
-    <arg name="enable_esdf" default="false"/>
+    <arg name="use_esdf" default="true"/>
+    <arg name="use_sfc_corridor" default="false"/>
+    <arg name="enable_esdf" default="true"/>
 
     <arg name="tracking_target_odom_topic" default="/object_odom"/>
     <arg name="tracking_reference_topic" default="/unused_tracking_reference"/>

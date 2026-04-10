@@ -36,6 +36,7 @@ namespace ego_planner
     nh.param("fsm/corridor_check_margin", corridor_check_margin_, 0.05);
     nh.param("fsm/corridor_disable_fail_threshold", corridor_disable_fail_threshold_, 3);
     nh.param("fsm/corridor_disable_duration", corridor_disable_duration_, 1.0);
+    nh.param("fsm/corridor_plain_fallback_enabled", corridor_plain_fallback_enabled_, false);
     nh.param("fsm/state2state_keep_current_traj", state2state_keep_current_traj_, true);
     nh.param("fsm/state2state_successor_enable", state2state_successor_enable_, true);
     nh.param("fsm/state2state_keep_lookahead", state2state_keep_lookahead_, 0.8);
@@ -1267,6 +1268,10 @@ namespace ego_planner
   bool EGOReplanFSM::shouldForcePlainReplan() const
   {
     if (!planner_manager_ || !planner_manager_->corridorModeEnabled())
+    {
+      return false;
+    }
+    if (!corridor_plain_fallback_enabled_)
     {
       return false;
     }

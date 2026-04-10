@@ -729,6 +729,14 @@ public:
   using BasisRow = typename Traits::BasisRow;
   using QMat = typename Traits::QMat;
 
+  struct MINCOGradResult
+  {
+    InnerPointsMat grad_by_points;
+    Eigen::VectorXd grad_by_times;
+    BoundaryState grad_by_head_state{BoundaryState::Zero()};
+    BoundaryState grad_by_tail_state{BoundaryState::Zero()};
+  };
+
   MINCOTrajectory() = default;
   ~MINCOTrajectory()
   {
@@ -938,10 +946,43 @@ public:
                      InnerPointsMat &grad_by_points,
                      Eigen::VectorXd &grad_by_times) const
   {
+    BoundaryState grad_by_head_state = BoundaryState::Zero();
+    BoundaryState grad_by_tail_state = BoundaryState::Zero();
+    propagateGradFull(partial_grad_by_coeffs,
+                      partial_grad_by_times,
+                      grad_by_points,
+                      grad_by_times,
+                      grad_by_head_state,
+                      grad_by_tail_state);
+  }
+
+  MINCOGradResult propagateGradFull(const CoeffMat &partial_grad_by_coeffs,
+                                    const Eigen::VectorXd &partial_grad_by_times) const
+  {
+    MINCOGradResult result;
+    propagateGradFull(partial_grad_by_coeffs,
+                      partial_grad_by_times,
+                      result.grad_by_points,
+                      result.grad_by_times,
+                      result.grad_by_head_state,
+                      result.grad_by_tail_state);
+    return result;
+  }
+
+  void propagateGradFull(const CoeffMat &partial_grad_by_coeffs,
+                         const Eigen::VectorXd &partial_grad_by_times,
+                         InnerPointsMat &grad_by_points,
+                         Eigen::VectorXd &grad_by_times,
+                         BoundaryState &grad_by_head_state,
+                         BoundaryState &grad_by_tail_state,
+                         CoeffMat *adjoint_out = nullptr) const
+  {
     grad_by_points.resize(DIM, std::max(0, piece_num_ - 1));
     grad_by_points.setZero();
     grad_by_times.resize(piece_num_);
     grad_by_times.setZero();
+    grad_by_head_state.setZero();
+    grad_by_tail_state.setZero();
 
     if (piece_num_ <= 0)
     {
@@ -950,6 +991,22 @@ public:
 
     CoeffMat adj_grad = partial_grad_by_coeffs;
     system_.solveAdj(adj_grad);
+
+    // Mathematical meaning:
+    // The coefficient-elimination system is M(T)c = b(head, inner, tail).
+    // Head and tail states only enter the RHS b. After solving the adjoint
+    // M(T)^T lambda = dJ/dc, the RHS sensitivity is lambda. Therefore:
+    //   dJ/d(head_state) = lambda rows owned by head boundary,
+    //   dJ/d(tail_state) = lambda rows owned by tail boundary.
+    for (int r = 0; r < S; ++r)
+    {
+      grad_by_head_state.col(r) = adj_grad.row(r).transpose();
+    }
+    const int tail_start_row = COEFF_NUM * piece_num_ - S;
+    for (int r = 0; r < S; ++r)
+    {
+      grad_by_tail_state.col(r) = adj_grad.row(tail_start_row + r).transpose();
+    }
 
     for (int i = 0; i < piece_num_ - 1; ++i)
     {
@@ -961,6 +1018,11 @@ public:
         coeffs_, durations_, adj_grad, grad_by_times, piece_num_);
 
     grad_by_times += partial_grad_by_times;
+
+    if (adjoint_out != nullptr)
+    {
+      *adjoint_out = adj_grad;
+    }
   }
 
 private:

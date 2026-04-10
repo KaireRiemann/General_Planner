@@ -130,6 +130,7 @@ namespace ego_planner
     double corridor_check_margin_{0.05};
     int corridor_disable_fail_threshold_{3};
     double corridor_disable_duration_{1.0};
+    bool corridor_plain_fallback_enabled_{false};
     bool state2state_keep_current_traj_{true};
     bool state2state_successor_enable_{true};
     double state2state_keep_lookahead_{0.8};

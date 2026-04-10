@@ -42,3 +42,10 @@ add_library( traj_opt
 target_link_libraries( traj_opt
     ${catkin_LIBRARIES} 
     )  
+
+add_executable(minco_terminal_gradient_check
+    test/minco_terminal_gradient_check.cpp
+    )
+target_link_libraries(minco_terminal_gradient_check
+    ${catkin_LIBRARIES}
+    )
