@@ -155,19 +155,6 @@ public:
                         const core::PlanningContext *planning_context = nullptr) const;
 
 private:
-  bool mapWindowReady() const;
-  double estimateObstacleClearance(const Eigen::Vector3d &pt,
-                                   double search_radius,
-                                   Eigen::Vector3d *push_dir = nullptr) const;
-  bool lineOfSightFree(const Eigen::Vector3d &from,
-                       const Eigen::Vector3d &to,
-                       double max_dist = -1.0) const;
-  bool improveCorridorSeedByTimeScaling(const MINCOBoundaryState3D &head_state,
-                                        const MINCOBoundaryState3D &tail_state,
-                                        const Eigen::MatrixXd &inner_pts,
-                                        Eigen::VectorXd &durations,
-                                        const spatial_map::PolyhedraH &corridor_hpolys,
-                                        MINCOTraj3D &traj) const;
   bool initializePlain(const core::PlanningProblem &problem,
                        StateToStateInitializationResult &result) const;
   bool initializeEsdf(const core::PlanningProblem &problem,

@@ -12,6 +12,19 @@
 namespace ego_planner::frontend
 {
 
+struct GuidePathRuntimeConfig
+{
+  GridMap::Ptr grid_map;
+  JPSAStar *jps_astar{nullptr};
+
+  double poly_piece_length{0.2};
+  double guide_min_clearance{0.35};
+  int guide_sparse_min_inner{2};
+  int guide_sparse_max_inner{5};
+  double guide_turn_angle_deg{25.0};
+  double sfc_range{0.8};
+};
+
 struct GuidePathArtifact
 {
   std::vector<Eigen::Vector3d> points;
@@ -26,6 +39,23 @@ struct GuidePathArtifact
 class GuidePathService
 {
 public:
+  // Solver-compatible frontend entry points. These preserve the historical
+  // state-to-state initializer behavior while moving guide construction out of
+  // the solver layer.
+  bool sanitizeLocalTarget(const GuidePathRuntimeConfig &config,
+                           const Eigen::Vector3d &raw_target,
+                           Eigen::Vector3d &safe_target) const;
+
+  bool prepareLocalAStarPath(const GuidePathRuntimeConfig &config,
+                             const Eigen::Vector3d &start_pt,
+                             const Eigen::Vector3d &goal_pt,
+                             std::vector<Eigen::Vector3d> &dense_path,
+                             Eigen::Vector3d &safe_goal) const;
+
+  bool sparsifyGuidePath(const GuidePathRuntimeConfig &config,
+                         const std::vector<Eigen::Vector3d> &dense_path,
+                         std::vector<Eigen::Vector3d> &sparse_path) const;
+
   bool searchStateToStateDensePath(const core::PlanningContext &context,
                                    const core::TaskDefinition &task_definition,
                                    std::vector<Eigen::Vector3d> &path) const;

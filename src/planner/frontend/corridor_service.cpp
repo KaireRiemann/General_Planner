@@ -5,6 +5,32 @@
 namespace ego_planner::frontend
 {
 
+bool CorridorService::generateSafeFlightCorridor(const CorridorRuntimeConfig &config,
+                                                 const std::vector<Eigen::Vector3d> &guide_path,
+                                                 spatial_map::PolyhedraH &corridor_hpolys) const
+{
+  corridor_hpolys.clear();
+  if (guide_path.size() < 2 || !config.grid_map)
+  {
+    return false;
+  }
+
+  const Eigen::Vector3d low_corner = config.grid_map->getUpdatedBoxLow();
+  const Eigen::Vector3d high_corner = config.grid_map->getUpdatedBoxHigh();
+  std::vector<Eigen::Vector3d> occupied_points;
+  config.grid_map->getInflatedOccupiedPoints(occupied_points);
+
+  sfc_gen::convexCover(guide_path,
+                       occupied_points,
+                       low_corner,
+                       high_corner,
+                       config.sfc_progress,
+                       config.sfc_range,
+                       corridor_hpolys);
+  sfc_gen::shortCut(corridor_hpolys);
+  return !corridor_hpolys.empty();
+}
+
 bool CorridorService::buildFromGuidePath(const core::PlanningContext &context,
                                          const GuidePathArtifact &artifact,
                                          core::FeasibleSetSpec &set_spec) const

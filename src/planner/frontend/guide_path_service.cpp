@@ -25,6 +25,87 @@ bool mapWindowReady(const GridMap::Ptr &map)
   return ((high - low).array() > 6.0 * res).all();
 }
 
+double estimateObstacleClearance(const GridMap::Ptr &map,
+                                 const Eigen::Vector3d &pt,
+                                 const double search_radius,
+                                 Eigen::Vector3d *push_dir)
+{
+  if (!map || !mapWindowReady(map))
+  {
+    if (push_dir != nullptr)
+    {
+      *push_dir = Eigen::Vector3d::Zero();
+    }
+    return search_radius;
+  }
+
+  static const std::vector<Eigen::Vector3d> kDirs = []()
+  {
+    std::vector<Eigen::Vector3d> dirs;
+    dirs.reserve(26);
+    for (int dx = -1; dx <= 1; ++dx)
+    {
+      for (int dy = -1; dy <= 1; ++dy)
+      {
+        for (int dz = -1; dz <= 1; ++dz)
+        {
+          if (dx == 0 && dy == 0 && dz == 0)
+          {
+            continue;
+          }
+          dirs.emplace_back(Eigen::Vector3d(dx, dy, dz).normalized());
+        }
+      }
+    }
+    return dirs;
+  }();
+
+  const double resolution = std::max(map->getResolution(), 1.0e-3);
+  const double max_radius = std::max(search_radius, resolution);
+  Eigen::Vector3d accum = Eigen::Vector3d::Zero();
+
+  if (map->getInflateOccupancy(pt) != 0)
+  {
+    for (const auto &dir : kDirs)
+    {
+      if (map->getInflateOccupancy(pt + dir * resolution) == 0)
+      {
+        accum -= dir;
+      }
+    }
+    if (push_dir != nullptr)
+    {
+      *push_dir = accum.norm() > 1.0e-6 ? accum.normalized() : Eigen::Vector3d::Zero();
+    }
+    return 0.0;
+  }
+
+  double clearance = max_radius;
+  for (double radius = resolution; radius <= max_radius + 1.0e-6; radius += resolution)
+  {
+    bool hit_occupied = false;
+    for (const auto &dir : kDirs)
+    {
+      if (map->getInflateOccupancy(pt + dir * radius) != 0)
+      {
+        hit_occupied = true;
+        accum -= dir / std::max(radius, resolution);
+      }
+    }
+    if (hit_occupied)
+    {
+      clearance = std::max(0.0, radius - resolution);
+      break;
+    }
+  }
+
+  if (push_dir != nullptr)
+  {
+    *push_dir = accum.norm() > 1.0e-6 ? accum.normalized() : Eigen::Vector3d::Zero();
+  }
+  return clearance;
+}
+
 bool lineOfSightFree(const ego_planner::core::PlanningContext &context,
                      const Eigen::Vector3d &from,
                      const Eigen::Vector3d &to,
@@ -76,9 +157,9 @@ bool lineOfSightFree(const ego_planner::core::PlanningContext &context,
   return context.grid_map->getInflateOccupancy(to) == 0;
 }
 
-bool sparsifyGuidePath(const ego_planner::core::PlanningContext &context,
-                       const std::vector<Eigen::Vector3d> &dense_path,
-                       std::vector<Eigen::Vector3d> &sparse_path)
+bool sparsifyGuidePathForContext(const ego_planner::core::PlanningContext &context,
+                                 const std::vector<Eigen::Vector3d> &dense_path,
+                                 std::vector<Eigen::Vector3d> &sparse_path)
 {
   sparse_path.clear();
   if (dense_path.size() < 2)
@@ -177,6 +258,215 @@ bool sparsifyGuidePath(const ego_planner::core::PlanningContext &context,
 namespace ego_planner::frontend
 {
 
+bool GuidePathService::sanitizeLocalTarget(const GuidePathRuntimeConfig &config,
+                                           const Eigen::Vector3d &raw_target,
+                                           Eigen::Vector3d &safe_target) const
+{
+  if (!config.grid_map || !mapWindowReady(config.grid_map))
+  {
+    safe_target = raw_target;
+    return true;
+  }
+
+  const double resolution = std::max(config.grid_map->getResolution(), 1.0e-3);
+  const Eigen::Vector3d map_low = config.grid_map->getUpdatedBoxLow();
+  const Eigen::Vector3d map_high = config.grid_map->getUpdatedBoxHigh();
+  if (!map_low.allFinite() || !map_high.allFinite() ||
+      (map_high.array() <= map_low.array()).any())
+  {
+    safe_target = raw_target;
+    return true;
+  }
+
+  const Eigen::Vector3d clamp_low = map_low + Eigen::Vector3d::Constant(2.0 * resolution);
+  const Eigen::Vector3d clamp_high = map_high - Eigen::Vector3d::Constant(2.0 * resolution);
+  safe_target = raw_target.cwiseMax(clamp_low).cwiseMin(clamp_high);
+  if (config.grid_map->getInflateOccupancy(safe_target) == 0)
+  {
+    return true;
+  }
+
+  const double sfc_range = std::max(config.sfc_range, 1.5);
+  const int max_step = std::max(4, static_cast<int>(std::ceil(sfc_range / resolution)));
+  for (int ring = 1; ring <= max_step; ++ring)
+  {
+    double best_score = -std::numeric_limits<double>::infinity();
+    Eigen::Vector3d best_candidate = safe_target;
+    bool found = false;
+
+    for (int dx = -ring; dx <= ring; ++dx)
+    {
+      for (int dy = -ring; dy <= ring; ++dy)
+      {
+        for (int dz = -ring; dz <= ring; ++dz)
+        {
+          if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != ring)
+          {
+            continue;
+          }
+          const Eigen::Vector3d candidate =
+              (safe_target + Eigen::Vector3d(dx, dy, dz) * resolution).cwiseMax(clamp_low).cwiseMin(clamp_high);
+          if (config.grid_map->getInflateOccupancy(candidate) != 0)
+          {
+            continue;
+          }
+          const double clearance =
+              estimateObstacleClearance(config.grid_map,
+                                        candidate,
+                                        std::max(config.guide_min_clearance, 3.0 * resolution),
+                                        nullptr);
+          const double score = clearance - 0.1 * (candidate - raw_target).norm();
+          if (!found || score > best_score)
+          {
+            best_score = score;
+            best_candidate = candidate;
+            found = true;
+          }
+        }
+      }
+    }
+
+    if (found)
+    {
+      safe_target = best_candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool GuidePathService::prepareLocalAStarPath(const GuidePathRuntimeConfig &config,
+                                             const Eigen::Vector3d &start_pt,
+                                             const Eigen::Vector3d &goal_pt,
+                                             std::vector<Eigen::Vector3d> &dense_path,
+                                             Eigen::Vector3d &safe_goal) const
+{
+  dense_path.clear();
+  safe_goal = goal_pt;
+  Eigen::Vector3d safe_start = start_pt;
+
+  if (!sanitizeLocalTarget(config, goal_pt, safe_goal))
+  {
+    return false;
+  }
+  if (!sanitizeLocalTarget(config, start_pt, safe_start))
+  {
+    safe_start = start_pt;
+  }
+  if ((safe_goal - safe_start).norm() < 1.0e-3)
+  {
+    dense_path = {start_pt, safe_goal};
+    return true;
+  }
+  if (!config.grid_map || !mapWindowReady(config.grid_map))
+  {
+    dense_path = {start_pt, safe_goal};
+    return true;
+  }
+  if (!config.jps_astar)
+  {
+    return false;
+  }
+  if (!config.jps_astar->search(safe_start, safe_goal, dense_path))
+  {
+    return false;
+  }
+  if (dense_path.size() < 2)
+  {
+    return false;
+  }
+
+  dense_path.front() = safe_start;
+  dense_path.back() = safe_goal;
+  if ((dense_path.front() - start_pt).norm() > 1.0e-3)
+  {
+    dense_path.insert(dense_path.begin(), start_pt);
+  }
+  if ((dense_path.back() - safe_goal).norm() > 1.0e-3)
+  {
+    dense_path.push_back(safe_goal);
+  }
+  return true;
+}
+
+bool GuidePathService::sparsifyGuidePath(const GuidePathRuntimeConfig &config,
+                                         const std::vector<Eigen::Vector3d> &dense_path,
+                                         std::vector<Eigen::Vector3d> &sparse_path) const
+{
+  sparse_path.clear();
+  if (dense_path.size() < 2)
+  {
+    return false;
+  }
+
+  std::vector<double> accum_len(dense_path.size(), 0.0);
+  for (std::size_t i = 1; i < dense_path.size(); ++i)
+  {
+    accum_len[i] = accum_len[i - 1] + (dense_path[i] - dense_path[i - 1]).norm();
+  }
+
+  const double total_len = accum_len.back();
+  const double piece_length = std::max(config.poly_piece_length, 0.2);
+  int desired_inner = std::max(0, static_cast<int>(std::round(total_len / piece_length)) - 1);
+  desired_inner = std::max(desired_inner, config.guide_sparse_min_inner);
+  desired_inner = std::min(desired_inner, config.guide_sparse_max_inner);
+  desired_inner = std::min(desired_inner, static_cast<int>(dense_path.size()) - 2);
+
+  std::vector<std::pair<double, int>> turn_candidates;
+  const double turn_thresh_rad = config.guide_turn_angle_deg * std::acos(-1.0) / 180.0;
+  for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+  {
+    const Eigen::Vector3d vin = dense_path[static_cast<std::size_t>(i)] - dense_path[static_cast<std::size_t>(i - 1)];
+    const Eigen::Vector3d vout = dense_path[static_cast<std::size_t>(i + 1)] - dense_path[static_cast<std::size_t>(i)];
+    if (vin.norm() < 1.0e-4 || vout.norm() < 1.0e-4)
+    {
+      continue;
+    }
+    const double angle = std::acos(std::max(-1.0, std::min(1.0, vin.normalized().dot(vout.normalized()))));
+    if (angle >= turn_thresh_rad)
+    {
+      turn_candidates.emplace_back(angle, i);
+    }
+  }
+  std::sort(turn_candidates.begin(), turn_candidates.end(),
+            [](const auto &a, const auto &b) { return a.first > b.first; });
+
+  std::set<int> selected;
+  for (const auto &cand : turn_candidates)
+  {
+    if (static_cast<int>(selected.size()) >= desired_inner)
+    {
+      break;
+    }
+    selected.insert(cand.second);
+  }
+
+  for (int k = 1; static_cast<int>(selected.size()) < desired_inner && k <= desired_inner; ++k)
+  {
+    const double target_s = total_len * static_cast<double>(k) / static_cast<double>(desired_inner + 1);
+    int best_idx = 1;
+    double best_err = std::numeric_limits<double>::infinity();
+    for (int i = 1; i + 1 < static_cast<int>(dense_path.size()); ++i)
+    {
+      const double err = std::abs(accum_len[static_cast<std::size_t>(i)] - target_s);
+      if (err < best_err)
+      {
+        best_err = err;
+        best_idx = i;
+      }
+    }
+    selected.insert(best_idx);
+  }
+
+  sparse_path.push_back(dense_path.front());
+  for (int idx : selected)
+  {
+    sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
+  }
+  sparse_path.push_back(dense_path.back());
+  return sparse_path.size() >= 2;
+}
+
 bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &context,
                                                    const core::TaskDefinition &task_definition,
                                                    std::vector<Eigen::Vector3d> &path) const
@@ -272,7 +562,7 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
 
   std::vector<Eigen::Vector3d> sparse_points;
   const auto &points =
-      sparsifyGuidePath(context, dense_path, sparse_points) ? sparse_points : dense_path;
+      sparsifyGuidePathForContext(context, dense_path, sparse_points) ? sparse_points : dense_path;
   if (!buildFromWaypoints(points, artifact))
   {
     return false;
@@ -354,7 +644,7 @@ bool GuidePathService::buildStateToStateGuide(const core::PlanningContext &conte
   }
 
   std::vector<Eigen::Vector3d> sparse_path;
-  if (sparsifyGuidePath(context, dense_path, sparse_path))
+  if (sparsifyGuidePathForContext(context, dense_path, sparse_path))
   {
     dense_path.swap(sparse_path);
   }
@@ -455,7 +745,7 @@ bool GuidePathService::buildTrackingGuideFromWaypoints(const core::PlanningConte
 
   std::vector<Eigen::Vector3d> sparse_path;
   const auto &final_points =
-      sparsifyGuidePath(context, shortcut_path, sparse_path) ? sparse_path : shortcut_path;
+      sparsifyGuidePathForContext(context, shortcut_path, sparse_path) ? sparse_path : shortcut_path;
   return buildFromWaypoints(final_points, artifact);
 }
 

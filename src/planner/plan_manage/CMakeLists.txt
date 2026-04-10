@@ -56,6 +56,7 @@ add_executable(ego_planner_node
   ../compiler/seed_builder.cpp
   ../frontend/guide_path_service.cpp
   ../frontend/corridor_service.cpp
+  ../frontend/transit_init_service.cpp
   ../frontend/visible_region_service.cpp
   ../frontend/terminal_manifold_service.cpp
   ../frontend/warm_start_service.cpp
