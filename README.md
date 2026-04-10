@@ -8,4 +8,4 @@ sudo ./install_geographiclib_datasets.sh
 ```
 
 ## General State to State Planning FrameWork
-<td align="center" width="38.5%"><img src="docs/images/General State to State.png" alt="Fig1" width="100%"></td>
+<td align="center" width="38.5%"><img src="docs/images/General State to State.png" alt="Fig1" width="60%"></td>
