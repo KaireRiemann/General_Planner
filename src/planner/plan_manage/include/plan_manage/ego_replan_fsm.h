@@ -35,6 +35,7 @@
 #include <runtime/replan_trigger.hpp>
 #include <runtime/tracking_reference_provider.hpp>
 #include <runtime/tracking_anchor_selector.hpp>
+#include <runtime/perching_target_provider.hpp>
 
 using std::vector;
 using std::string;
@@ -71,7 +72,8 @@ namespace ego_planner
     {
       MANUAL_TARGET = 1,
       PRESET_TARGET = 2,
-      REFENCE_PATH = 3
+      REFENCE_PATH = 3,
+      PERCHING_TARGET = 4
     };
     enum class StateToStateRuntimeDecision
     {
@@ -112,6 +114,7 @@ namespace ego_planner
     std::unique_ptr<runtime::ReplanTrigger> replan_trigger_;
     std::unique_ptr<runtime::TrackingReferenceProvider> tracking_reference_provider_;
     std::unique_ptr<runtime::TrackingAnchorSelector> tracking_anchor_selector_;
+    std::unique_ptr<runtime::PerchingTargetProvider> perching_target_provider_;
 
     /* parameters */
     int target_type_; // 1 mannual select, 2 hard code
@@ -167,6 +170,26 @@ namespace ego_planner
     bool tracking_wait_for_motion_{false};
     bool tracking_target_moving_{true};
     bool have_tracking_target_odom_{false};
+    bool use_perching_task_{false};
+    bool have_perching_target_odom_{false};
+    bool perching_auto_start_{false};
+    bool perching_triggered_{false};
+    std::string perching_target_odom_topic_{"/perching/target_odom"};
+    std::string perching_trigger_topic_{"/land_triger"};
+    double perching_robot_l_{0.02};
+    double perching_v_plus_{0.3};
+    double perching_min_prediction_time_{1.0};
+    double perching_max_prediction_time_{5.0};
+    double perching_terminal_thrust_{9.81};
+    bool perching_use_dynamics_terminal_accel_{false};
+    bool perching_override_target_orientation_{false};
+    bool perching_replan_if_unsafe_{true};
+    double perching_arrive_pos_thresh_{0.45};
+    double perching_arrive_vel_thresh_{0.85};
+    double perching_min_execute_time_{0.30};
+    Eigen::Vector3d perching_axis_{Eigen::Vector3d::UnitY()};
+    double perching_theta_{-1.5708};
+    bool perching_round_active_{false};
     bool have_planned_local_target_{false};
     bool have_planned_final_goal_{false};
     bool have_planned_tracking_target_now_{false};
@@ -215,7 +238,7 @@ namespace ego_planner
     /* ROS utils */
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
-    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, tracking_ref_sub_, tracking_target_odom_sub_;
+    ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, tracking_ref_sub_, tracking_target_odom_sub_, perching_target_odom_sub_, perching_trigger_sub_;
     ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_, tracking_target_goal_pub_;
 
     /* state machine functions */
@@ -269,6 +292,8 @@ namespace ego_planner
     void mandatoryStopCallback(const std_msgs::Empty &msg);
     void odometryCallback(const nav_msgs::OdometryConstPtr &msg);
     void triggerCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void perchingTriggerCallback(const std_msgs::EmptyConstPtr &msg);
+    void perchingTargetOdomCallback(const nav_msgs::OdometryConstPtr &msg);
     void trackingReferenceCallback(const nav_msgs::PathConstPtr &msg);
     void trackingTargetOdomCallback(const nav_msgs::OdometryConstPtr &msg);
     bool synthesizeTrackingReferenceFromOdom();

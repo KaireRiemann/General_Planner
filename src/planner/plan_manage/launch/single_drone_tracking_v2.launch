@@ -19,15 +19,19 @@
 
     <!-- Keep the default test simple and stable: plain tracking.
          You can still override these from command line. -->
-    <arg name="use_esdf" default="true"/>
-    <arg name="use_sfc_corridor" default="false"/>
-    <arg name="enable_esdf" default="true"/>
+    <arg name="use_esdf" default="false"/>
+    <arg name="use_sfc_corridor" default="true"/>
+    <arg name="enable_esdf" default="false"/>
 
     <arg name="tracking_target_odom_topic" default="/object_odom"/>
     <arg name="tracking_reference_topic" default="/unused_tracking_reference"/>
-    <arg name="tracking_relative_offset_x" default="0.0"/>
-    <arg name="tracking_relative_offset_y" default="2.0"/>
-    <arg name="tracking_relative_offset_z" default="1.0"/>
+    <!-- Tracking offset is expressed in the target Frenet frame:
+         x: along target velocity, y: left lateral, z: vertical.
+         The default follows Elastic-Tracker's "proper viewing distance" idea
+         with a rear anchor instead of circling around the target. -->
+    <arg name="tracking_relative_offset_x" default="-2.75"/>
+    <arg name="tracking_relative_offset_y" default="0.0"/>
+    <arg name="tracking_relative_offset_z" default="0.0"/>
 
     <arg name="object_motion_mode" default="line"/>
     <arg name="object_center_x" default="0.0"/>
@@ -92,11 +96,11 @@
     <node pkg="odom_visualization" name="object_odom_visualization" type="odom_visualization" output="screen">
         <remap from="~odom" to="$(arg tracking_target_odom_topic)"/>
         <param name="color/a" value="1.0"/>
-        <param name="color/r" value="0.95"/>
-        <param name="color/g" value="0.25"/>
-        <param name="color/b" value="0.15"/>
+        <param name="color/r" value="0.05"/>
+        <param name="color/g" value="0.85"/>
+        <param name="color/b" value="1.0"/>
         <param name="covariance_scale" value="50.0"/>
-        <param name="robot_scale" value="0.22"/>
+        <param name="robot_scale" value="0.45"/>
         <param name="tf45" value="false"/>
         <param name="drone_id" value="99"/>
     </node>

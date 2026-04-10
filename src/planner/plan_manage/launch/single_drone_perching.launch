@@ -1,0 +1,147 @@
+<launch>
+    <!-- Fast-Perching style V1 test:
+         moving landing plate odom -> PERCHING TaskDefinition -> PlannerEngine. -->
+    <arg name="map_size_x" default="200.0"/>
+    <arg name="map_size_y" default="200.0"/>
+    <arg name="map_size_z" default="3.0"/>
+    <arg name="odom_topic" default="visual_slam/odom"/>
+    <arg name="launch_prefix" default=""/>
+
+    <arg name="init_x" default="-4.0"/>
+    <arg name="init_y" default="-1.0"/>
+    <arg name="init_z" default="1.4"/>
+
+    <arg name="use_esdf" default="false"/>
+    <arg name="use_sfc_corridor" default="false"/>
+    <arg name="enable_esdf" default="false"/>
+
+    <arg name="plate_motion_mode" default="line"/>
+    <arg name="plate_line_start_x" default="-1.8"/>
+    <arg name="plate_line_start_y" default="0.0"/>
+    <arg name="plate_line_start_z" default="2.0"/>
+    <arg name="plate_line_end_x" default="2.8"/>
+    <arg name="plate_line_end_y" default="0.0"/>
+    <arg name="plate_line_end_z" default="2.0"/>
+    <arg name="plate_line_speed" default="0.25"/>
+    <arg name="plate_orientation_mode" default="rpy"/>
+    <arg name="plate_roll" default="0.0"/>
+    <arg name="plate_pitch" default="-1.5708"/>
+    <arg name="plate_yaw" default="0.0"/>
+    <arg name="plate_attitude_sine_enable" default="false"/>
+    <arg name="plate_attitude_sine_amplitude" default="0.0"/>
+    <arg name="plate_attitude_sine_rate" default="0.5"/>
+    <arg name="perching_trigger_mode" default="once"/>
+    <arg name="perching_trigger_period" default="8.0"/>
+    <arg name="perching_axis_x" default="0.0"/>
+    <arg name="perching_axis_y" default="1.0"/>
+    <arg name="perching_axis_z" default="0.0"/>
+    <arg name="perching_theta" default="-1.5708"/>
+    <arg name="perching_robot_l" default="0.02"/>
+    <arg name="perching_v_plus" default="0.30"/>
+    <arg name="perching_min_prediction_time" default="0.8"/>
+    <arg name="perching_max_prediction_time" default="1.8"/>
+    <arg name="perching_terminal_thrust" default="9.81"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
+    <arg name="perching_replan_if_unsafe" default="true"/>
+    <arg name="perching_arrive_pos_thresh" default="0.45"/>
+    <arg name="perching_arrive_vel_thresh" default="0.85"/>
+    <arg name="perching_min_execute_time" default="0.30"/>
+    <arg name="obs_num" default="5"/>
+
+    <node pkg="map_generator" name="random_forest" type="random_forest" output="screen">
+        <param name="map/x_size" value="12"/>
+        <param name="map/y_size" value="8"/>
+        <param name="map/z_size" value="3"/>
+        <param name="map/resolution" value="0.1"/>
+        <param name="ObstacleShape/seed" value="9"/>
+        <param name="map/obs_num" value="$(arg obs_num)"/>
+        <param name="ObstacleShape/lower_rad" value="0.35"/>
+        <param name="ObstacleShape/upper_rad" value="0.55"/>
+        <param name="ObstacleShape/lower_hei" value="0.0"/>
+        <param name="ObstacleShape/upper_hei" value="2.2"/>
+        <param name="map/circle_num" value="0"/>
+        <param name="pub_rate" value="1.0"/>
+        <param name="min_distance" value="1.2"/>
+    </node>
+
+    <node pkg="ego_planner" name="perching_target_sim" type="perching_target_sim" output="screen">
+        <param name="odom_topic" value="/perching/target_odom"/>
+        <param name="trigger_topic" value="/land_triger"/>
+        <param name="reset_topic" value="/perching/reset"/>
+        <param name="trigger_mode" value="$(arg perching_trigger_mode)"/>
+        <param name="trigger_period" value="$(arg perching_trigger_period)"/>
+        <param name="motion_mode" value="$(arg plate_motion_mode)"/>
+        <param name="orientation_mode" value="$(arg plate_orientation_mode)"/>
+        <param name="line_start_x" value="$(arg plate_line_start_x)"/>
+        <param name="line_start_y" value="$(arg plate_line_start_y)"/>
+        <param name="line_start_z" value="$(arg plate_line_start_z)"/>
+        <param name="line_end_x" value="$(arg plate_line_end_x)"/>
+        <param name="line_end_y" value="$(arg plate_line_end_y)"/>
+        <param name="line_end_z" value="$(arg plate_line_end_z)"/>
+        <param name="line_speed" value="$(arg plate_line_speed)"/>
+        <param name="perching_axis_x" value="$(arg perching_axis_x)"/>
+        <param name="perching_axis_y" value="$(arg perching_axis_y)"/>
+        <param name="perching_axis_z" value="$(arg perching_axis_z)"/>
+        <param name="perching_theta" value="$(arg perching_theta)"/>
+        <param name="plate_roll" value="$(arg plate_roll)"/>
+        <param name="plate_pitch" value="$(arg plate_pitch)"/>
+        <param name="plate_yaw" value="$(arg plate_yaw)"/>
+        <param name="attitude_sine_enable" value="$(arg plate_attitude_sine_enable)"/>
+        <param name="attitude_sine_amplitude" value="$(arg plate_attitude_sine_amplitude)"/>
+        <param name="attitude_sine_rate" value="$(arg plate_attitude_sine_rate)"/>
+        <param name="publish_trigger" value="true"/>
+        <param name="trigger_delay" value="1.2"/>
+    </node>
+
+    <node pkg="odom_visualization" name="odom_visualization_plate" type="odom_visualization_plate" output="screen">
+        <remap from="~odom" to="/perching/target_odom"/>
+        <param name="height" value="1.2"/>
+        <param name="width" value="1.6"/>
+        <param name="thickness" value="0.04"/>
+        <param name="color/a" value="0.70"/>
+        <param name="color/r" value="0.1"/>
+        <param name="color/g" value="0.45"/>
+        <param name="color/b" value="1.0"/>
+        <param name="normal_length" value="0.65"/>
+    </node>
+
+    <include file="$(find ego_planner)/launch/include/run_in_sim.xml">
+        <arg name="drone_id" value="0"/>
+        <arg name="init_x" value="$(arg init_x)"/>
+        <arg name="init_y" value="$(arg init_y)"/>
+        <arg name="init_z" value="$(arg init_z)"/>
+        <arg name="map_size_x" value="$(arg map_size_x)"/>
+        <arg name="map_size_y" value="$(arg map_size_y)"/>
+        <arg name="map_size_z" value="$(arg map_size_z)"/>
+        <arg name="odom_topic" value="$(arg odom_topic)"/>
+        <arg name="launch_prefix" value="$(arg launch_prefix)"/>
+        <arg name="flight_type" value="4"/>
+        <arg name="point_num" value="1"/>
+        <arg name="target0_x" value="0.0"/>
+        <arg name="target0_y" value="0.0"/>
+        <arg name="target0_z" value="0.0"/>
+        <arg name="use_perching_task" value="true"/>
+        <arg name="perching_target_odom_topic" value="/perching/target_odom"/>
+        <arg name="perching_auto_start" value="false"/>
+        <arg name="perching_robot_l" value="$(arg perching_robot_l)"/>
+        <arg name="perching_v_plus" value="$(arg perching_v_plus)"/>
+        <arg name="perching_axis_x" value="$(arg perching_axis_x)"/>
+        <arg name="perching_axis_y" value="$(arg perching_axis_y)"/>
+        <arg name="perching_axis_z" value="$(arg perching_axis_z)"/>
+        <arg name="perching_theta" value="$(arg perching_theta)"/>
+        <arg name="perching_min_prediction_time" value="$(arg perching_min_prediction_time)"/>
+        <arg name="perching_max_prediction_time" value="$(arg perching_max_prediction_time)"/>
+        <arg name="perching_terminal_thrust" value="$(arg perching_terminal_thrust)"/>
+        <arg name="perching_use_dynamics_terminal_accel" value="$(arg perching_use_dynamics_terminal_accel)"/>
+        <arg name="perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)"/>
+        <arg name="perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)"/>
+        <arg name="perching_arrive_vel_thresh" value="$(arg perching_arrive_vel_thresh)"/>
+        <arg name="perching_min_execute_time" value="$(arg perching_min_execute_time)"/>
+        <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)"/>
+        <arg name="use_esdf" value="$(arg use_esdf)"/>
+        <arg name="enable_esdf" value="$(arg enable_esdf)"/>
+    </include>
+
+    <node name="rviz" pkg="rviz" type="rviz" output="screen"
+          args="-d $(find ego_planner)/launch/include/default_perching.rviz"/>
+</launch>

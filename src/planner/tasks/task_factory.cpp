@@ -102,7 +102,34 @@ core::TaskDefinition TaskFactory::makePerchingDefinition(const Eigen::Vector3d &
                                                          const Eigen::Vector3d &start_acc,
                                                          const Eigen::Vector3d &contact_pt,
                                                          const Eigen::Vector3d &contact_vel,
-                                                         bool force_plain)
+                                                         const Eigen::Vector3d &contact_acc,
+                                                         const Eigen::Vector3d &landing_normal,
+                                                         const double robot_l,
+                                                         const double v_plus,
+                                                         const bool force_plain,
+                                                         const bool prefer_corridor,
+                                                         const bool prefer_esdf)
+{
+  return PerchingTask::buildDefinition(start_pt,
+                                       start_vel,
+                                       start_acc,
+                                       contact_pt,
+                                       contact_vel,
+                                       contact_acc,
+                                       landing_normal,
+                                       robot_l,
+                                       v_plus,
+                                       force_plain,
+                                       prefer_corridor,
+                                       prefer_esdf);
+}
+
+core::TaskDefinition TaskFactory::makePerchingDefinition(const Eigen::Vector3d &start_pt,
+                                                         const Eigen::Vector3d &start_vel,
+                                                         const Eigen::Vector3d &start_acc,
+                                                         const Eigen::Vector3d &contact_pt,
+                                                         const Eigen::Vector3d &contact_vel,
+                                                         const bool force_plain)
 {
   return PerchingTask::buildDefinition(start_pt,
                                        start_vel,
@@ -117,7 +144,35 @@ core::TaskSpec TaskFactory::makePerchingTask(const Eigen::Vector3d &start_pt,
                                              const Eigen::Vector3d &start_acc,
                                              const Eigen::Vector3d &contact_pt,
                                              const Eigen::Vector3d &contact_vel,
-                                             bool force_plain)
+                                             const Eigen::Vector3d &contact_acc,
+                                             const Eigen::Vector3d &landing_normal,
+                                             const double robot_l,
+                                             const double v_plus,
+                                             const bool force_plain,
+                                             const bool prefer_corridor,
+                                             const bool prefer_esdf)
+{
+  return makePerchingDefinition(start_pt,
+                                start_vel,
+                                start_acc,
+                                contact_pt,
+                                contact_vel,
+                                contact_acc,
+                                landing_normal,
+                                robot_l,
+                                v_plus,
+                                force_plain,
+                                prefer_corridor,
+                                prefer_esdf)
+      .toTaskSpec();
+}
+
+core::TaskSpec TaskFactory::makePerchingTask(const Eigen::Vector3d &start_pt,
+                                             const Eigen::Vector3d &start_vel,
+                                             const Eigen::Vector3d &start_acc,
+                                             const Eigen::Vector3d &contact_pt,
+                                             const Eigen::Vector3d &contact_vel,
+                                             const bool force_plain)
 {
   return makePerchingDefinition(start_pt,
                                 start_vel,

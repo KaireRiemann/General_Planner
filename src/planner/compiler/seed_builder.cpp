@@ -311,7 +311,7 @@ bool SeedBuilder::build(const core::PlanningContext &context,
     seed_ok = buildTransitSeed(context, problem, guide_seed);
     break;
   case core::TaskType::PERCHING:
-    seed_ok = buildGuideSeed(context, problem, guide_seed);
+    seed_ok = buildTransitSeed(context, problem, guide_seed);
     break;
   case core::TaskType::UNKNOWN:
   default:
@@ -324,9 +324,11 @@ bool SeedBuilder::build(const core::PlanningContext &context,
     problem.seed = guide_seed;
   }
   else if (task_definition.type == core::TaskType::STATE_TO_STATE ||
-           task_definition.type == core::TaskType::TRACKING)
+           task_definition.type == core::TaskType::TRACKING ||
+           task_definition.type == core::TaskType::PERCHING)
   {
-    // State-to-state/Tracking seeds are optional compile-time hints.
+    // State-to-state/Tracking/Perching seeds are optional compile-time hints.
+    // The solver-side initializer owns the final initialization artifacts.
     problem.seed = core::SeedSpec{};
     seed_ok = true;
   }
@@ -354,7 +356,8 @@ bool SeedBuilder::build(const core::PlanningContext &context,
       problem.seed.valid ? static_cast<int>(problem.seed.inner_points.cols()) : 0;
   problem.variable_layout.boundary_derivative_num = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
   if (task_definition.type == core::TaskType::STATE_TO_STATE ||
-      task_definition.type == core::TaskType::TRACKING)
+      task_definition.type == core::TaskType::TRACKING ||
+      task_definition.type == core::TaskType::PERCHING)
   {
     return true;
   }

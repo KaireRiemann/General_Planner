@@ -943,6 +943,7 @@ bool StateToStateInitializer::initializePlain(const core::PlanningProblem &probl
   const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
   const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
   const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+  const Eigen::Vector3d goal_acc = problem.terminal_boundary.acceleration;
   const double ts = resources_.plan_params ? resources_.plan_params->polyTraj_piece_length /
                                              std::max(resources_.plan_params->max_vel_, 0.1)
                                            : 1.0;
@@ -973,6 +974,13 @@ bool StateToStateInitializer::initializePlain(const core::PlanningProblem &probl
     result.failure_reason = "failed to build plain initial trajectory with stable helper";
     return false;
   }
+  result.tail_state = makeBoundaryState(safe_target_pt,
+                                        goal_vel,
+                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
+  result.init_traj = generateMINCOTraj(result.head_state,
+                                       result.tail_state,
+                                       result.inner_points,
+                                       result.durations);
 
   result.guide_path = problem.references.guide_path;
   result.dense_path = result.guide_path;
@@ -996,6 +1004,7 @@ bool StateToStateInitializer::initializeEsdf(const core::PlanningProblem &proble
   const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
   const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
   const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+  const Eigen::Vector3d goal_acc = problem.terminal_boundary.acceleration;
   const double ts = resources_.plan_params ? resources_.plan_params->polyTraj_piece_length /
                                              std::max(resources_.plan_params->max_vel_, 0.1)
                                            : 1.0;
@@ -1039,6 +1048,13 @@ bool StateToStateInitializer::initializeEsdf(const core::PlanningProblem &proble
     result.failure_reason = "failed to build guide-based ESDF initial trajectory";
     return false;
   }
+  result.tail_state = makeBoundaryState(safe_goal,
+                                        goal_vel,
+                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
+  result.init_traj = generateMINCOTraj(result.head_state,
+                                       result.tail_state,
+                                       result.inner_points,
+                                       result.durations);
 
   bool warm_start_used = false;
   if (!task.flag_poly_init)
@@ -1107,6 +1123,7 @@ bool StateToStateInitializer::initializeCorridor(const core::PlanningProblem &pr
   const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
   const Eigen::Vector3d goal_pt = problem.terminal_boundary.position;
   const Eigen::Vector3d goal_vel = problem.terminal_boundary.velocity;
+  const Eigen::Vector3d goal_acc = problem.terminal_boundary.acceleration;
   const double ts = resources_.plan_params ? resources_.plan_params->polyTraj_piece_length /
                                              std::max(resources_.plan_params->max_vel_, 0.1)
                                            : 1.0;
@@ -1120,7 +1137,9 @@ bool StateToStateInitializer::initializeCorridor(const core::PlanningProblem &pr
   }
 
   result.head_state = makeBoundaryState(start_pt, start_vel, start_acc);
-  result.tail_state = makeBoundaryState(safe_target_pt, goal_vel, Eigen::Vector3d::Zero());
+  result.tail_state = makeBoundaryState(safe_target_pt,
+                                        goal_vel,
+                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
 
   const auto *corridor_set = [&problem]() -> const core::FeasibleSetSpec *
   {

@@ -12,6 +12,7 @@ namespace ego_planner
     have_target_ = false;
     have_tracking_ref_ = false;
     have_tracking_target_odom_ = false;
+    have_perching_target_odom_ = false;
     have_odom_ = false;
     have_recv_pre_agent_ = false;
     flag_escape_emergency_ = true;
@@ -47,6 +48,7 @@ namespace ego_planner
     nh.param("fsm/state2state_successor_near_goal_hold_radius", state2state_successor_near_goal_hold_radius_, 0.5);
     nh.param("fsm/state2state_space_model_preference", state2state_space_model_preference_, std::string("auto"));
     nh.param("fsm/use_tracking_task", use_tracking_task_, false);
+    nh.param("fsm/use_perching_task", use_perching_task_, false);
     nh.param("fsm/tracking_reference_topic", tracking_reference_topic_, std::string("/tracking/reference"));
     nh.param("fsm/tracking_target_odom_topic", tracking_target_odom_topic_, std::string("/tracking/target_odom"));
     nh.param("fsm/tracking_reference_dt", tracking_reference_dt_, 0.2);
@@ -74,6 +76,24 @@ namespace ego_planner
     nh.param("fsm/tracking_replan_min_rest_time", tracking_replan_min_rest_time_, 0.8);
     nh.param("fsm/tracking_replan_distance_buffer", tracking_replan_distance_buffer_, 0.55);
     nh.param("fsm/tracking_replan_height_buffer", tracking_replan_height_buffer_, 0.30);
+    nh.param("fsm/perching_target_odom_topic", perching_target_odom_topic_, std::string("/perching/target_odom"));
+    nh.param("fsm/perching_trigger_topic", perching_trigger_topic_, std::string("/land_triger"));
+    nh.param("fsm/perching_auto_start", perching_auto_start_, false);
+    nh.param("fsm/perching_robot_l", perching_robot_l_, 0.02);
+    nh.param("fsm/perching_v_plus", perching_v_plus_, 0.3);
+    nh.param("fsm/perching_min_prediction_time", perching_min_prediction_time_, 1.0);
+    nh.param("fsm/perching_max_prediction_time", perching_max_prediction_time_, 5.0);
+    nh.param("fsm/perching_terminal_thrust", perching_terminal_thrust_, 9.81);
+    nh.param("fsm/perching_use_dynamics_terminal_accel", perching_use_dynamics_terminal_accel_, false);
+    nh.param("fsm/perching_override_target_orientation", perching_override_target_orientation_, false);
+    nh.param("fsm/perching_replan_if_unsafe", perching_replan_if_unsafe_, true);
+    nh.param("fsm/perching_arrive_pos_thresh", perching_arrive_pos_thresh_, 0.45);
+    nh.param("fsm/perching_arrive_vel_thresh", perching_arrive_vel_thresh_, 0.85);
+    nh.param("fsm/perching_min_execute_time", perching_min_execute_time_, 0.30);
+    nh.param("fsm/perching_axis_x", perching_axis_.x(), 0.0);
+    nh.param("fsm/perching_axis_y", perching_axis_.y(), 1.0);
+    nh.param("fsm/perching_axis_z", perching_axis_.z(), 0.0);
+    nh.param("fsm/perching_theta", perching_theta_, -1.5708);
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
@@ -90,6 +110,9 @@ namespace ego_planner
     safety_replan_emergency_bypass_time_ = std::max(0.02, safety_replan_emergency_bypass_time_);
     esdf_runtime_collision_hysteresis_ = std::max(0.0, esdf_runtime_collision_hysteresis_);
     esdf_runtime_unsafe_consecutive_samples_ = std::max(1, esdf_runtime_unsafe_consecutive_samples_);
+    perching_arrive_pos_thresh_ = std::max(0.03, perching_arrive_pos_thresh_);
+    perching_arrive_vel_thresh_ = std::max(0.02, perching_arrive_vel_thresh_);
+    perching_min_execute_time_ = std::max(0.0, perching_min_execute_time_);
     std::transform(state2state_space_model_preference_.begin(),
                    state2state_space_model_preference_.end(),
                    state2state_space_model_preference_.begin(),
@@ -117,6 +140,11 @@ namespace ego_planner
     {
       use_tracking_task_ = true;
     }
+    if (target_type_ == TARGET_TYPE::PERCHING_TARGET)
+    {
+      use_perching_task_ = true;
+      use_tracking_task_ = false;
+    }
 
     /* initialize main modules */
     visualization_.reset(new PlanningVisualization(nh));
@@ -137,8 +165,20 @@ namespace ego_planner
                                          tracking_distance_max_,
                                          tracking_anchor_side_angle_deg_,
                                          tracking_relative_offset_);
+    perching_target_provider_.reset(new runtime::PerchingTargetProvider());
+    perching_target_provider_->configure(
+        perching_robot_l_,
+        perching_v_plus_,
+        perching_min_prediction_time_,
+        perching_max_prediction_time_,
+        perching_terminal_thrust_,
+        perching_use_dynamics_terminal_accel_,
+        runtime::PerchingTargetProvider::quaternionFromAxisAngle(perching_axis_, perching_theta_),
+        perching_override_target_orientation_);
 
-    have_trigger_ = use_tracking_task_ ? true : !flag_realworld_experiment_;
+    have_trigger_ = use_tracking_task_
+                        ? true
+                        : (use_perching_task_ ? perching_auto_start_ : !flag_realworld_experiment_);
     no_replan_thresh_ = 0.5 * emergency_time_ * planner_manager_->pp_.max_vel_;
 
     /* callback */
@@ -186,6 +226,26 @@ namespace ego_planner
       {
         ROS_INFO("Tracking task goal relay enabled: /goal -> %s", tracking_target_goal_topic_.c_str());
       }
+    }
+    else if (use_perching_task_)
+    {
+      perching_target_odom_sub_ = nh.subscribe<nav_msgs::Odometry>(
+          perching_target_odom_topic_,
+          1,
+          &EGOReplanFSM::perchingTargetOdomCallback,
+          this);
+      perching_trigger_sub_ = nh.subscribe<std_msgs::Empty>(
+          perching_trigger_topic_,
+          1,
+          &EGOReplanFSM::perchingTriggerCallback,
+          this);
+      ROS_INFO("Perching task enabled. target_odom_topic=%s trigger_topic=%s auto_start=%s robot_l=%.3f v_plus=%.3f dyn_terminal_acc=%s",
+               perching_target_odom_topic_.c_str(),
+               perching_trigger_topic_.c_str(),
+               perching_auto_start_ ? "yes" : "no",
+               perching_robot_l_,
+               perching_v_plus_,
+               perching_use_dynamics_terminal_accel_ ? "yes" : "no");
     }
     else if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -258,6 +318,11 @@ namespace ego_planner
           goto force_return;
         }
       }
+      else if (use_perching_task_)
+      {
+        if (!have_odom_ || !have_perching_target_odom_) goto force_return;
+        if (!perching_auto_start_ && !perching_triggered_) goto force_return;
+      }
       else
       {
         if (!have_target_ || !have_trigger_) goto force_return;
@@ -316,6 +381,7 @@ namespace ego_planner
       double t_cur = ros::Time::now().toSec() - info->start_time;
       t_cur = std::min(info->duration, t_cur);
       const bool tracking_active = use_tracking_task_ && have_tracking_ref_;
+      const bool perching_runtime = use_perching_task_;
 
       if (tracking_active && trackingShouldEnterWaitTarget())
       {
@@ -328,6 +394,7 @@ namespace ego_planner
       bool touch_the_goal = tracking_active ? false : ((local_target_pt_ - final_goal_).norm() < 1e-2);
       const bool arrived_goal =
           (!tracking_active) &&
+          !perching_runtime &&
           touch_the_goal &&
           (final_goal_ - odom_pos_).norm() < std::max(0.25, 0.5 * near_goal_replan_radius_) &&
           odom_vel_.norm() < 0.3;
@@ -367,6 +434,55 @@ namespace ego_planner
 
       const bool near_goal = tracking_active ? false :
           ((final_goal_ - pos).norm() < near_goal_replan_radius_ || touch_the_goal);
+
+      if (perching_runtime)
+      {
+        const Eigen::Vector3d planned_contact =
+            have_planned_local_target_ ? planned_local_target_pt_ : local_target_pt_;
+        const double dist_to_contact = (planned_contact - odom_pos_).norm();
+        const double remaining_time = std::max(0.0, info->duration - t_cur);
+        const bool min_exec_satisfied = t_cur >= perching_min_execute_time_;
+        const bool near_contact =
+            min_exec_satisfied &&
+            dist_to_contact <= perching_arrive_pos_thresh_ &&
+            odom_vel_.norm() <= perching_arrive_vel_thresh_;
+        const bool terminal_capture_window =
+            min_exec_satisfied &&
+            remaining_time <= 0.8 &&
+            dist_to_contact <= std::max(0.55, 1.5 * perching_arrive_pos_thresh_);
+        const bool trajectory_finished =
+            min_exec_satisfied &&
+            remaining_time <= 0.03;
+
+        ROS_INFO_THROTTLE(0.8,
+                          "[FSM] perching_exec dist_to_contact=%.2f odom_vel=%.2f remaining_t=%.2f trigger_pending=%s round_active=%s",
+                          dist_to_contact,
+                          odom_vel_.norm(),
+                          remaining_time,
+                          perching_triggered_ ? "yes" : "no",
+                          perching_round_active_ ? "yes" : "no");
+
+        if (near_contact || terminal_capture_window || trajectory_finished)
+        {
+          perching_round_active_ = false;
+          have_trigger_ = perching_triggered_;
+          ROS_INFO("[FSM] perching round finished (%s). Waiting for next /land_triger or /perching/reset.",
+                   near_contact ? "contact_reached" : (terminal_capture_window ? "terminal_capture" : "traj_finished"));
+          changeFSMExecState(WAIT_TARGET, "PERCHING_DONE");
+          break;
+        }
+
+        if (perching_replan_if_unsafe_ &&
+            replan_allowed &&
+            remaining_time > 0.8 &&
+            dist_to_contact > std::max(0.55, 1.5 * perching_arrive_pos_thresh_) &&
+            !currentTrajStillUsable(std::min(state2state_keep_lookahead_, remaining_time)))
+        {
+          ROS_WARN("[FSM] perching trajectory became unsafe, replan current landing round.");
+          changeFSMExecState(REPLAN_TRAJ, "PERCHING_SAFETY");
+        }
+        break;
+      }
 
       if (tracking_active &&
           !near_goal &&
@@ -490,10 +606,13 @@ namespace ego_planner
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
     std::cout << "\r[FSM]: state: " + state_str[int(exec_state_)] << ", Drone:" << planner_manager_->pp_.drone_id;
 
-    if (!have_odom_ || !have_target_ || !have_trigger_ || (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_))
+    const bool task_has_target =
+        use_tracking_task_ ? have_tracking_ref_
+                           : (use_perching_task_ ? have_perching_target_odom_ : have_target_);
+    if (!have_odom_ || !task_has_target || !have_trigger_ || (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_))
       std::cout << ". Waiting for ";
     if (!have_odom_) std::cout << "odom,";
-    if (!have_target_) std::cout << "target,";
+    if (!task_has_target) std::cout << "target,";
     if (!have_trigger_) std::cout << "trigger,";
     if (planner_manager_->pp_.drone_id >= 1 && !have_recv_pre_agent_) std::cout << "prev traj,";
     std::cout << std::endl;
@@ -1214,6 +1333,7 @@ namespace ego_planner
     planned_final_goal_.setZero();
     have_planned_tracking_target_now_ = false;
     have_planned_tracking_ref_end_ = false;
+    perching_round_active_ = false;
     planned_tracking_target_pos_now_.setZero();
     planned_tracking_ref_end_.setZero();
   }
@@ -1229,9 +1349,15 @@ namespace ego_planner
         use_tracking_task_ &&
         have_tracking_ref_ &&
         tracking_reference_.valid();
+    const bool perching_active =
+        use_perching_task_ &&
+        have_perching_target_odom_ &&
+        perching_target_provider_ &&
+        perching_target_provider_->hasTarget();
     cost_functional::TrackingReference planning_tracking_reference;
     Eigen::Vector3d tracking_anchor = local_target_pt_;
     Eigen::Vector3d tracking_anchor_vel = local_target_vel_;
+    runtime::PerchingTerminalState perching_terminal;
     runtime::LocalTargetSelection target_selection;
 
     if (tracking_active)
@@ -1273,6 +1399,36 @@ namespace ego_planner
       local_target_pt_ = tracking_anchor;
       local_target_vel_ = tracking_anchor_vel;
       touch_goal_ = false;
+    }
+    else if (perching_active)
+    {
+      if (!perching_target_provider_->buildTerminalState(start_pt_,
+                                                         planner_manager_->pp_.max_vel_,
+                                                         perching_terminal))
+      {
+        ROS_WARN("[FSM] perching planning aborted: unable to build terminal state from plate odom.");
+        return false;
+      }
+
+      local_target_pt_ = perching_terminal.terminal_position;
+      local_target_vel_ = perching_terminal.terminal_velocity;
+      final_goal_ = local_target_pt_;
+      touch_goal_ = true;
+
+      ROS_INFO("[FSM] perching terminal prediction_t=%.2f contact=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
+               perching_terminal.prediction_time,
+               local_target_pt_.x(),
+               local_target_pt_.y(),
+               local_target_pt_.z(),
+               local_target_vel_.x(),
+               local_target_vel_.y(),
+               local_target_vel_.z(),
+               perching_terminal.terminal_acceleration.x(),
+               perching_terminal.terminal_acceleration.y(),
+               perching_terminal.terminal_acceleration.z(),
+               perching_terminal.landing_normal.x(),
+               perching_terminal.landing_normal.y(),
+               perching_terminal.landing_normal.z());
     }
     else
     {
@@ -1401,9 +1557,16 @@ namespace ego_planner
       }
     }
 
-    if (!tracking_active)
+    if (!tracking_active && !perching_active)
     {
       ROS_INFO("[FSM] state2state task preference=%s resolved=%s force_plain=%s",
+               state2state_space_model_preference_.c_str(),
+               resolved_space_pref.c_str(),
+               task_force_plain ? "yes" : "no");
+    }
+    else if (perching_active)
+    {
+      ROS_INFO("[FSM] perching task preference=%s resolved=%s force_plain=%s",
                state2state_space_model_preference_.c_str(),
                resolved_space_pref.c_str(),
                task_force_plain ? "yes" : "no");
@@ -1416,31 +1579,55 @@ namespace ego_planner
                task_force_plain ? "yes" : "no");
     }
 
-    core::TaskDefinition task_definition = tracking_active
-                                               ? tasks::TaskFactory::makeTrackingDefinition(
-                                                     planning_tracking_reference,
-                                                     start_pt_,
-                                                     start_vel_,
-                                                     start_acc_,
-                                                     flag_use_poly_init,
-                                                     flag_randomPolyTraj,
-                                                     task_force_plain,
-                                                     task_prefer_corridor,
-                                                     task_prefer_esdf)
-                                               : tasks::TaskFactory::makeStateToStateDefinition(
-                                                     start_pt_,
-                                                     start_vel_,
-                                                     start_acc_,
-                                                     local_target_pt_,
-                                                     local_target_vel_,
-                                                     touch_goal_,
-                                                     flag_use_poly_init,
-                                                     flag_randomPolyTraj,
-                                                     task_force_plain,
-                                                     task_prefer_corridor,
-                                                     task_prefer_esdf);
+    core::TaskDefinition task_definition;
+    if (tracking_active)
+    {
+      task_definition = tasks::TaskFactory::makeTrackingDefinition(
+          planning_tracking_reference,
+          start_pt_,
+          start_vel_,
+          start_acc_,
+          flag_use_poly_init,
+          flag_randomPolyTraj,
+          task_force_plain,
+          task_prefer_corridor,
+          task_prefer_esdf);
+    }
+    else if (perching_active)
+    {
+      task_definition = tasks::TaskFactory::makePerchingDefinition(
+          start_pt_,
+          start_vel_,
+          start_acc_,
+          perching_terminal.terminal_position,
+          perching_terminal.terminal_velocity,
+          perching_terminal.terminal_acceleration,
+          perching_terminal.landing_normal,
+          perching_robot_l_,
+          perching_v_plus_,
+          task_force_plain,
+          task_prefer_corridor,
+          task_prefer_esdf);
+      task_definition.runtime_policy.flag_poly_init = flag_use_poly_init;
+      task_definition.runtime_policy.flag_random_poly_traj = flag_randomPolyTraj;
+    }
+    else
+    {
+      task_definition = tasks::TaskFactory::makeStateToStateDefinition(
+          start_pt_,
+          start_vel_,
+          start_acc_,
+          local_target_pt_,
+          local_target_vel_,
+          touch_goal_,
+          flag_use_poly_init,
+          flag_randomPolyTraj,
+          task_force_plain,
+          task_prefer_corridor,
+          task_prefer_esdf);
+    }
 
-    if (!tracking_active)
+    if (!tracking_active && !perching_active)
     {
       task_definition.runtime_policy.enable_keep_current = state2state_keep_current_traj_;
       task_definition.runtime_policy.enable_successor_planning = state2state_successor_enable_;
@@ -1463,7 +1650,7 @@ namespace ego_planner
       if (planning_solution.has_init_artifacts)
       {
         ROS_INFO("[FSM] solved task type=%s active_mode=%d init_source=%s guide_pts=%zu corridor_polys=%zu",
-                 tracking_active ? "tracking" : "state_to_state",
+                 tracking_active ? "tracking" : (perching_active ? "perching" : "state_to_state"),
                  static_cast<int>(planning_solution.active_space_model),
                  planning_solution.init_source.c_str(),
                  planning_solution.guide_path.size(),
@@ -1499,6 +1686,23 @@ namespace ego_planner
         have_planned_local_target_ = false;
         have_planned_final_goal_ = false;
       }
+      else if (perching_active)
+      {
+        have_pending_state2state_target_selection_ = false;
+        pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
+        planned_local_target_pt_ = local_target_pt_;
+        planned_local_target_glb_t_ = -1.0;
+        planned_final_goal_ = final_goal_;
+        have_active_state2state_runtime_policy_ = false;
+        have_planned_local_target_ = true;
+        have_planned_final_goal_ = true;
+        have_planned_tracking_target_now_ = false;
+        have_planned_tracking_ref_end_ = false;
+        perching_round_active_ = true;
+        perching_triggered_ = false;
+        have_trigger_ = false;
+        ROS_INFO("[FSM] perching trigger consumed; current landing round is executing. Publish /land_triger or /perching/reset for the next round after landing.");
+      }
       else
       {
         if (target_selection.valid && local_target_selector_)
@@ -1524,7 +1728,7 @@ namespace ego_planner
       return true;
     }
 
-    if (!tracking_active)
+    if (!tracking_active && !perching_active)
     {
       have_pending_state2state_target_selection_ = false;
       pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
@@ -1645,7 +1849,7 @@ namespace ego_planner
 
   bool EGOReplanFSM::mondifyInCollisionFinalGoal()
   {
-    if (use_tracking_task_)
+    if (use_tracking_task_ || use_perching_task_)
     {
       return false;
     }
@@ -1745,6 +1949,25 @@ namespace ego_planner
   {
     have_trigger_ = true;
     std::cout << "Triggered!" << std::endl;
+  }
+
+  void EGOReplanFSM::perchingTriggerCallback(const std_msgs::EmptyConstPtr &msg)
+  {
+    (void)msg;
+    perching_triggered_ = true;
+    have_trigger_ = true;
+    ROS_INFO("Received perching trigger%s.",
+             perching_round_active_ ? " and queued it for the next round" : "");
+  }
+
+  void EGOReplanFSM::perchingTargetOdomCallback(const nav_msgs::OdometryConstPtr &msg)
+  {
+    if (!msg || !perching_target_provider_)
+    {
+      return;
+    }
+    perching_target_provider_->updateFromOdometry(*msg);
+    have_perching_target_odom_ = true;
   }
 
   bool EGOReplanFSM::trackingDistanceSatisfied(const Eigen::Vector3d &ego_pos,

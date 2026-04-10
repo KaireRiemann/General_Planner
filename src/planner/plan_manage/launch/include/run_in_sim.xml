@@ -11,6 +11,7 @@
     <arg name="use_sfc_corridor" default="false"/>
     <arg name="use_esdf" default="false"/>
     <arg name="use_tracking_task" default="false"/>
+    <arg name="use_perching_task" default="false"/>
     <arg name="tracking_reference_topic" default="/tracking/reference"/>
     <arg name="tracking_target_odom_topic" default="/tracking/target_odom"/>
     <arg name="tracking_relay_goal" default="true"/>
@@ -18,6 +19,22 @@
     <arg name="tracking_relative_offset_x" default="0.0"/>
     <arg name="tracking_relative_offset_y" default="0.0"/>
     <arg name="tracking_relative_offset_z" default="0.0"/>
+    <arg name="perching_target_odom_topic" default="/perching/target_odom"/>
+    <arg name="perching_auto_start" default="false"/>
+    <arg name="perching_robot_l" default="0.02"/>
+    <arg name="perching_v_plus" default="0.3"/>
+    <arg name="perching_axis_x" default="0.0"/>
+    <arg name="perching_axis_y" default="1.0"/>
+    <arg name="perching_axis_z" default="0.0"/>
+    <arg name="perching_theta" default="-1.5708"/>
+    <arg name="perching_min_prediction_time" default="0.8"/>
+    <arg name="perching_max_prediction_time" default="1.8"/>
+    <arg name="perching_terminal_thrust" default="9.81"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
+    <arg name="perching_replan_if_unsafe" default="true"/>
+    <arg name="perching_arrive_pos_thresh" default="0.45"/>
+    <arg name="perching_arrive_vel_thresh" default="0.85"/>
+    <arg name="perching_min_execute_time" default="0.30"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
@@ -71,6 +88,7 @@
         <arg name="use_sfc_corridor" value="$(arg use_sfc_corridor)" />
         <arg name="use_esdf" value="$(arg use_esdf)" />
         <arg name="use_tracking_task" value="$(arg use_tracking_task)" />
+        <arg name="use_perching_task" value="$(arg use_perching_task)" />
         <arg name="tracking_reference_topic" value="$(arg tracking_reference_topic)" />
         <arg name="tracking_target_odom_topic" value="$(arg tracking_target_odom_topic)" />
         <arg name="tracking_relay_goal" value="$(arg tracking_relay_goal)" />
@@ -78,6 +96,22 @@
         <arg name="tracking_relative_offset_x" value="$(arg tracking_relative_offset_x)" />
         <arg name="tracking_relative_offset_y" value="$(arg tracking_relative_offset_y)" />
         <arg name="tracking_relative_offset_z" value="$(arg tracking_relative_offset_z)" />
+        <arg name="perching_target_odom_topic" value="$(arg perching_target_odom_topic)" />
+        <arg name="perching_auto_start" value="$(arg perching_auto_start)" />
+        <arg name="perching_robot_l" value="$(arg perching_robot_l)" />
+        <arg name="perching_v_plus" value="$(arg perching_v_plus)" />
+        <arg name="perching_axis_x" value="$(arg perching_axis_x)" />
+        <arg name="perching_axis_y" value="$(arg perching_axis_y)" />
+        <arg name="perching_axis_z" value="$(arg perching_axis_z)" />
+        <arg name="perching_theta" value="$(arg perching_theta)" />
+        <arg name="perching_min_prediction_time" value="$(arg perching_min_prediction_time)" />
+        <arg name="perching_max_prediction_time" value="$(arg perching_max_prediction_time)" />
+        <arg name="perching_terminal_thrust" value="$(arg perching_terminal_thrust)" />
+        <arg name="perching_use_dynamics_terminal_accel" value="$(arg perching_use_dynamics_terminal_accel)" />
+        <arg name="perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)" />
+        <arg name="perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)" />
+        <arg name="perching_arrive_vel_thresh" value="$(arg perching_arrive_vel_thresh)" />
+        <arg name="perching_min_execute_time" value="$(arg perching_min_execute_time)" />
         <arg name="enable_esdf" value="$(arg enable_esdf)" />
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
         <arg name="sfc_progress" value="$(arg sfc_progress)" />

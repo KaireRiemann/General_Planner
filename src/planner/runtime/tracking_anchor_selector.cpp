@@ -16,6 +16,17 @@ Eigen::Vector2d normalizedOrDefault(const Eigen::Vector2d &v, const Eigen::Vecto
   return fallback;
 }
 
+Eigen::Vector2d referenceHeadingAt(const cost_functional::TrackingReference &ref,
+                                   const std::size_t idx,
+                                   const Eigen::Vector2d &fallback)
+{
+  if (idx < ref.v_ref.size() && ref.v_ref[idx].head<2>().norm() > 0.1)
+  {
+    return ref.v_ref[idx].head<2>().normalized();
+  }
+  return fallback;
+}
+
 } // namespace
 
 namespace ego_planner::runtime
@@ -52,11 +63,6 @@ Eigen::Vector2d TrackingAnchorSelector::chooseBaseDirection(const cost_functiona
 {
   const Eigen::Vector2d fallback = have_prev_dir_ ? prev_dir_ : Eigen::Vector2d::UnitX();
   const Eigen::Vector3d target_now = target_reference.p_ref.front();
-  const Eigen::Vector2d ego_to_target_xy = (ego_pos - target_now).head<2>();
-  if (ego_to_target_xy.norm() > 0.3)
-  {
-    return ego_to_target_xy.normalized();
-  }
 
   Eigen::Vector2d minus_target_vel_xy = Eigen::Vector2d::Zero();
   if (!target_reference.v_ref.empty())
@@ -66,6 +72,12 @@ Eigen::Vector2d TrackingAnchorSelector::chooseBaseDirection(const cost_functiona
   if (minus_target_vel_xy.norm() > 0.2)
   {
     return minus_target_vel_xy.normalized();
+  }
+
+  const Eigen::Vector2d ego_to_target_xy = (ego_pos - target_now).head<2>();
+  if (ego_to_target_xy.norm() > 0.3)
+  {
+    return ego_to_target_xy.normalized();
   }
 
   return fallback;
@@ -145,22 +157,24 @@ bool TrackingAnchorSelector::buildAnchorReference(const cost_functional::Trackin
   Eigen::Vector3d offset_vec(best_dir.x() * desired_dist,
                              best_dir.y() * desired_dist,
                              0.0);
+  Eigen::Vector2d preferred_heading_xy = Eigen::Vector2d::UnitX();
+  if (!planning_reference.v_ref.empty() &&
+      planning_reference.v_ref.front().head<2>().norm() > 0.1)
+  {
+    preferred_heading_xy = planning_reference.v_ref.front().head<2>().normalized();
+  }
+  else if (have_prev_dir_ && prev_dir_.norm() > 1.0e-6)
+  {
+    // prev_dir_ is the target-to-drone offset direction. For rear-follow it is
+    // opposite to the target heading, so invert it to recover a heading guess.
+    preferred_heading_xy = -prev_dir_;
+  }
+
   if (use_preferred_relative_offset_)
   {
-    Eigen::Vector2d heading_xy = Eigen::Vector2d::UnitX();
-    if (!planning_reference.v_ref.empty() &&
-        planning_reference.v_ref.front().head<2>().norm() > 0.1)
-    {
-      heading_xy = planning_reference.v_ref.front().head<2>().normalized();
-    }
-    else if (have_prev_dir_ && prev_dir_.norm() > 1.0e-6)
-    {
-      heading_xy = prev_dir_;
-    }
-
-    const Eigen::Vector2d lateral_xy(-heading_xy.y(), heading_xy.x());
+    const Eigen::Vector2d lateral_xy(-preferred_heading_xy.y(), preferred_heading_xy.x());
     const Eigen::Vector2d rel_xy =
-        heading_xy * preferred_relative_offset_.x() +
+        preferred_heading_xy * preferred_relative_offset_.x() +
         lateral_xy * preferred_relative_offset_.y();
     offset_vec = Eigen::Vector3d(rel_xy.x(),
                                  rel_xy.y(),
@@ -172,6 +186,17 @@ bool TrackingAnchorSelector::buildAnchorReference(const cost_functional::Trackin
   }
   for (std::size_t i = 0; i < planning_reference.p_ref.size(); ++i)
   {
+    if (use_preferred_relative_offset_)
+    {
+      preferred_heading_xy = referenceHeadingAt(planning_reference, i, preferred_heading_xy);
+      const Eigen::Vector2d lateral_xy(-preferred_heading_xy.y(), preferred_heading_xy.x());
+      const Eigen::Vector2d rel_xy =
+          preferred_heading_xy * preferred_relative_offset_.x() +
+          lateral_xy * preferred_relative_offset_.y();
+      offset_vec = Eigen::Vector3d(rel_xy.x(),
+                                   rel_xy.y(),
+                                   preferred_relative_offset_.z());
+    }
     planning_reference.p_view_ref[i] = planning_reference.p_ref[i] + offset_vec;
     planning_reference.v_view_ref[i] =
         (i < planning_reference.v_ref.size()) ? planning_reference.v_ref[i] : Eigen::Vector3d::Zero();

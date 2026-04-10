@@ -155,6 +155,7 @@ include_directories(
 
 ## Declare a cpp executable
 add_executable(odom_visualization src/odom_visualization.cpp)
+add_executable(odom_visualization_plate src/odom_visualization_plate.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
@@ -165,6 +166,10 @@ target_link_libraries(odom_visualization
    ${catkin_LIBRARIES}
    ${ARMADILLO_LIBRARIES}
    pose_utils
+)
+
+target_link_libraries(odom_visualization_plate
+   ${catkin_LIBRARIES}
 )
 
 #############

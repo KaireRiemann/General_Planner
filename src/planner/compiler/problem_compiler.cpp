@@ -49,7 +49,6 @@ ActiveSpaceModel selectStateToStateSpaceModel(const TaskDefinition &task_definit
 ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
                                         const ego_planner::core::PlanningContext &context)
 {
-  const auto &policy = task_definition.space_model_policy;
   switch (task_definition.type)
   {
   case TaskType::STATE_TO_STATE:
@@ -60,12 +59,10 @@ ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
     // used in this migration step.
     return selectStateToStateSpaceModel(task_definition, context);
   case TaskType::PERCHING:
-    if (policy.force_plain || policy.preferred == SpaceModelPreference::PLAIN)
-    {
-      return ActiveSpaceModel::PLAIN;
-    }
-    return policy.allow_terminal_manifold ? ActiveSpaceModel::TERMINAL_MANIFOLD
-                                          : ActiveSpaceModel::PLAIN;
+    // Perching V1 uses the same spatial model pipeline as state-to-state.
+    // The terminal manifold is task semantics/feasible-set data, not the
+    // active obstacle model used by the backend solver.
+    return selectStateToStateSpaceModel(task_definition, context);
   case TaskType::UNKNOWN:
   default:
     return ActiveSpaceModel::PLAIN;
@@ -127,6 +124,10 @@ void applyDefaultObjectiveConstraintPolicy(const TaskDefinition &task_definition
     problem.constraint_mask |= ego_planner::optimization::CON_VISIBLE_REGION;
   }
   if (problem.active_space_model == ActiveSpaceModel::TERMINAL_MANIFOLD)
+  {
+    problem.objective_mask |= ego_planner::optimization::OBJ_TERMINAL_SOFT;
+  }
+  if (task_definition.type == TaskType::PERCHING)
   {
     problem.objective_mask |= ego_planner::optimization::OBJ_TERMINAL_SOFT;
   }
@@ -238,7 +239,7 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
       problem.solve_callback =
           [adapter = adapter_](const core::PlanningProblem &p, core::PlanningSolution &s) -> bool
       {
-        return adapter->solvePerchingLegacy(p, s);
+        return adapter->solveStateToStateCompiled(p, s);
       };
       break;
     case core::TaskType::UNKNOWN:

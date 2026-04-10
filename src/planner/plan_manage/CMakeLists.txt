@@ -68,6 +68,7 @@ add_executable(ego_planner_node
   ../runtime/context_builder.cpp
   ../runtime/tracking_reference_provider.cpp
   ../runtime/tracking_anchor_selector.cpp
+  ../runtime/perching_target_provider.cpp
   )
 target_link_libraries(ego_planner_node 
   ${catkin_LIBRARIES}
@@ -81,6 +82,10 @@ add_dependencies(traj_server ${catkin_EXPORTED_TARGETS})
 add_executable(tracking_target_sim src/tracking_target_sim.cpp)
 target_link_libraries(tracking_target_sim ${catkin_LIBRARIES})
 add_dependencies(tracking_target_sim ${catkin_EXPORTED_TARGETS})
+
+add_executable(perching_target_sim src/perching_target_sim.cpp)
+target_link_libraries(perching_target_sim ${catkin_LIBRARIES})
+add_dependencies(perching_target_sim ${catkin_EXPORTED_TARGETS})
 
 add_executable(body_to_world src/body_to_world.cpp)
 target_link_libraries(body_to_world ${catkin_LIBRARIES})

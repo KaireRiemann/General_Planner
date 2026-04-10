@@ -35,6 +35,7 @@
     <arg name="use_sfc_corridor" default="false"/>
     <arg name="use_esdf" default="false"/>
     <arg name="use_tracking_task" default="false"/>
+    <arg name="use_perching_task" default="false"/>
     <arg name="tracking_reference_topic" default="/tracking/reference"/>
     <arg name="tracking_target_odom_topic" default="/tracking/target_odom"/>
     <arg name="tracking_relay_goal" default="true"/>
@@ -42,6 +43,22 @@
     <arg name="tracking_relative_offset_x" default="0.0"/>
     <arg name="tracking_relative_offset_y" default="0.0"/>
     <arg name="tracking_relative_offset_z" default="0.0"/>
+    <arg name="perching_target_odom_topic" default="/perching/target_odom"/>
+    <arg name="perching_auto_start" default="false"/>
+    <arg name="perching_robot_l" default="0.02"/>
+    <arg name="perching_v_plus" default="0.3"/>
+    <arg name="perching_axis_x" default="0.0"/>
+    <arg name="perching_axis_y" default="1.0"/>
+    <arg name="perching_axis_z" default="0.0"/>
+    <arg name="perching_theta" default="-1.5708"/>
+    <arg name="perching_min_prediction_time" default="0.8"/>
+    <arg name="perching_max_prediction_time" default="1.8"/>
+    <arg name="perching_terminal_thrust" default="9.81"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
+    <arg name="perching_replan_if_unsafe" default="true"/>
+    <arg name="perching_arrive_pos_thresh" default="0.45"/>
+    <arg name="perching_arrive_vel_thresh" default="0.85"/>
+    <arg name="perching_min_execute_time" default="0.30"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sensor_topics_absolute" default="false"/>
     <arg name="use_cloud_input_only" default="false"/>
@@ -101,6 +118,7 @@
         <param name="fsm/state2state_successor_near_goal_hold_radius" value="0.50" type="double"/>
         <param name="fsm/state2state_space_model_preference" value="auto" type="str"/>
         <param name="fsm/use_tracking_task" value="$(arg use_tracking_task)" type="bool"/>
+        <param name="fsm/use_perching_task" value="$(arg use_perching_task)" type="bool"/>
         <param name="fsm/tracking_reference_topic" value="$(arg tracking_reference_topic)" type="str"/>
         <param name="fsm/tracking_target_odom_topic" value="$(arg tracking_target_odom_topic)" type="str"/>
         <param name="fsm/tracking_reference_dt" value="0.2" type="double"/>
@@ -120,6 +138,24 @@
         <param name="fsm/tracking_replan_min_rest_time" value="0.80" type="double"/>
         <param name="fsm/tracking_replan_distance_buffer" value="0.55" type="double"/>
         <param name="fsm/tracking_replan_height_buffer" value="0.30" type="double"/>
+        <param name="fsm/perching_target_odom_topic" value="$(arg perching_target_odom_topic)" type="str"/>
+        <param name="fsm/perching_trigger_topic" value="/land_triger" type="str"/>
+        <param name="fsm/perching_auto_start" value="$(arg perching_auto_start)" type="bool"/>
+        <param name="fsm/perching_robot_l" value="$(arg perching_robot_l)" type="double"/>
+        <param name="fsm/perching_v_plus" value="$(arg perching_v_plus)" type="double"/>
+        <param name="fsm/perching_min_prediction_time" value="$(arg perching_min_prediction_time)" type="double"/>
+        <param name="fsm/perching_max_prediction_time" value="$(arg perching_max_prediction_time)" type="double"/>
+        <param name="fsm/perching_terminal_thrust" value="$(arg perching_terminal_thrust)" type="double"/>
+        <param name="fsm/perching_use_dynamics_terminal_accel" value="$(arg perching_use_dynamics_terminal_accel)" type="bool"/>
+        <param name="fsm/perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)" type="bool"/>
+        <param name="fsm/perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)" type="double"/>
+        <param name="fsm/perching_arrive_vel_thresh" value="$(arg perching_arrive_vel_thresh)" type="double"/>
+        <param name="fsm/perching_min_execute_time" value="$(arg perching_min_execute_time)" type="double"/>
+        <param name="fsm/perching_override_target_orientation" value="false" type="bool"/>
+        <param name="fsm/perching_axis_x" value="$(arg perching_axis_x)" type="double"/>
+        <param name="fsm/perching_axis_y" value="$(arg perching_axis_y)" type="double"/>
+        <param name="fsm/perching_axis_z" value="$(arg perching_axis_z)" type="double"/>
+        <param name="fsm/perching_theta" value="$(arg perching_theta)" type="double"/>
         <param name="fsm/waypoint_num" value="$(arg point_num)" type="int"/>
         <param name="fsm/waypoint0_x" value="$(arg point0_x)" type="double"/>
         <param name="fsm/waypoint0_y" value="$(arg point0_y)" type="double"/>

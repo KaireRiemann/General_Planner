@@ -14,7 +14,33 @@ public:
                                               const Eigen::Vector3d &start_acc,
                                               const Eigen::Vector3d &contact_pt,
                                               const Eigen::Vector3d &contact_vel,
+                                              const Eigen::Vector3d &contact_acc,
+                                              const Eigen::Vector3d &landing_normal,
+                                              double robot_l,
+                                              double v_plus,
+                                              bool force_plain,
+                                              bool prefer_corridor,
+                                              bool prefer_esdf);
+
+  static core::TaskDefinition buildDefinition(const Eigen::Vector3d &start_pt,
+                                              const Eigen::Vector3d &start_vel,
+                                              const Eigen::Vector3d &start_acc,
+                                              const Eigen::Vector3d &contact_pt,
+                                              const Eigen::Vector3d &contact_vel,
                                               bool force_plain);
+
+  static core::TaskSpec build(const Eigen::Vector3d &start_pt,
+                              const Eigen::Vector3d &start_vel,
+                              const Eigen::Vector3d &start_acc,
+                              const Eigen::Vector3d &contact_pt,
+                              const Eigen::Vector3d &contact_vel,
+                              const Eigen::Vector3d &contact_acc,
+                              const Eigen::Vector3d &landing_normal,
+                              double robot_l,
+                              double v_plus,
+                              bool force_plain,
+                              bool prefer_corridor,
+                              bool prefer_esdf);
 
   static core::TaskSpec build(const Eigen::Vector3d &start_pt,
                               const Eigen::Vector3d &start_vel,

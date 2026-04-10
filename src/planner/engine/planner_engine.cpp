@@ -254,7 +254,7 @@ bool PlannerEngine::solveProblem(const core::PlanningProblem &problem,
   case core::TaskType::TRACKING:
     return solveTrackingCompiledProblem(problem, solution);
   case core::TaskType::PERCHING:
-    return solvePerchingLegacy(problem, solution);
+    return solveStateToStateCompiledProblem(problem, solution);
   case core::TaskType::UNKNOWN:
   default:
     break;
@@ -280,7 +280,7 @@ bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
   case core::TaskType::TRACKING:
     return solveTrackingCompiledProblem(problem, solution);
   case core::TaskType::PERCHING:
-    return solvePerchingLegacyTask(problem.task, solution);
+    return solveStateToStateCompiledProblem(problem, solution);
   case core::TaskType::UNKNOWN:
   default:
     solution.success = false;
@@ -990,7 +990,7 @@ bool PlannerEngine::solveTrackingLegacy(const core::PlanningProblem &problem,
 bool PlannerEngine::solvePerchingLegacy(const core::PlanningProblem &problem,
                                         core::PlanningSolution &solution)
 {
-  return solvePerchingLegacyTask(problem.task, solution);
+  return solveStateToStateCompiledProblem(problem, solution);
 }
 
 } // namespace ego_planner::engine

@@ -128,8 +128,26 @@ bool FeasibleSetBuilder::buildPerchingFeasibleSets(const core::PlanningContext &
                                                    core::PlanningProblem &problem) const
 {
   (void)context;
-  (void)task_definition;
-  (void)problem;
+  if (task_definition.goal.isTerminalManifold())
+  {
+    core::FeasibleSetSpec terminal_set;
+    terminal_set.type = core::FeasibleSetType::TERMINAL_MANIFOLD;
+    terminal_set.label = "perching_terminal_manifold";
+    terminal_set.manifold_params = task_definition.goal.manifold_params;
+    terminal_set.enabled = task_definition.goal.manifold_params.size() > 0;
+    problem.feasible_sets.push_back(terminal_set);
+  }
+
+  // Perching V1 uses the state-to-state spatial model for guide/corridor/ESDF
+  // initialization, while the terminal manifold remains a terminal semantic.
+  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
+  {
+    return buildCorridorFeasibleSets(context, task_definition, problem);
+  }
+  if (problem.active_space_model == core::ActiveSpaceModel::ESDF)
+  {
+    return buildEsdfFeasibleSets(context, task_definition, problem);
+  }
   return true;
 }
 
