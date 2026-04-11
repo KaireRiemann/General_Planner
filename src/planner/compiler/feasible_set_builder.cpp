@@ -3,6 +3,22 @@
 namespace ego_planner::compiler
 {
 
+void FeasibleSetBuilder::appendPerchingTerminalManifoldSet(const core::TaskDefinition &task_definition,
+                                                           core::PlanningProblem &problem) const
+{
+  if (!task_definition.goal.isTerminalManifold())
+  {
+    return;
+  }
+
+  core::FeasibleSetSpec terminal_set;
+  terminal_set.type = core::FeasibleSetType::TERMINAL_MANIFOLD;
+  terminal_set.label = "perching_terminal_manifold";
+  terminal_set.manifold_params = task_definition.goal.manifold_params;
+  terminal_set.enabled = task_definition.goal.manifold_params.size() > 0;
+  problem.feasible_sets.push_back(terminal_set);
+}
+
 bool FeasibleSetBuilder::ensureTransitGuidePath(const core::PlanningContext &context,
                                                 const core::TaskDefinition &task_definition,
                                                 core::PlanningProblem &problem) const
@@ -127,28 +143,11 @@ bool FeasibleSetBuilder::buildPerchingFeasibleSets(const core::PlanningContext &
                                                    const core::TaskDefinition &task_definition,
                                                    core::PlanningProblem &problem) const
 {
-  (void)context;
-  if (task_definition.goal.isTerminalManifold())
-  {
-    core::FeasibleSetSpec terminal_set;
-    terminal_set.type = core::FeasibleSetType::TERMINAL_MANIFOLD;
-    terminal_set.label = "perching_terminal_manifold";
-    terminal_set.manifold_params = task_definition.goal.manifold_params;
-    terminal_set.enabled = task_definition.goal.manifold_params.size() > 0;
-    problem.feasible_sets.push_back(terminal_set);
-  }
+  appendPerchingTerminalManifoldSet(task_definition, problem);
 
-  // Perching V1 uses the state-to-state spatial model for guide/corridor/ESDF
-  // initialization, while the terminal manifold remains a terminal semantic.
-  if (problem.active_space_model == core::ActiveSpaceModel::CORRIDOR)
-  {
-    return buildCorridorFeasibleSets(context, task_definition, problem);
-  }
-  if (problem.active_space_model == core::ActiveSpaceModel::ESDF)
-  {
-    return buildEsdfFeasibleSets(context, task_definition, problem);
-  }
-  return true;
+  // Perching contributes only landing/contact semantics here. All transit
+  // guide/corridor/ESDF hint construction is shared with the generic transit path.
+  return buildTransitFeasibleSets(context, task_definition, problem);
 }
 
 bool FeasibleSetBuilder::build(const core::PlanningContext &context,

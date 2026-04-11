@@ -9,6 +9,7 @@ namespace
 using ego_planner::core::ActiveSpaceModel;
 using ego_planner::core::PlanningProblem;
 using ego_planner::core::SpaceModelPreference;
+using ego_planner::core::TaskSemanticArtifact;
 using ego_planner::core::TaskDefinition;
 using ego_planner::core::TaskType;
 
@@ -67,6 +68,50 @@ ActiveSpaceModel selectActiveSpaceModel(const TaskDefinition &task_definition,
   default:
     return ActiveSpaceModel::PLAIN;
   }
+}
+
+TaskSemanticArtifact buildTaskSemanticArtifact(const TaskDefinition &task_definition)
+{
+  TaskSemanticArtifact artifact;
+  artifact.task_type = task_definition.type;
+
+  artifact.transit.start_state = task_definition.start_state;
+  artifact.transit.terminal_state = task_definition.goal.state;
+  if (!artifact.transit.terminal_state.valid && !task_definition.phases.empty())
+  {
+    artifact.transit.terminal_state = task_definition.phases.back().goal.state;
+  }
+  artifact.transit.touch_goal =
+      task_definition.runtime_policy.touch_goal || task_definition.goal.touch_goal;
+  artifact.transit.valid =
+      artifact.transit.start_state.valid && artifact.transit.terminal_state.valid;
+
+  if (task_definition.type == TaskType::TRACKING)
+  {
+    artifact.tracking = task_definition.tracking_semantics;
+    if (!artifact.tracking.consistent())
+    {
+      const auto *tracking_reference =
+          task_definition.findActiveReference(ego_planner::core::ReferenceSemanticType::TRACKING_TRAJECTORY);
+      if (tracking_reference != nullptr && tracking_reference->tracking_reference.valid())
+      {
+        artifact.tracking =
+            ego_planner::core::TrackingSemanticArtifact::fromTrackingReference(
+                tracking_reference->tracking_reference);
+      }
+    }
+  }
+
+  if (task_definition.type == TaskType::PERCHING)
+  {
+    artifact.perching.valid = task_definition.goal.state.valid;
+    artifact.perching.contact_state = task_definition.goal.state;
+    artifact.perching.terminal_manifold_params = task_definition.goal.manifold_params;
+    artifact.perching.touch_goal =
+        task_definition.runtime_policy.touch_goal || task_definition.goal.touch_goal;
+  }
+
+  return artifact;
 }
 
 bool validateCompiledProblem(PlanningProblem &problem)
@@ -154,6 +199,7 @@ bool ProblemCompiler::compile(const core::PlanningContext &context,
   problem.compile_message.clear();
   problem.context = context;
   problem.task_definition = task_definition;
+  problem.task_semantics = buildTaskSemanticArtifact(task_definition);
   problem.task = task_definition.toTaskSpec();
   problem.prefer_legacy_fallback =
       task_definition.runtime_policy.preserve_legacy_compatibility &&

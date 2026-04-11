@@ -15,11 +15,11 @@ public:
              core::PlanningProblem &problem) const;
 
 private:
-  bool buildGuideSeed(const core::PlanningContext &context,
-                      const core::PlanningProblem &problem,
+  bool buildGuideHint(const core::PlanningProblem &problem,
                       core::SeedSpec &seed) const;
-  bool buildTransitSeed(const core::PlanningContext &context,
-                        const core::PlanningProblem &problem,
+  bool buildCorridorHint(const core::PlanningProblem &problem,
+                         core::SeedSpec &seed) const;
+  bool buildTransitHint(const core::PlanningProblem &problem,
                         core::SeedSpec &seed) const;
 
   frontend::WarmStartService warm_start_service_;

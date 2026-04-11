@@ -20,11 +20,10 @@ struct PerchingTerminalState
   Eigen::Vector3d terminal_acceleration{Eigen::Vector3d::Zero()};
 };
 
-// Converts a moving landing plate odometry into the fixed terminal boundary
-// used by Perching V1. Position/velocity mirror Fast-Perching's terminal-state
-// idea. Terminal acceleration is optional because the current generic backend
-// is still a kinematic MINCO boundary solver rather than Fast-Perching's full
-// terminal thrust/time/tangent-velocity optimizer.
+// Converts a moving landing plate odometry into perching terminal semantics.
+// This is a runtime semantic adapter only: it predicts the landing/contact
+// state consumed by TaskFactory/PerchingTask, while shared transit frontend
+// initialization still owns guide/corridor/seed generation.
 class PerchingTargetProvider
 {
 public:

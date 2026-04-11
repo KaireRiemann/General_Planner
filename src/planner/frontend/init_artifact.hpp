@@ -3,6 +3,7 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,23 @@ struct InitArtifact
   bool hasValidTiming() const
   {
     return durations.size() > 0 && durations.allFinite();
+  }
+
+  bool hasValidPieceLayout() const
+  {
+    return hasValidTiming() &&
+           inner_points.cols() == std::max(0, static_cast<int>(durations.size()) - 1);
+  }
+
+  bool hasValidCorridorAllocation() const
+  {
+    if (corridor_hpolys.empty())
+    {
+      return corridor_piece_idx.size() == 0;
+    }
+
+    return corridor_piece_idx.size() == static_cast<int>(corridor_hpolys.size()) &&
+           corridor_piece_idx.sum() == durations.size();
   }
 };
 

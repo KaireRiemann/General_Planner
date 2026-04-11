@@ -1,4 +1,5 @@
 #include <tasks/tracking_task.hpp>
+#include <tasks/state_to_state_task.hpp>
 
 namespace ego_planner::tasks
 {
@@ -13,36 +14,38 @@ core::TaskDefinition TrackingTask::buildDefinition(const cost_functional::Tracki
                                                    bool prefer_corridor,
                                                    bool prefer_esdf)
 {
-  core::TaskDefinition task;
+  const core::TrackingSemanticArtifact tracking_semantics =
+      core::TrackingSemanticArtifact::fromTrackingReference(reference);
+
+  const Eigen::Vector3d terminal_pos =
+      tracking_semantics.anchor_terminal_state.valid
+          ? tracking_semantics.anchor_terminal_state.position
+          : (reference.valid() ? reference.p_ref.back() : Eigen::Vector3d::Zero());
+  const Eigen::Vector3d terminal_vel =
+      tracking_semantics.anchor_terminal_state.valid
+          ? tracking_semantics.anchor_terminal_state.velocity
+          : ((!reference.v_ref.empty()) ? reference.v_ref.back() : Eigen::Vector3d::Zero());
+
+  // Tracking is a transit-style task with tracking-specific semantics layered
+  // on top. Shared transit template owns space-model/runtime defaults, while
+  // tracking reference processing and backend objectives remain task-specific.
+  core::TaskDefinition task = StateToStateTask::buildDefinition(start_pt,
+                                                                start_vel,
+                                                                start_acc,
+                                                                terminal_pos,
+                                                                terminal_vel,
+                                                                false,
+                                                                flag_poly_init,
+                                                                flag_random_poly_traj,
+                                                                force_plain,
+                                                                prefer_corridor,
+                                                                prefer_esdf);
   task.type = core::TaskType::TRACKING;
   task.task_name = "tracking";
-  task.start_state.valid = true;
-  task.start_state.position = start_pt;
-  task.start_state.velocity = start_vel;
-  task.start_state.acceleration = start_acc;
+  task.tracking_semantics = tracking_semantics;
 
-  task.runtime_policy.flag_poly_init = flag_poly_init;
-  task.runtime_policy.flag_random_poly_traj = flag_random_poly_traj;
   task.runtime_policy.touch_goal = false;
   task.runtime_policy.preserve_legacy_compatibility = false;
-
-  task.space_model_policy.force_plain = force_plain;
-  if (force_plain)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::PLAIN;
-  }
-  else if (prefer_corridor)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::CORRIDOR;
-  }
-  else if (prefer_esdf)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::ESDF;
-  }
-  else
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::AUTO;
-  }
 
   core::ReferenceDefinition tracking_reference;
   tracking_reference.semantic = core::ReferenceSemanticType::TRACKING_TRAJECTORY;
@@ -56,18 +59,18 @@ core::TaskDefinition TrackingTask::buildDefinition(const cost_functional::Tracki
 
   core::ReferenceDefinition guide_reference;
   guide_reference.semantic = core::ReferenceSemanticType::GUIDE_PATH;
-  guide_reference.name = "tracking_view_reference";
+  guide_reference.name = "tracking_semantic_guide";
   guide_reference.active = true;
-  if (reference.viewValid())
+  if (tracking_semantics.hasViewpointHints())
   {
-    guide_reference.points = reference.p_view_ref;
-    guide_reference.times = reference.t_view_ref;
-    guide_reference.velocities = reference.v_view_ref;
+    guide_reference.points = tracking_semantics.viewpoint_series;
+    guide_reference.times = tracking_semantics.viewpoint_times;
+    guide_reference.velocities = tracking_semantics.viewpoint_velocities;
   }
   else
   {
-    guide_reference.points = reference.p_ref;
-    guide_reference.times = reference.t_ref;
+    guide_reference.points = tracking_semantics.semantic_guide_path;
+    guide_reference.times = tracking_semantics.semantic_guide_times;
     guide_reference.velocities = reference.v_ref;
   }
   if (guide_reference.valid())
@@ -75,26 +78,17 @@ core::TaskDefinition TrackingTask::buildDefinition(const cost_functional::Tracki
     task.references.push_back(guide_reference);
   }
 
-  Eigen::Vector3d terminal_pos = Eigen::Vector3d::Zero();
-  Eigen::Vector3d terminal_vel = Eigen::Vector3d::Zero();
-  bool has_terminal = cost_functional::sampleTrackingTerminalReference(reference, terminal_pos, terminal_vel);
-  if (!has_terminal && reference.valid())
-  {
-    terminal_pos = reference.p_ref.back();
-    terminal_vel = reference.v_ref.empty() ? Eigen::Vector3d::Zero() : reference.v_ref.back();
-    has_terminal = true;
-  }
-
   task.goal.semantic = core::GoalSemanticType::FIXED_STATE;
-  task.goal.state.valid = has_terminal;
+  task.goal.state.valid = tracking_semantics.anchor_terminal_state.valid;
   task.goal.state.position = terminal_pos;
   task.goal.state.velocity = terminal_vel;
   task.goal.touch_goal = false;
 
+  task.phases.clear();
   core::PhaseDefinition phase;
   phase.name = "tracking_follow";
   phase.goal.semantic = core::GoalSemanticType::FIXED_STATE;
-  if (has_terminal)
+  if (tracking_semantics.anchor_terminal_state.valid)
   {
     phase.goal.state.valid = true;
     phase.goal.state.position = terminal_pos;

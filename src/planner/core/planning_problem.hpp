@@ -11,7 +11,9 @@
 #include <core/feasible_set_spec.hpp>
 #include <core/planning_context.hpp>
 #include <core/task_definition.hpp>
+#include <core/task_semantic_artifact.hpp>
 #include <core/task_spec.hpp>
+#include <core/tracking_semantic_artifact.hpp>
 #include <CostFunctionalManager/TrackingTypes.hpp>
 
 namespace ego_planner::core
@@ -59,10 +61,17 @@ struct CompiledReferenceSpec
   // Tracking V1 references (target/view/terminal/yaw).
   bool has_tracking_reference{false};
   cost_functional::TrackingReference tracking_reference;
+
+  // Tracking semantic adapter output. This is still hint/semantic data; final
+  // transit initialization artifacts are produced later by frontend init.
+  bool has_tracking_semantic_artifact{false};
+  TrackingSemanticArtifact tracking_semantic_artifact;
 };
 
 struct SeedSpec
 {
+  // Optional compiler-side hint only. The frontend initializer owns the final
+  // inner-points, durations, and corridor allocation used by the solver.
   enum class Kind
   {
     NONE = 0,
@@ -78,9 +87,6 @@ struct SeedSpec
   bool valid{false};
   bool corridor_aware{false};
   std::vector<Eigen::Vector3d> anchor_points;
-  Eigen::MatrixXd inner_points;
-  Eigen::VectorXd durations;
-  Eigen::VectorXi corridor_piece_idx;
 };
 
 struct VariableLayoutSpec
@@ -108,6 +114,7 @@ struct PlanningProblem
 
   PlanningContext context;
   TaskDefinition task_definition;
+  TaskSemanticArtifact task_semantics;
   TaskSpec task;
 
   std::vector<FeasibleSetSpec> feasible_sets;

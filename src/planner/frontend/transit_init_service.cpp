@@ -742,6 +742,7 @@ bool TransitInitService::initializePlain(const TransitInitRuntimeConfig &config,
                                          const core::PlanningProblem &problem,
                                          TransitInitResult &result) const
 {
+  InitArtifact &artifact = result.init_artifact;
   const core::TaskSpec &task = problem.task;
   const Eigen::Vector3d start_pt = problem.start_boundary.position;
   const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
@@ -770,34 +771,35 @@ bool TransitInitService::initializePlain(const TransitInitRuntimeConfig &config,
                            task.flag_poly_init,
                            task.flag_random_poly_traj,
                            ts,
-                           result.init_traj,
-                           result.inner_points,
-                           result.durations,
-                           result.head_state,
-                           result.tail_state,
+                           artifact.init_traj,
+                           artifact.inner_points,
+                           artifact.durations,
+                           artifact.head_state,
+                           artifact.tail_state,
                            &problem.context))
   {
     result.failure_reason = "failed to build plain initial trajectory with stable helper";
     return false;
   }
-  result.tail_state = makeBoundaryState(safe_target_pt,
-                                        goal_vel,
-                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
-  result.init_traj = generateMINCOTraj(result.head_state,
-                                       result.tail_state,
-                                       result.inner_points,
-                                       result.durations);
+  artifact.tail_state = makeBoundaryState(safe_target_pt,
+                                          goal_vel,
+                                          goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
+  artifact.init_traj = generateMINCOTraj(artifact.head_state,
+                                         artifact.tail_state,
+                                         artifact.inner_points,
+                                         artifact.durations);
 
-  result.guide_path = problem.references.guide_path;
-  result.dense_path = result.guide_path;
-  if (result.guide_path.size() >= 2)
+  artifact.guide_path = problem.references.guide_path;
+  artifact.dense_path = artifact.guide_path;
+  if (artifact.guide_path.size() >= 2)
   {
-    result.guide_path.front() = start_pt;
-    result.guide_path.back() = safe_target_pt;
-    result.dense_path = result.guide_path;
+    artifact.guide_path.front() = start_pt;
+    artifact.guide_path.back() = safe_target_pt;
+    artifact.dense_path = artifact.guide_path;
   }
-  result.init_source = "stable_helper";
-  result.success = result.init_traj.getTotalDuration() > 1.0e-6;
+  artifact.source = "stable_helper";
+  artifact.valid = artifact.init_traj.getTotalDuration() > 1.0e-6;
+  result.success = artifact.valid;
   return result.success;
 }
 
@@ -805,6 +807,7 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
                                         const core::PlanningProblem &problem,
                                         TransitInitResult &result) const
 {
+  InitArtifact &artifact = result.init_artifact;
   const core::TaskSpec &task = problem.task;
   const Eigen::Vector3d start_pt = problem.start_boundary.position;
   const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
@@ -822,22 +825,22 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
   Eigen::Vector3d safe_goal = goal_pt;
   if (problem.references.guide_path.size() >= 2)
   {
-    result.init_source = "compiled_hint";
-    result.dense_path = problem.references.guide_path;
-    result.dense_path.front() = start_pt;
-    result.dense_path.back() = safe_goal;
+    artifact.source = "compiled_hint";
+    artifact.dense_path = problem.references.guide_path;
+    artifact.dense_path.front() = start_pt;
+    artifact.dense_path.back() = safe_goal;
   }
-  else if (!guide_service.prepareLocalAStarPath(guide_config, start_pt, goal_pt, result.dense_path, safe_goal))
+  else if (!guide_service.prepareLocalAStarPath(guide_config, start_pt, goal_pt, artifact.dense_path, safe_goal))
   {
     result.failure_reason = "failed to prepare local A* path for ESDF init";
     return false;
   }
 
-  if (!guide_service.sparsifyGuidePath(guide_config, result.dense_path, result.guide_path))
+  if (!guide_service.sparsifyGuidePath(guide_config, artifact.dense_path, artifact.guide_path))
   {
-    result.guide_path = result.dense_path;
+    artifact.guide_path = artifact.dense_path;
   }
-  if (result.guide_path.size() < 2)
+  if (artifact.guide_path.size() < 2)
   {
     result.failure_reason = "failed to build stable ESDF guide path";
     return false;
@@ -849,23 +852,23 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
                                    start_acc,
                                    safe_goal,
                                    goal_vel,
-                                   result.guide_path,
-                                   result.init_traj,
-                                   result.inner_points,
-                                   result.durations,
-                                   result.head_state,
-                                   result.tail_state))
+                                   artifact.guide_path,
+                                   artifact.init_traj,
+                                   artifact.inner_points,
+                                   artifact.durations,
+                                   artifact.head_state,
+                                   artifact.tail_state))
   {
     result.failure_reason = "failed to build guide-based ESDF initial trajectory";
     return false;
   }
-  result.tail_state = makeBoundaryState(safe_goal,
-                                        goal_vel,
-                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
-  result.init_traj = generateMINCOTraj(result.head_state,
-                                       result.tail_state,
-                                       result.inner_points,
-                                       result.durations);
+  artifact.tail_state = makeBoundaryState(safe_goal,
+                                          goal_vel,
+                                          goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
+  artifact.init_traj = generateMINCOTraj(artifact.head_state,
+                                         artifact.tail_state,
+                                         artifact.inner_points,
+                                         artifact.durations);
 
   bool warm_start_used = false;
   if (!task.flag_poly_init)
@@ -892,7 +895,7 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
     {
       std::vector<Eigen::Vector3d> warm_anchors;
       if (warm_durations.size() > 0 &&
-          resamplePolylineByCount(result.guide_path, warm_durations.size() + 1, warm_anchors))
+          resamplePolylineByCount(artifact.guide_path, warm_durations.size() + 1, warm_anchors))
       {
         Eigen::MatrixXd warm_inner_from_guide(3, std::max(0, static_cast<int>(warm_anchors.size()) - 2));
         for (int i = 1; i + 1 < static_cast<int>(warm_anchors.size()); ++i)
@@ -900,29 +903,34 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
           warm_inner_from_guide.col(i - 1) = warm_anchors[static_cast<std::size_t>(i)];
         }
         MINCOTraj3D mixed_init_traj;
-        if (mixed_init_traj.generate(warm_inner_from_guide, result.head_state, result.tail_state, warm_durations))
+        if (mixed_init_traj.generate(warm_inner_from_guide, artifact.head_state, artifact.tail_state, warm_durations))
         {
-          result.inner_points = warm_inner_from_guide;
-          result.durations = warm_durations;
-          result.init_traj = mixed_init_traj;
+          artifact.inner_points = warm_inner_from_guide;
+          artifact.durations = warm_durations;
+          artifact.init_traj = mixed_init_traj;
           warm_start_used = true;
-          if (result.init_source == "compiled_hint")
+          if (artifact.source == "compiled_hint")
           {
-            result.init_source = "mixed";
+            artifact.source = "mixed";
           }
         }
       }
     }
   }
 
-  result.init_min_sdf = computeTrajectoryMinSdf(config, result.init_traj);
+  artifact.min_sdf = computeTrajectoryMinSdf(config, artifact.init_traj);
   const double esdf_tol = config.grid_map ? -std::max(0.02, 0.5 * config.grid_map->getResolution()) : 0.0;
-  result.init_collision_free = result.init_min_sdf >= esdf_tol;
-  if (warm_start_used && result.init_source == "stable_helper")
+  artifact.collision_free = artifact.min_sdf >= esdf_tol;
+  if (warm_start_used && artifact.source.empty())
   {
-    result.init_source = "mixed";
+    artifact.source = "mixed";
   }
-  result.success = result.init_traj.getTotalDuration() > 1.0e-6;
+  if (artifact.source.empty())
+  {
+    artifact.source = "stable_helper";
+  }
+  artifact.valid = artifact.init_traj.getTotalDuration() > 1.0e-6;
+  result.success = artifact.valid;
   return result.success;
 }
 
@@ -930,6 +938,7 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
                                             const core::PlanningProblem &problem,
                                             TransitInitResult &result) const
 {
+  InitArtifact &artifact = result.init_artifact;
   const core::TaskSpec &task = problem.task;
   const Eigen::Vector3d start_pt = problem.start_boundary.position;
   const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
@@ -954,10 +963,10 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
     return false;
   }
 
-  result.head_state = makeBoundaryState(start_pt, start_vel, start_acc);
-  result.tail_state = makeBoundaryState(safe_target_pt,
-                                        goal_vel,
-                                        goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
+  artifact.head_state = makeBoundaryState(start_pt, start_vel, start_acc);
+  artifact.tail_state = makeBoundaryState(safe_target_pt,
+                                          goal_vel,
+                                          goal_acc.allFinite() ? goal_acc : Eigen::Vector3d::Zero());
 
   const auto *corridor_set = findCorridorSet(problem);
 
@@ -1033,7 +1042,7 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
       }
     }
 
-    if (!candidate_traj.generate(candidate_inner_pts, result.head_state, result.tail_state, candidate_durations) ||
+    if (!candidate_traj.generate(candidate_inner_pts, artifact.head_state, artifact.tail_state, candidate_durations) ||
         candidate_traj.getTotalDuration() <= 1.0e-6)
     {
       if (authoritative_failure)
@@ -1045,8 +1054,8 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
     }
 
     const bool time_scaling_feasible = improveCorridorSeedByTimeScaling(config,
-                                                                        result.head_state,
-                                                                        result.tail_state,
+                                                                        artifact.head_state,
+                                                                        artifact.tail_state,
                                                                         candidate_inner_pts,
                                                                         candidate_durations,
                                                                         candidate_corridor,
@@ -1067,19 +1076,20 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
       return false;
     }
 
-    result.init_source = candidate_source;
-    result.guide_path = candidate_guide_path;
-    result.dense_path = candidate_dense_path.empty() ? candidate_guide_path : candidate_dense_path;
-    result.corridor_hpolys = candidate_corridor;
-    result.corridor_piece_idx = candidate_alloc;
-    result.inner_points = candidate_inner_pts;
-    result.durations = candidate_durations;
-    result.init_traj = candidate_traj;
+    artifact.source = candidate_source;
+    artifact.guide_path = candidate_guide_path;
+    artifact.dense_path = candidate_dense_path.empty() ? candidate_guide_path : candidate_dense_path;
+    artifact.corridor_hpolys = candidate_corridor;
+    artifact.corridor_piece_idx = candidate_alloc;
+    artifact.inner_points = candidate_inner_pts;
+    artifact.durations = candidate_durations;
+    artifact.init_traj = candidate_traj;
     result.corridor_warm_timing_used = warm_timing_used;
     result.corridor_time_scaling_feasible = time_scaling_feasible;
-    result.init_collision_free = collision_free;
-    result.init_inside_corridor = inside_corridor;
-    result.init_min_sdf = computeTrajectoryMinSdf(config, candidate_traj);
+    artifact.collision_free = collision_free;
+    artifact.inside_corridor = inside_corridor;
+    artifact.min_sdf = computeTrajectoryMinSdf(config, candidate_traj);
+    artifact.valid = true;
     return true;
   };
 
@@ -1164,7 +1174,7 @@ bool TransitInitService::initializeCorridor(const TransitInitRuntimeConfig &conf
                                                              Eigen::VectorXi(),
                                                              result.compiler_hint_attempted ? "mixed" : "stable_helper",
                                                              true);
-  result.success = result.stable_helper_succeeded;
+  result.success = result.stable_helper_succeeded && artifact.valid;
   return result.success;
 }
 

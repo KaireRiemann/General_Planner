@@ -17,6 +17,8 @@ public:
              core::PlanningProblem &problem) const;
 
 private:
+  void appendPerchingTerminalManifoldSet(const core::TaskDefinition &task_definition,
+                                         core::PlanningProblem &problem) const;
   bool ensureTransitGuidePath(const core::PlanningContext &context,
                               const core::TaskDefinition &task_definition,
                               core::PlanningProblem &problem) const;

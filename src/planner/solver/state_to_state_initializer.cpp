@@ -74,7 +74,6 @@ void copyTransitResult(const frontend::TransitInitResult &frontend_result,
 {
   result.success = frontend_result.success;
   result.selected_mode = frontend_result.selected_mode;
-  result.init_source = frontend_result.init_source;
   result.message = frontend_result.message;
   result.failure_reason = frontend_result.failure_reason;
   result.failure_type = mapFailureType(frontend_result.failure_type);
@@ -85,20 +84,7 @@ void copyTransitResult(const frontend::TransitInitResult &frontend_result,
   result.stable_helper_succeeded = frontend_result.stable_helper_succeeded;
   result.corridor_warm_timing_used = frontend_result.corridor_warm_timing_used;
   result.corridor_time_scaling_feasible = frontend_result.corridor_time_scaling_feasible;
-  result.init_collision_free = frontend_result.init_collision_free;
-  result.init_inside_corridor = frontend_result.init_inside_corridor;
-  result.init_min_sdf = frontend_result.init_min_sdf;
-
-  result.head_state = frontend_result.head_state;
-  result.tail_state = frontend_result.tail_state;
-  result.inner_points = frontend_result.inner_points;
-  result.durations = frontend_result.durations;
-  result.init_traj = frontend_result.init_traj;
-
-  result.guide_path = frontend_result.guide_path;
-  result.dense_path = frontend_result.dense_path;
-  result.corridor_hpolys = frontend_result.corridor_hpolys;
-  result.corridor_piece_idx = frontend_result.corridor_piece_idx;
+  result.init_artifact = frontend_result.init_artifact;
 }
 
 } // namespace
@@ -336,7 +322,7 @@ bool StateToStateInitializer::initialize(const core::PlanningProblem &problem,
   {
     if (result.message.empty())
     {
-      result.message = "initialized via " + result.init_source;
+      result.message = "initialized via " + result.init_artifact.source;
     }
   }
   else if (result.message.empty())

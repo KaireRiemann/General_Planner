@@ -16,10 +16,28 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
   problem.start_boundary.velocity = task_definition.start_state.velocity;
   problem.start_boundary.acceleration = task_definition.start_state.acceleration;
 
-  problem.terminal_boundary.valid = task_definition.goal.state.valid;
-  problem.terminal_boundary.position = task_definition.goal.state.position;
-  problem.terminal_boundary.velocity = task_definition.goal.state.velocity;
-  problem.terminal_boundary.acceleration = task_definition.goal.state.acceleration;
+  if (task_definition.type == core::TaskType::TRACKING &&
+      task_definition.tracking_semantics.consistent())
+  {
+    problem.references.has_tracking_semantic_artifact = true;
+    problem.references.tracking_semantic_artifact = task_definition.tracking_semantics;
+    problem.terminal_boundary.valid = task_definition.tracking_semantics.anchor_terminal_state.valid;
+    problem.terminal_boundary.position = task_definition.tracking_semantics.anchor_terminal_state.position;
+    problem.terminal_boundary.velocity = task_definition.tracking_semantics.anchor_terminal_state.velocity;
+    problem.terminal_boundary.acceleration = task_definition.tracking_semantics.anchor_terminal_state.acceleration;
+    if (problem.references.guide_path.empty())
+    {
+      problem.references.guide_path = task_definition.tracking_semantics.semantic_guide_path;
+      problem.references.guide_times = task_definition.tracking_semantics.semantic_guide_times;
+    }
+  }
+  else
+  {
+    problem.terminal_boundary.valid = task_definition.goal.state.valid;
+    problem.terminal_boundary.position = task_definition.goal.state.position;
+    problem.terminal_boundary.velocity = task_definition.goal.state.velocity;
+    problem.terminal_boundary.acceleration = task_definition.goal.state.acceleration;
+  }
 
   for (const auto &reference : task_definition.references)
   {
@@ -58,6 +76,23 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
         problem.terminal_boundary.position = p_term;
         problem.terminal_boundary.velocity = v_term;
       }
+    }
+  }
+
+  if (problem.references.has_tracking_semantic_artifact)
+  {
+    const auto &tracking_semantics = problem.references.tracking_semantic_artifact;
+    if (tracking_semantics.hasSemanticGuidePath())
+    {
+      problem.references.guide_path = tracking_semantics.semantic_guide_path;
+      problem.references.guide_times = tracking_semantics.semantic_guide_times;
+    }
+    if (tracking_semantics.anchor_terminal_state.valid)
+    {
+      problem.terminal_boundary.valid = true;
+      problem.terminal_boundary.position = tracking_semantics.anchor_terminal_state.position;
+      problem.terminal_boundary.velocity = tracking_semantics.anchor_terminal_state.velocity;
+      problem.terminal_boundary.acceleration = tracking_semantics.anchor_terminal_state.acceleration;
     }
   }
 

@@ -6,11 +6,9 @@
 #include <solver/state_to_state_initializer.hpp>
 #include "visualization_msgs/Marker.h"
 
-#include <array>
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <sstream>
 #include <set>
 
@@ -133,108 +131,6 @@ namespace ego_planner
         return "ESDF";
       }
       return "PLAIN";
-    }
-
-    bool improveCorridorSeedByTimeScaling(const PolyTrajOptimizer *optimizer,
-                                          const MINCOBoundaryState3D &head_state,
-                                          const MINCOBoundaryState3D &tail_state,
-                                          const Eigen::MatrixXd &inner_pts,
-                                          Eigen::VectorXd &durations,
-                                          const spatial_map::PolyhedraH &corridor_hpolys,
-                                          MINCOTraj3D &traj)
-    {
-      if (!traj.generate(inner_pts, head_state, tail_state, durations))
-      {
-        return false;
-      }
-
-      const auto seedIsFeasible = [&](const MINCOTraj3D &candidate) -> bool
-      {
-        return optimizer != nullptr &&
-               optimizer->isTrajectoryCollisionFree(candidate) &&
-               optimizer->isTrajectoryInsideCorridor(candidate, corridor_hpolys, 0.0);
-      };
-
-      if (seedIsFeasible(traj))
-      {
-        return true;
-      }
-
-      const Eigen::VectorXd base_durations = durations;
-      const std::array<double, 7> scale_candidates{{1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0}};
-      bool found_feasible = false;
-
-      for (const double scale : scale_candidates)
-      {
-        const Eigen::VectorXd scaled_durations = base_durations * scale;
-        MINCOTraj3D scaled_traj;
-        if (!scaled_traj.generate(inner_pts, head_state, tail_state, scaled_durations))
-        {
-          continue;
-        }
-
-        durations = scaled_durations;
-        traj = scaled_traj;
-        if (seedIsFeasible(traj))
-        {
-          found_feasible = true;
-          break;
-        }
-      }
-
-      return found_feasible;
-    }
-
-    bool resamplePolylineByCount(const std::vector<Eigen::Vector3d> &path,
-                                 const int sample_count,
-                                 std::vector<Eigen::Vector3d> &samples)
-    {
-      samples.clear();
-      if (path.size() < 2 || sample_count < 2)
-      {
-        return false;
-      }
-
-      std::vector<double> accum(path.size(), 0.0);
-      for (std::size_t i = 1; i < path.size(); ++i)
-      {
-        accum[i] = accum[i - 1] + (path[i] - path[i - 1]).norm();
-      }
-
-      const double total_len = accum.back();
-      if (total_len < 1.0e-6)
-      {
-        samples.assign(static_cast<std::size_t>(sample_count), path.front());
-        return true;
-      }
-
-      samples.reserve(static_cast<std::size_t>(sample_count));
-      for (int k = 0; k < sample_count; ++k)
-      {
-        const double target_s = (sample_count == 1)
-                                    ? 0.0
-                                    : total_len * static_cast<double>(k) / static_cast<double>(sample_count - 1);
-        auto upper = std::lower_bound(accum.begin(), accum.end(), target_s);
-        const int idx = static_cast<int>(std::distance(accum.begin(), upper));
-        if (idx <= 0)
-        {
-          samples.push_back(path.front());
-          continue;
-        }
-        if (idx >= static_cast<int>(path.size()))
-        {
-          samples.push_back(path.back());
-          continue;
-        }
-
-        const double s0 = accum[static_cast<std::size_t>(idx - 1)];
-        const double s1 = accum[static_cast<std::size_t>(idx)];
-        const double denom = std::max(1.0e-9, s1 - s0);
-        const double alpha = (target_s - s0) / denom;
-        samples.push_back(path[static_cast<std::size_t>(idx - 1)] +
-                          alpha * (path[static_cast<std::size_t>(idx)] - path[static_cast<std::size_t>(idx - 1)]));
-      }
-      return samples.size() == static_cast<std::size_t>(sample_count);
     }
 
     Eigen::Vector3d rotateOnYaw(const Eigen::Vector3d &dir, const double angle_rad)
@@ -437,6 +333,21 @@ namespace ego_planner
     have_active_tracking_semantic_guide_ = false;
     active_tracking_semantic_guide_.clear();
     active_tracking_corridor_.clear();
+  }
+
+  void EGOPlannerManager::setActiveTrackingArtifacts(
+      const cost_functional::TrackingSemanticGuide &semantic_guide,
+      const spatial_map::PolyhedraH &corridor_hpolys)
+  {
+    if (!semantic_guide.consistent())
+    {
+      clearActiveTrackingArtifacts();
+      return;
+    }
+
+    active_tracking_semantic_guide_ = semantic_guide;
+    active_tracking_corridor_ = corridor_hpolys;
+    have_active_tracking_semantic_guide_ = true;
   }
 
   solver::StateToStateInitResources EGOPlannerManager::makeStateToStateInitResources() const
@@ -1879,7 +1790,6 @@ namespace ego_planner
 
     /*** STEP 1: INIT ***/
     ploy_traj_opt_->setIfTouchGoal(touch_goal);
-    double ts = pp_.polyTraj_piece_length / pp_.max_vel_;
 
     MINCOTraj3D initTraj;
     Eigen::MatrixXd innerPts;
@@ -1913,7 +1823,10 @@ namespace ego_planner
     const bool has_tracking_semantic_guide =
         tracking_semantic_guide != nullptr && tracking_semantic_guide->consistent();
 
-    if (!is_tracking_task)
+    // Legacy task entrypoints still arrive here, but plain/ESDF/corridor
+    // initialization is now unified through StateToStateInitializer and the
+    // frontend init services. Tracking/perching semantics remain in their task
+    // providers and optimizer/terminal handling, not in duplicated init code.
     {
       core::PlanningProblem init_problem;
       init_problem.representation = core::RepresentationKind::MINCO;
@@ -1929,8 +1842,14 @@ namespace ego_planner
       init_problem.terminal_boundary.position = safe_target_pt;
       init_problem.terminal_boundary.velocity = local_target_vel;
       init_problem.terminal_boundary.acceleration = Eigen::Vector3d::Zero();
-      init_problem.task.type = core::TaskType::STATE_TO_STATE;
-      init_problem.task.task_name = "legacy_state_to_state_compat";
+      init_problem.task.type = is_tracking_task
+                                   ? core::TaskType::TRACKING
+                                   : (touch_goal ? core::TaskType::PERCHING
+                                                 : core::TaskType::STATE_TO_STATE);
+      init_problem.task.task_name = is_tracking_task
+                                        ? "legacy_tracking_compat"
+                                        : (touch_goal ? "legacy_perching_compat"
+                                                      : "legacy_state_to_state_compat");
       init_problem.task.start_pt = start_pt;
       init_problem.task.start_vel = start_vel;
       init_problem.task.start_acc = start_acc;
@@ -1940,6 +1859,15 @@ namespace ego_planner
       init_problem.task.flag_poly_init = flag_polyInit;
       init_problem.task.flag_random_poly_traj = flag_randomPolyTraj;
       init_problem.task.force_plain = force_plain;
+      if (is_tracking_task)
+      {
+        init_problem.task.tracking_reference = *tracking_ref;
+        init_problem.references.has_tracking_reference = true;
+        init_problem.references.tracking_reference = *tracking_ref;
+        init_problem.references.t_ref = tracking_ref->t_ref;
+        init_problem.references.p_ref = tracking_ref->p_ref;
+        init_problem.references.v_ref = tracking_ref->v_ref;
+      }
       init_problem.context.now = ros::Time::now().toSec();
       init_problem.context.map_ready = mapWindowReady();
       init_problem.context.has_grid_map = (grid_map_ != nullptr);
@@ -1968,7 +1896,15 @@ namespace ego_planner
           traj_.global_traj.last_glb_t_of_lc_tgt >= 0.0;
       init_problem.context.preview_glb_t_of_lc_tgt = traj_.global_traj.glb_t_of_lc_tgt;
       init_problem.context.preview_last_glb_t_of_lc_tgt = traj_.global_traj.last_glb_t_of_lc_tgt;
-      if (has_preferred_guide)
+      if (has_tracking_semantic_guide &&
+          tracking_semantic_guide->corridor_seed_path.size() >= 2)
+      {
+        init_problem.references.guide_path = tracking_semantic_guide->corridor_seed_path;
+        init_problem.references.guide_path.front() = start_pt;
+        init_problem.references.guide_path.back() = safe_target_pt;
+        init_problem.references.guide_times = tracking_semantic_guide->corridor_seed_times;
+      }
+      else if (has_preferred_guide)
       {
         init_problem.references.guide_path = *preferred_guide_path;
       }
@@ -2000,353 +1936,66 @@ namespace ego_planner
         return false;
       }
 
-      initTraj = init_result.init_traj;
-      innerPts = init_result.inner_points;
-      durations = init_result.durations;
-      headState = init_result.head_state;
-      tailState = init_result.tail_state;
-      corridor_hpolys = init_result.corridor_hpolys;
-      corridor_piece_idx = init_result.corridor_piece_idx;
+      const frontend::InitArtifact &init_artifact = init_result.init_artifact;
+      initTraj = init_artifact.init_traj;
+      innerPts = init_artifact.inner_points;
+      durations = init_artifact.durations;
+      headState = init_artifact.head_state;
+      tailState = init_artifact.tail_state;
+      corridor_hpolys = init_artifact.corridor_hpolys;
+      corridor_piece_idx = init_artifact.corridor_piece_idx;
 
-      ROS_INFO("Legacy compatibility init now delegated to StateToStateInitializer: mode=%s source=%s guide_pts=%zu corridor_polys=%zu pieces=%ld",
+      if (use_corridor &&
+          (corridor_piece_idx.size() != static_cast<int>(corridor_hpolys.size()) ||
+           corridor_piece_idx.sum() != durations.size()))
+      {
+        reportCorridorFailure(FAIL_CORRIDOR_INIT,
+                              "frontend init returned invalid corridor piece allocation");
+        return false;
+      }
+
+      ROS_INFO("Legacy compatibility init now delegated to StateToStateInitializer: task=%s mode=%s source=%s guide_pts=%zu corridor_polys=%zu pieces=%ld",
+               is_tracking_task ? "TRACKING" : (touch_goal ? "PERCHING" : "STATE_TO_STATE"),
                use_corridor ? "CORRIDOR" : (use_esdf ? "ESDF" : "PLAIN"),
-               init_result.init_source.c_str(),
-               init_result.guide_path.size(),
-               init_result.corridor_hpolys.size(),
-               static_cast<long>(init_result.durations.size()));
+               init_artifact.source.c_str(),
+               init_artifact.guide_path.size(),
+               init_artifact.corridor_hpolys.size(),
+               static_cast<long>(init_artifact.durations.size()));
 
       if (visualization_)
       {
+        const int frontend_color = is_tracking_task ? 2 : 0;
+        const int esdf_color = is_tracking_task ? 2 : 1;
         if (use_esdf)
         {
-          if (!init_result.dense_path.empty())
+          if (!init_artifact.dense_path.empty())
           {
-            visualization_->displayGlobalPathList(init_result.dense_path, 0.08, 1);
+            visualization_->displayGlobalPathList(init_artifact.dense_path, 0.08, esdf_color);
           }
-          if (!init_result.guide_path.empty())
+          if (!init_artifact.guide_path.empty())
           {
-            visualization_->displayFrontendList(init_result.guide_path, 0.10, 1);
+            visualization_->displayFrontendList(init_artifact.guide_path, 0.10, esdf_color);
           }
         }
         else if (use_corridor)
         {
-          if (!init_result.dense_path.empty())
+          if (!init_artifact.dense_path.empty())
           {
-            visualization_->displayGlobalPathList(init_result.dense_path, 0.08, 0);
+            visualization_->displayGlobalPathList(init_artifact.dense_path, 0.08, frontend_color);
           }
-          if (!init_result.guide_path.empty())
+          if (!init_artifact.guide_path.empty())
           {
-            visualization_->displayFrontendList(init_result.guide_path, 0.12, 0);
+            visualization_->displayFrontendList(init_artifact.guide_path, 0.12, frontend_color);
           }
-          if (!init_result.corridor_hpolys.empty())
+          if (!init_artifact.corridor_hpolys.empty())
           {
             std::vector<Eigen::Vector3d> tri, edges;
-            buildCorridorVisualization(init_result.corridor_hpolys, tri, edges);
-            visualization_->displayCorridor(tri, edges, 0);
+            buildCorridorVisualization(init_artifact.corridor_hpolys, tri, edges);
+            visualization_->displayCorridor(tri, edges, frontend_color);
           }
         }
       }
     }
-    else if (use_corridor)
-    {
-      std::vector<Eigen::Vector3d> guide_path;
-      std::vector<Eigen::Vector3d> transition_points;
-      std::vector<double> inner_clearances;
-      bool corridor_ready = false;
-      if (has_tracking_semantic_guide)
-      {
-        guide_path = tracking_semantic_guide->corridor_seed_path;
-        guide_path.front() = start_pt;
-        guide_path.back() = safe_target_pt;
-        corridor_ready =
-            generateTrackingSafeFlightCorridor(*tracking_semantic_guide,
-                                              corridor_hpolys,
-                                              corridor_piece_idx);
-
-        if (corridor_ready && visualization_)
-        {
-          visualization_->displayGlobalPathList(tracking_semantic_guide->corridor_seed_path, 0.08, 2);
-          visualization_->displayFrontendList(guide_path, 0.12, 2);
-
-          std::vector<Eigen::Vector3d> tri, edges;
-          buildCorridorVisualization(corridor_hpolys, tri, edges);
-          visualization_->displayCorridor(tri, edges, 2);
-        }
-      }
-      else if (has_preferred_guide)
-      {
-        guide_path = *preferred_guide_path;
-        guide_path.front() = start_pt;
-        guide_path.back() = safe_target_pt;
-
-        std::vector<Eigen::Vector3d> sparse_guide_path;
-        if (state_to_state_initializer.sparsifyGuidePath(guide_path, sparse_guide_path) &&
-            state_to_state_initializer.generateSafeFlightCorridor(sparse_guide_path, corridor_hpolys))
-        {
-          guide_path = sparse_guide_path;
-          corridor_ready = true;
-        }
-        else if (state_to_state_initializer.generateSafeFlightCorridor(guide_path, corridor_hpolys))
-        {
-          corridor_ready = true;
-        }
-        else
-        {
-          ROS_WARN("Tracking preferred guide path failed to generate corridor, fallback to local guide search.");
-        }
-
-        if (corridor_ready && visualization_)
-        {
-          visualization_->displayGlobalPathList(*preferred_guide_path, 0.08, 2);
-          visualization_->displayFrontendList(guide_path, 0.12, 2);
-
-          std::vector<Eigen::Vector3d> tri, edges;
-          buildCorridorVisualization(corridor_hpolys, tri, edges);
-          visualization_->displayCorridor(tri, edges, 2);
-        }
-      }
-
-      if (!corridor_ready &&
-          !state_to_state_initializer.prepareLocalGuideAndCorridor(start_pt,
-                                                                   start_vel,
-                                                                   safe_target_pt,
-                                                                   guide_path,
-                                                                   corridor_hpolys))
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_GENERATION,
-                              "compatibility corridor helper failed in StateToStateInitializer");
-        return false;
-      }
-      if (!corridor_ready && visualization_)
-      {
-        visualization_->displayFrontendList(guide_path, 0.12, 0);
-        std::vector<Eigen::Vector3d> tri, edges;
-        buildCorridorVisualization(corridor_hpolys, tri, edges);
-        visualization_->displayCorridor(tri, edges, 0);
-      }
-      const bool tracking_semantic_init_ok =
-          has_tracking_semantic_guide &&
-          buildTimeAlignedTrackingInitialGuess(start_pt,
-                                              start_vel,
-                                              safe_target_pt,
-                                              *tracking_semantic_guide,
-                                              corridor_hpolys,
-                                              innerPts,
-                                              durations,
-                                              corridor_piece_idx,
-                                              &inner_clearances);
-      if (!tracking_semantic_init_ok &&
-          !state_to_state_initializer.buildCorridorAwareInitialGuess(start_pt,
-                                                                     start_vel,
-                                                                     safe_target_pt,
-                                                                     corridor_hpolys,
-                                                                     innerPts,
-                                                                     durations,
-                                                                     corridor_piece_idx,
-                                                                     transition_points,
-                                                                     inner_clearances))
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_INIT, "failed to build GCOPTER-style corridor initial guess");
-        return false;
-      }
-
-      bool corridor_warm_timing_used = false;
-      if (!flag_polyInit)
-      {
-        MINCOTraj3D warm_traj;
-        Eigen::MatrixXd warm_inner_pts;
-        Eigen::VectorXd warm_durations;
-        MINCOBoundaryState3D warm_head, warm_tail;
-
-        const bool warm_ok = state_to_state_initializer.computeInitState(start_pt,
-                                                                         start_vel,
-                                                                         start_acc,
-                                                                         safe_target_pt,
-                                                                         local_target_vel,
-                                                                         false,
-                                                                         false,
-                                                                         ts,
-                                                                         warm_traj,
-                                                                         warm_inner_pts,
-                                                                         warm_durations,
-                                                                         warm_head,
-                                                                         warm_tail);
-        if (warm_ok && state_to_state_initializer.applyWarmStartTimingProfile(warm_durations, durations))
-        {
-          corridor_warm_timing_used = true;
-        }
-      }
-
-      if (!initTraj.generate(innerPts, headState, tailState, durations))
-      {
-        reportCorridorFailure(FAIL_CORRIDOR_INIT, "failed to generate corridor-seeded MINCO trajectory");
-        return false;
-      }
-
-      const bool init_seed_feasible = improveCorridorSeedByTimeScaling(ploy_traj_opt_.get(),
-                                                                       headState,
-                                                                       tailState,
-                                                                       innerPts,
-                                                                       durations,
-                                                                       corridor_hpolys,
-                                                                       initTraj);
-      if (initTraj.getTotalDuration() <= 1.0e-6)
-      {
-        ROS_ERROR("Failed to generate corridor-seeded MINCO trajectory.");
-        return false;
-      }
-
-      const bool seed_collision_free = ploy_traj_opt_->isTrajectoryCollisionFree(initTraj);
-      const bool seed_inside_corridor =
-          ploy_traj_opt_->isTrajectoryInsideCorridor(initTraj, corridor_hpolys, 0.0);
-      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f inside_corridor=%s",
-               seed_collision_free ? "yes" : "no",
-               state_to_state_initializer.computeTrajectoryMinSdf(initTraj),
-               seed_inside_corridor ? "yes" : "no");
-      ROS_INFO("Corridor seed warm_timing=%s time_scaling_feasible=%s",
-               corridor_warm_timing_used ? "yes" : "no",
-               init_seed_feasible ? "yes" : "no");
-
-      if (!seed_collision_free || !seed_inside_corridor)
-      {
-        std::stringstream ss;
-        ss << "corridor seed remains infeasible after conservative timing/scaling: "
-           << "collision_free=" << (seed_collision_free ? "yes" : "no")
-           << " inside_corridor=" << (seed_inside_corridor ? "yes" : "no");
-        reportCorridorFailure(FAIL_CORRIDOR_INIT, ss.str());
-        return false;
-      }
-    }
-    else if (use_esdf)
-    {
-      std::vector<Eigen::Vector3d> dense_path, guide_path;
-      Eigen::Vector3d safe_goal = safe_target_pt;
-      if (has_preferred_guide)
-      {
-        dense_path = *preferred_guide_path;
-        dense_path.front() = start_pt;
-        dense_path.back() = safe_goal;
-        if (!state_to_state_initializer.sparsifyGuidePath(dense_path, guide_path))
-        {
-          guide_path = dense_path;
-        }
-      }
-      else if (!state_to_state_initializer.prepareLocalAStarPath(start_pt, safe_target_pt, dense_path, safe_goal))
-      {
-        ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot prepare local A* path for ESDF");
-        return false;
-      }
-
-      if (guide_path.empty() && !state_to_state_initializer.sparsifyGuidePath(dense_path, guide_path))
-      {
-        ROS_WARN("FAIL_LOCAL_ASTAR_SEARCH: cannot sparsify ESDF guide path");
-        return false;
-      }
-
-      if (visualization_)
-      {
-        visualization_->displayGlobalPathList(dense_path, 0.08, 1);
-        visualization_->displayFrontendList(guide_path, 0.10, 1);
-      }
-
-      Eigen::MatrixXd guide_inner_pts;
-      Eigen::VectorXd guide_durations;
-      MINCOTraj3D guide_init_traj;
-      if (!state_to_state_initializer.buildInitStateFromGuidePath(start_pt,
-                                                                  start_vel,
-                                                                  start_acc,
-                                                                  safe_goal,
-                                                                  local_target_vel,
-                                                                  guide_path,
-                                                                  guide_init_traj,
-                                                                  guide_inner_pts,
-                                                                  guide_durations,
-                                                                  headState,
-                                                                  tailState))
-      {
-        ROS_WARN("FAIL_ESDF_INIT: failed to build guide-based initial trajectory.");
-        return false;
-      }
-
-      innerPts = guide_inner_pts;
-      durations = guide_durations;
-      initTraj = guide_init_traj;
-
-      bool warm_start_used = false;
-      if (!flag_polyInit)
-      {
-        MINCOTraj3D warm_traj;
-        Eigen::MatrixXd warm_inner_pts;
-        Eigen::VectorXd warm_durations;
-        MINCOBoundaryState3D warm_head, warm_tail;
-        const bool warm_ok = state_to_state_initializer.computeInitState(start_pt,
-                                                                         start_vel,
-                                                                         start_acc,
-                                                                         safe_goal,
-                                                                         local_target_vel,
-                                                                         false,
-                                                                         false,
-                                                                         ts,
-                                                                         warm_traj,
-                                                                         warm_inner_pts,
-                                                                         warm_durations,
-                                                                         warm_head,
-                                                                         warm_tail);
-
-        if (warm_ok && warm_durations.size() > 0)
-        {
-          std::vector<Eigen::Vector3d> warm_anchors;
-          if (resamplePolylineByCount(guide_path, warm_durations.size() + 1, warm_anchors))
-          {
-            Eigen::MatrixXd warm_inner_from_guide(3, std::max(0, static_cast<int>(warm_anchors.size()) - 2));
-            for (int i = 1; i + 1 < static_cast<int>(warm_anchors.size()); ++i)
-            {
-              warm_inner_from_guide.col(i - 1) = warm_anchors[static_cast<std::size_t>(i)];
-            }
-
-            MINCOTraj3D mixed_init_traj;
-            if (mixed_init_traj.generate(warm_inner_from_guide, headState, tailState, warm_durations))
-            {
-              innerPts = warm_inner_from_guide;
-              durations = warm_durations;
-              initTraj = mixed_init_traj;
-              warm_start_used = true;
-            }
-          }
-        }
-      }
-
-      ROS_INFO("ESDF init strategy: %s (guide_points=%zu pieces=%ld)",
-               warm_start_used ? "warm_duration+guide_inner" : "guide_only",
-               guide_path.size(),
-               static_cast<long>(durations.size()));
-      const double init_min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(initTraj);
-      const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
-      const bool init_esdf_free = init_min_sdf >= esdf_tol;
-      ROS_INFO("INIT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-               init_esdf_free ? "yes" : "no",
-               init_min_sdf);
-    }
-    else
-    {
-      if (!state_to_state_initializer.computeInitState(start_pt,
-                                                       start_vel,
-                                                       start_acc,
-                                                       safe_target_pt,
-                                                       local_target_vel,
-                                                       flag_polyInit,
-                                                       flag_randomPolyTraj,
-                                                       ts,
-                                                       initTraj,
-                                                       innerPts,
-                                                       durations,
-                                                       headState,
-                                                       tailState))
-      {
-        return false;
-      }
-    }
-
     Eigen::MatrixXd cstr_pts = initTraj.getInitConstraintPoints(ploy_traj_opt_->get_cps_num_prePiece_());
     std::vector<std::pair<int, int>> segments;
     if (!use_corridor && !use_esdf)

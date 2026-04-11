@@ -7,6 +7,7 @@
 #include <core/runtime_policy.hpp>
 #include <core/space_model_policy.hpp>
 #include <core/task_spec.hpp>
+#include <core/tracking_semantic_artifact.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +61,7 @@ struct TaskDefinition
   GoalDefinition goal;
   std::vector<PhaseDefinition> phases;
   std::vector<ReferenceDefinition> references;
+  TrackingSemanticArtifact tracking_semantics;
 
   SpaceModelPolicy space_model_policy;
   ObjectiveConstraintPolicy objective_constraint_policy;
@@ -221,9 +223,25 @@ struct TaskDefinition
       }
       break;
     case TaskType::PERCHING:
-      definition.space_model_policy.preferred =
-          task.force_plain ? SpaceModelPreference::PLAIN
-                           : SpaceModelPreference::TERMINAL_MANIFOLD;
+      // Perching keeps terminal-manifold semantics in goal/phases, but it uses
+      // the same transit spatial-model selection as state-to-state for
+      // plain/ESDF/corridor initialization.
+      if (task.force_plain)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::PLAIN;
+      }
+      else if (task.prefer_corridor)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::CORRIDOR;
+      }
+      else if (task.prefer_esdf)
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::ESDF;
+      }
+      else
+      {
+        definition.space_model_policy.preferred = SpaceModelPreference::AUTO;
+      }
       break;
     case TaskType::STATE_TO_STATE:
       if (task.force_plain)
@@ -267,6 +285,11 @@ struct TaskDefinition
       tracking_reference.active = true;
       tracking_reference.tracking_reference = task.tracking_reference;
       definition.references.push_back(tracking_reference);
+      if (definition.type == TaskType::TRACKING)
+      {
+        definition.tracking_semantics =
+            TrackingSemanticArtifact::fromTrackingReference(task.tracking_reference);
+      }
     }
 
     if (!task.phases.empty())

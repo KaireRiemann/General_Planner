@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <SpatialMap/SFCCommonTypes.hpp>
+#include <core/tracking_semantic_artifact.hpp>
 #include <traj_utils/minco_types.hpp>
 #include <CostFunctionalManager/TrackingSemanticGuide.hpp>
 
@@ -42,6 +43,9 @@ struct PlanningSolution
 
   bool has_tracking_semantic_guide{false};
   cost_functional::TrackingSemanticGuide tracking_semantic_guide;
+
+  bool has_tracking_semantic_artifact{false};
+  TrackingSemanticArtifact tracking_semantic_artifact;
 };
 
 } // namespace ego_planner::core

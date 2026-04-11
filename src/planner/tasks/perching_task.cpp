@@ -1,4 +1,35 @@
 #include <tasks/perching_task.hpp>
+#include <tasks/state_to_state_task.hpp>
+
+namespace
+{
+
+ego_planner::core::TaskDefinition buildPerchingTransitTemplate(const Eigen::Vector3d &start_pt,
+                                                               const Eigen::Vector3d &start_vel,
+                                                               const Eigen::Vector3d &start_acc,
+                                                               const Eigen::Vector3d &contact_pt,
+                                                               const Eigen::Vector3d &contact_vel,
+                                                               const bool force_plain,
+                                                               const bool prefer_corridor,
+                                                               const bool prefer_esdf)
+{
+  auto task = ego_planner::tasks::StateToStateTask::buildDefinition(start_pt,
+                                                                    start_vel,
+                                                                    start_acc,
+                                                                    contact_pt,
+                                                                    contact_vel,
+                                                                    true,
+                                                                    false,
+                                                                    false,
+                                                                    force_plain,
+                                                                    prefer_corridor,
+                                                                    prefer_esdf);
+  task.task_name = "perching";
+  task.type = ego_planner::core::TaskType::PERCHING;
+  return task;
+}
+
+} // namespace
 
 namespace ego_planner::tasks
 {
@@ -16,13 +47,17 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                                                    const bool prefer_corridor,
                                                    const bool prefer_esdf)
 {
-  core::TaskDefinition task;
-  task.type = core::TaskType::PERCHING;
-  task.task_name = "perching";
-  task.start_state.valid = true;
-  task.start_state.position = start_pt;
-  task.start_state.velocity = start_vel;
-  task.start_state.acceleration = start_acc;
+  // Perching is a transit-style task with extra landing/contact semantics:
+  // start/space-model/runtime transit defaults come from the shared
+  // state-to-state template, while terminal-manifold data stays perching-specific.
+  core::TaskDefinition task = buildPerchingTransitTemplate(start_pt,
+                                                           start_vel,
+                                                           start_acc,
+                                                           contact_pt,
+                                                           contact_vel,
+                                                           force_plain,
+                                                           prefer_corridor,
+                                                           prefer_esdf);
 
   task.goal.semantic = core::GoalSemanticType::TERMINAL_MANIFOLD;
   task.goal.state.valid = true;
@@ -42,24 +77,8 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   task.runtime_policy.touch_goal = true;
   task.runtime_policy.enable_keep_current = false;
   task.runtime_policy.enable_successor_planning = false;
-  task.space_model_policy.force_plain = force_plain;
-  if (force_plain)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::PLAIN;
-  }
-  else if (prefer_corridor)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::CORRIDOR;
-  }
-  else if (prefer_esdf)
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::ESDF;
-  }
-  else
-  {
-    task.space_model_policy.preferred = core::SpaceModelPreference::AUTO;
-  }
 
+  task.phases.clear();
   core::PhaseDefinition approach;
   approach.name = "approach";
   approach.goal.semantic = core::GoalSemanticType::TERMINAL_SET;

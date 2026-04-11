@@ -2,6 +2,7 @@
 #define PLANNER_SOLVER_STATE_TO_STATE_INITIALIZER_HPP_
 
 #include <core/planning_problem.hpp>
+#include <frontend/init_artifact.hpp>
 #include <path_searching/jps_a_star.hpp>
 #include <plan_env/grid_map.h>
 #include <optimizer/poly_traj_optimizer.h>
@@ -46,7 +47,6 @@ struct StateToStateInitializationResult
 {
   bool success{false};
   core::ActiveSpaceModel selected_mode{core::ActiveSpaceModel::PLAIN};
-  std::string init_source{"stable_helper"};
   std::string message;
   std::string failure_reason;
   StateToStateInitFailureType failure_type{StateToStateInitFailureType::NONE};
@@ -57,20 +57,9 @@ struct StateToStateInitializationResult
   bool stable_helper_succeeded{false};
   bool corridor_warm_timing_used{false};
   bool corridor_time_scaling_feasible{false};
-  bool init_collision_free{true};
-  bool init_inside_corridor{true};
-  double init_min_sdf{0.0};
 
-  MINCOBoundaryState3D head_state;
-  MINCOBoundaryState3D tail_state;
-  Eigen::MatrixXd inner_points;
-  Eigen::VectorXd durations;
-  MINCOTraj3D init_traj;
-
-  std::vector<Eigen::Vector3d> guide_path;
-  std::vector<Eigen::Vector3d> dense_path;
-  spatial_map::PolyhedraH corridor_hpolys;
-  Eigen::VectorXi corridor_piece_idx;
+  // Authoritative shared transit initialization boundary.
+  frontend::InitArtifact init_artifact;
 };
 
 // State-to-state initializer is the authoritative solver-side owner of

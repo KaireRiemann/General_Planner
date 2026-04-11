@@ -46,7 +46,6 @@ struct TransitInitResult
 {
   bool success{false};
   core::ActiveSpaceModel selected_mode{core::ActiveSpaceModel::PLAIN};
-  std::string init_source{"stable_helper"};
   std::string message;
   std::string failure_reason;
   TransitInitFailureType failure_type{TransitInitFailureType::NONE};
@@ -57,20 +56,9 @@ struct TransitInitResult
   bool stable_helper_succeeded{false};
   bool corridor_warm_timing_used{false};
   bool corridor_time_scaling_feasible{false};
-  bool init_collision_free{true};
-  bool init_inside_corridor{true};
-  double init_min_sdf{0.0};
 
-  MINCOBoundaryState3D head_state;
-  MINCOBoundaryState3D tail_state;
-  Eigen::MatrixXd inner_points;
-  Eigen::VectorXd durations;
-  MINCOTraj3D init_traj;
-
-  std::vector<Eigen::Vector3d> guide_path;
-  std::vector<Eigen::Vector3d> dense_path;
-  spatial_map::PolyhedraH corridor_hpolys;
-  Eigen::VectorXi corridor_piece_idx;
+  // Authoritative shared transit initialization boundary.
+  InitArtifact init_artifact;
 };
 
 // TransitInitService is the future owner for plain/ESDF/corridor seed
