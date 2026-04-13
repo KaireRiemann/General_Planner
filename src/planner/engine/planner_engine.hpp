@@ -54,6 +54,8 @@ private:
                                         core::PlanningSolution &solution);
   bool solveTrackingCompiledProblem(const core::PlanningProblem &problem,
                                     core::PlanningSolution &solution);
+  bool solvePerchingCompiledProblem(const core::PlanningProblem &problem,
+                                    core::PlanningSolution &solution);
 
 private:
   EGOPlannerManager *planner_manager_{nullptr};

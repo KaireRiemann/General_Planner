@@ -58,6 +58,62 @@ struct ZeroCostManager
   }
 };
 
+struct ShiftedTailMapping final : public minco::TerminalMappingBase<3, 3>
+{
+  using BoundaryState = typename minco::TerminalMappingBase<3, 3>::BoundaryState;
+
+  bool enabled() const override
+  {
+    return true;
+  }
+
+  int extraVariableDim() const override
+  {
+    return 1;
+  }
+
+  void setInitialExtraVariables(Eigen::Ref<Eigen::VectorXd> extra_vars) const override
+  {
+    extra_vars.setConstant(0.15);
+  }
+
+  void mapBoundaryStates(const BoundaryState &nominal_head_state,
+                         const BoundaryState &nominal_tail_state,
+                         const Eigen::VectorXd &,
+                         const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
+                         BoundaryState &mapped_head_state,
+                         BoundaryState &mapped_tail_state) const override
+  {
+    mapped_head_state = nominal_head_state;
+    mapped_tail_state = nominal_tail_state;
+    mapped_tail_state(0, 0) += extra_vars(0);
+  }
+
+  double addExtraVariableCost(const Eigen::Ref<const Eigen::VectorXd> &,
+                              Eigen::Ref<Eigen::VectorXd> grad_extra) const override
+  {
+    grad_extra.setZero();
+    return 0.0;
+  }
+
+  void backwardTerminalGradient(const BoundaryState &,
+                                const BoundaryState &grad_tail_state,
+                                const Eigen::VectorXd &,
+                                const Eigen::Ref<const Eigen::VectorXd> &,
+                                Eigen::Ref<Eigen::VectorXd> grad_out) const override
+  {
+    grad_out(grad_out.size() - 1) += grad_tail_state(0, 0);
+  }
+
+  void backwardTerminalTimeGradient(const BoundaryState &,
+                                    const BoundaryState &,
+                                    const Eigen::VectorXd &,
+                                    const Eigen::Ref<const Eigen::VectorXd> &,
+                                    Eigen::Ref<Eigen::VectorXd>) const override
+  {
+  }
+};
+
 bool approxEqual(const Eigen::MatrixXd &a, const Eigen::MatrixXd &b, const double tol)
 {
   return a.rows() == b.rows() &&
@@ -162,6 +218,32 @@ int main()
   {
     std::cerr << "FixedTerminalMapping changed optimizer output." << std::endl;
     return 6;
+  }
+
+  ShiftedTailMapping shifted_mapping;
+  Eigen::VectorXd x_shift = opt.generateInitialGuess(&shifted_mapping);
+  Eigen::VectorXd grad_shift = Eigen::VectorXd::Zero(x_shift.size());
+  const double cost_shift = opt.evaluateWithTerminalMapping(x_shift,
+                                                            grad_shift,
+                                                            time_cost,
+                                                            cost_manager,
+                                                            &shifted_mapping);
+  const double eps = 1.0e-6;
+  Eigen::VectorXd x_fd = x_shift;
+  x_fd(x_fd.size() - 1) += eps;
+  Eigen::VectorXd grad_fd = Eigen::VectorXd::Zero(x_fd.size());
+  const double cost_shift_fd = opt.evaluateWithTerminalMapping(x_fd,
+                                                               grad_fd,
+                                                               time_cost,
+                                                               cost_manager,
+                                                               &shifted_mapping);
+  const double numeric_grad = (cost_shift_fd - cost_shift) / eps;
+  if (std::abs(numeric_grad - grad_shift(grad_shift.size() - 1)) > 5.0e-4)
+  {
+    std::cerr << "Dynamic terminal-mapping gradient check failed. analytic="
+              << grad_shift(grad_shift.size() - 1)
+              << " numeric=" << numeric_grad << std::endl;
+    return 7;
   }
 
   std::cout << "MINCO terminal-gradient self-check passed." << std::endl;

@@ -32,6 +32,7 @@
     <arg name="plate_attitude_sine_rate" default="0.5"/>
     <arg name="perching_trigger_mode" default="once"/>
     <arg name="perching_trigger_period" default="8.0"/>
+    <arg name="perching_lock_topic" default="/perching/lock"/>
     <arg name="perching_axis_x" default="0.0"/>
     <arg name="perching_axis_y" default="1.0"/>
     <arg name="perching_axis_z" default="0.0"/>
@@ -41,7 +42,8 @@
     <arg name="perching_min_prediction_time" default="0.8"/>
     <arg name="perching_max_prediction_time" default="1.8"/>
     <arg name="perching_terminal_thrust" default="9.81"/>
-    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
+    <arg name="perching_terminal_thrust_range" default="2.0"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="true"/>
     <arg name="perching_replan_if_unsafe" default="true"/>
     <arg name="perching_arrive_pos_thresh" default="0.45"/>
     <arg name="perching_arrive_vel_thresh" default="0.85"/>
@@ -68,6 +70,7 @@
         <param name="odom_topic" value="/perching/target_odom"/>
         <param name="trigger_topic" value="/land_triger"/>
         <param name="reset_topic" value="/perching/reset"/>
+        <param name="lock_topic" value="$(arg perching_lock_topic)"/>
         <param name="trigger_mode" value="$(arg perching_trigger_mode)"/>
         <param name="trigger_period" value="$(arg perching_trigger_period)"/>
         <param name="motion_mode" value="$(arg plate_motion_mode)"/>
@@ -132,6 +135,7 @@
         <arg name="perching_min_prediction_time" value="$(arg perching_min_prediction_time)"/>
         <arg name="perching_max_prediction_time" value="$(arg perching_max_prediction_time)"/>
         <arg name="perching_terminal_thrust" value="$(arg perching_terminal_thrust)"/>
+        <arg name="perching_terminal_thrust_range" value="$(arg perching_terminal_thrust_range)"/>
         <arg name="perching_use_dynamics_terminal_accel" value="$(arg perching_use_dynamics_terminal_accel)"/>
         <arg name="perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)"/>
         <arg name="perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)"/>

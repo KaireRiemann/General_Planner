@@ -28,6 +28,7 @@ void PerchingTargetProvider::configure(const double robot_l,
                                        const double min_prediction_time,
                                        const double max_prediction_time,
                                        const double terminal_thrust,
+                                       const double terminal_thrust_range,
                                        const bool use_dynamics_terminal_accel,
                                        const Eigen::Quaterniond &fallback_landing_orientation,
                                        const bool override_target_orientation)
@@ -37,6 +38,7 @@ void PerchingTargetProvider::configure(const double robot_l,
   min_prediction_time_ = std::max(0.05, min_prediction_time);
   max_prediction_time_ = std::max(min_prediction_time_, max_prediction_time);
   terminal_thrust_ = std::max(0.0, terminal_thrust);
+  terminal_thrust_range_ = std::max(0.0, terminal_thrust_range);
   use_dynamics_terminal_accel_ = use_dynamics_terminal_accel;
   fallback_landing_orientation_ = normalizedOrIdentity(fallback_landing_orientation);
   override_target_orientation_ = override_target_orientation;
@@ -77,21 +79,45 @@ bool PerchingTargetProvider::buildTerminalState(const Eigen::Vector3d &ego_posit
     normal = Eigen::Vector3d::UnitZ();
   }
   normal.normalize();
+  Eigen::Vector3d tangent_x = landing_q.toRotationMatrix().col(0);
+  Eigen::Vector3d tangent_y = landing_q.toRotationMatrix().col(1);
+  if (!tangent_x.allFinite() || tangent_x.norm() < 1.0e-6)
+  {
+    tangent_x = Eigen::Vector3d::UnitX();
+  }
+  tangent_x.normalize();
+  tangent_y = normal.cross(tangent_x);
+  if (!tangent_y.allFinite() || tangent_y.norm() < 1.0e-6)
+  {
+    tangent_y = Eigen::Vector3d::UnitY();
+  }
+  tangent_y.normalize();
+  tangent_x = tangent_y.cross(normal);
+  tangent_x.normalize();
 
   const double nominal_speed = std::max(0.2, 0.75 * max_velocity);
   const double raw_time = (plate_position_ - ego_position).norm() / nominal_speed;
   const double prediction_time =
-      std::min(max_prediction_time_, std::max(min_prediction_time_, raw_time));
+    std::min(max_prediction_time_, std::max(min_prediction_time_, raw_time));
+
+  const double clamped_prediction_time = std::max(0.0, prediction_time);
 
   terminal.valid = true;
   terminal.prediction_time = prediction_time;
   terminal.plate_position = plate_position_ + plate_velocity_ * prediction_time;
   terminal.plate_velocity = plate_velocity_;
   terminal.landing_orientation = landing_q;
+  terminal.landing_tangent_x = tangent_x;
+  terminal.landing_tangent_y = tangent_y;
   terminal.landing_normal = normal;
   terminal.terminal_position = terminal.plate_position + normal * robot_l_;
   terminal.terminal_velocity = plate_velocity_ - normal * v_plus_;
   terminal.terminal_acceleration = Eigen::Vector3d::Zero();
+  terminal.terminal_thrust_nominal = terminal_thrust_;
+  terminal.terminal_thrust_range = terminal_thrust_range_;
+  terminal.use_dynamics_terminal_accel = use_dynamics_terminal_accel_;
+  terminal.tangential_velocity_seed.setZero();
+  terminal.thrust_phase_seed = 0.0;
   if (use_dynamics_terminal_accel_)
   {
     terminal.terminal_acceleration =

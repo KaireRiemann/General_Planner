@@ -358,7 +358,7 @@ namespace ego_planner
       tracking_cost_manager_.wei_track_view_dir_smooth = wei_tracking_view_dir_smooth_;
     }
 
-    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess();
+    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -508,6 +508,18 @@ namespace ego_planner
     return success;
   }
 
+  bool PolyTrajOptimizer::optimizePerchingTrajectory(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      double &final_cost)
+  {
+    terminal_mapping_ = &terminal_mapping;
+    const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
+    terminal_mapping_ = nullptr;
+    return success;
+  }
+
   bool PolyTrajOptimizer::optimizeTrajectoryWithDistanceField(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -622,7 +634,7 @@ namespace ego_planner
       tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
     }
 
-    Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess();
+    Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -789,6 +801,18 @@ namespace ego_planner
     tracking_task_enabled_ = false;
     tracking_semantic_enabled_ = false;
     tracking_semantic_guide_.clear();
+    return success;
+  }
+
+  bool PolyTrajOptimizer::optimizePerchingTrajectoryWithDistanceField(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      double &final_cost)
+  {
+    terminal_mapping_ = &terminal_mapping;
+    const bool success = optimizeTrajectoryWithDistanceField(iniState, finState, initInnerPts, initT, final_cost);
+    terminal_mapping_ = nullptr;
     return success;
   }
 
@@ -1027,7 +1051,7 @@ namespace ego_planner
       tracking_corridor_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
     }
 
-    Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess();
+    Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -1213,6 +1237,26 @@ namespace ego_planner
                                             corridor_piece_idx,
                                             final_cost);
     tracking_task_enabled_ = false;
+    return success;
+  }
+
+  bool PolyTrajOptimizer::optimizePerchingTrajectory(
+      const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+      const spatial_map::PolyhedraH &corridor_hpolys,
+      const Eigen::VectorXi *corridor_piece_idx,
+      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      double &final_cost)
+  {
+    terminal_mapping_ = &terminal_mapping;
+    const bool success = optimizeTrajectory(iniState,
+                                            finState,
+                                            initInnerPts,
+                                            initT,
+                                            corridor_hpolys,
+                                            corridor_piece_idx,
+                                            final_cost);
+    terminal_mapping_ = nullptr;
     return success;
   }
 
@@ -2195,6 +2239,10 @@ namespace ego_planner
   void PolyTrajOptimizer::setSwarmTrajs(Types::SwarmTrajData *swarm_trajs_ptr) { swarm_trajs_ = swarm_trajs_ptr; }
   void PolyTrajOptimizer::setDroneId(const int drone_id) { drone_id_ = drone_id; }
   void PolyTrajOptimizer::setIfTouchGoal(const bool touch_goal) { touch_goal_ = touch_goal; }
+  void PolyTrajOptimizer::setTerminalMapping(const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> *terminal_mapping)
+  {
+    terminal_mapping_ = terminal_mapping;
+  }
   void PolyTrajOptimizer::setConstraintPoints(Types::ConstraintPoints cps) { cps_ = cps; }
   void PolyTrajOptimizer::setUseMultitopologyTrajs(bool use_multitopology_trajs) { multitopology_data_.use_multitopology_trajs = use_multitopology_trajs; }
 }//namespace ego_planner

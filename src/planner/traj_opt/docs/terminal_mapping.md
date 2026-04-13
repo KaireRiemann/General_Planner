@@ -25,8 +25,18 @@ dJ / d head_state
 dJ / d tail_state
 ```
 
-through the adjoint solve. A future perching task should implement a
-`TerminalMappingBase` subclass that applies:
+through the adjoint solve. This repository now has a lightweight
+`PerchingTerminalMapping` that implements a constant-velocity moving-platform
+model with fixed surface frame over one planning cycle:
+
+```text
+tail_pos(T) = Xi(T) + l * z_s
+tail_vel(T) = Xi_dot + nu_x * x_s + nu_y * y_s - v_plus * z_s
+tail_acc(T) = (tau_m + tau_r sin(tau_f)) * z_s + g
+tail_jerk(T) = 0    (when the backend uses S=4 / minimum snap)
+```
+
+The generic terminal-mapping interface applies:
 
 ```text
 d tail_state / d nu
@@ -44,5 +54,7 @@ fixed-tail time gradient must be augmented by:
 before the time map converts physical time gradients back to unconstrained
 `tau` gradients.
 
-`FixedTerminalMapping` is a no-op mapping for the current state-to-state,
-tracking, and corridor/ESDF paths.
+`FixedTerminalMapping` is still a no-op mapping for the current state-to-state,
+tracking, and corridor/ESDF paths. Perching now uses the same generic MINCO
+optimizer path with an enabled terminal mapping instead of freezing the moving
+platform's terminal state once at the task layer.

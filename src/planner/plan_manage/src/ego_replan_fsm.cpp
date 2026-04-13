@@ -85,6 +85,7 @@ namespace ego_planner
     nh.param("fsm/perching_min_prediction_time", perching_min_prediction_time_, 1.0);
     nh.param("fsm/perching_max_prediction_time", perching_max_prediction_time_, 5.0);
     nh.param("fsm/perching_terminal_thrust", perching_terminal_thrust_, 9.81);
+    nh.param("fsm/perching_terminal_thrust_range", perching_terminal_thrust_range_, 0.0);
     nh.param("fsm/perching_use_dynamics_terminal_accel", perching_use_dynamics_terminal_accel_, false);
     nh.param("fsm/perching_override_target_orientation", perching_override_target_orientation_, false);
     nh.param("fsm/perching_replan_if_unsafe", perching_replan_if_unsafe_, true);
@@ -173,6 +174,7 @@ namespace ego_planner
         perching_min_prediction_time_,
         perching_max_prediction_time_,
         perching_terminal_thrust_,
+        perching_terminal_thrust_range_,
         perching_use_dynamics_terminal_accel_,
         runtime::PerchingTargetProvider::quaternionFromAxisAngle(perching_axis_, perching_theta_),
         perching_override_target_orientation_);
@@ -240,13 +242,15 @@ namespace ego_planner
           1,
           &EGOReplanFSM::perchingTriggerCallback,
           this);
-      ROS_INFO("Perching task enabled. target_odom_topic=%s trigger_topic=%s auto_start=%s robot_l=%.3f v_plus=%.3f dyn_terminal_acc=%s",
+      ROS_INFO("Perching task enabled. target_odom_topic=%s trigger_topic=%s auto_start=%s robot_l=%.3f v_plus=%.3f dyn_terminal_acc=%s thrust_nom=%.2f thrust_range=%.2f",
                perching_target_odom_topic_.c_str(),
                perching_trigger_topic_.c_str(),
                perching_auto_start_ ? "yes" : "no",
                perching_robot_l_,
                perching_v_plus_,
-               perching_use_dynamics_terminal_accel_ ? "yes" : "no");
+               perching_use_dynamics_terminal_accel_ ? "yes" : "no",
+               perching_terminal_thrust_,
+               perching_terminal_thrust_range_);
     }
     else if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -1607,9 +1611,16 @@ namespace ego_planner
           perching_terminal.terminal_position,
           perching_terminal.terminal_velocity,
           perching_terminal.terminal_acceleration,
+          perching_terminal.plate_position,
+          perching_terminal.plate_velocity,
+          perching_terminal.landing_tangent_x,
+          perching_terminal.landing_tangent_y,
           perching_terminal.landing_normal,
           perching_robot_l_,
           perching_v_plus_,
+          perching_terminal.terminal_thrust_nominal,
+          perching_terminal.terminal_thrust_range,
+          perching_terminal.use_dynamics_terminal_accel,
           task_force_plain,
           task_prefer_corridor,
           task_prefer_esdf);
@@ -1695,7 +1706,9 @@ namespace ego_planner
       {
         have_pending_state2state_target_selection_ = false;
         pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
-        planned_local_target_pt_ = local_target_pt_;
+        planned_local_target_pt_ =
+            planner_manager_->traj_.local_traj.traj.evaluate(
+                planner_manager_->traj_.local_traj.duration, 0);
         planned_local_target_glb_t_ = -1.0;
         planned_final_goal_ = final_goal_;
         have_active_state2state_runtime_policy_ = false;

@@ -40,9 +40,16 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                                                    const Eigen::Vector3d &contact_pt,
                                                    const Eigen::Vector3d &contact_vel,
                                                    const Eigen::Vector3d &contact_acc,
+                                                   const Eigen::Vector3d &plate_position,
+                                                   const Eigen::Vector3d &plate_velocity,
+                                                   const Eigen::Vector3d &landing_tangent_x,
+                                                   const Eigen::Vector3d &landing_tangent_y,
                                                    const Eigen::Vector3d &landing_normal,
                                                    const double robot_l,
                                                    const double v_plus,
+                                                   const double terminal_thrust_nominal,
+                                                   const double terminal_thrust_range,
+                                                   const bool use_dynamics_terminal_accel,
                                                    const bool force_plain,
                                                    const bool prefer_corridor,
                                                    const bool prefer_esdf)
@@ -65,14 +72,46 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   task.goal.state.velocity = contact_vel;
   task.goal.state.acceleration = contact_acc;
   task.goal.touch_goal = true;
-  task.goal.manifold_params.resize(11);
+  const Eigen::Vector3d safe_normal =
+      landing_normal.norm() > 1.0e-6 ? landing_normal.normalized()
+                                     : Eigen::Vector3d::UnitZ();
+  Eigen::Vector3d safe_tangent_x =
+      landing_tangent_x.norm() > 1.0e-6 ? landing_tangent_x.normalized()
+                                        : Eigen::Vector3d::UnitX();
+  Eigen::Vector3d safe_tangent_y =
+      landing_tangent_y.norm() > 1.0e-6 ? landing_tangent_y.normalized()
+                                        : safe_normal.cross(safe_tangent_x);
+  if (safe_tangent_y.norm() < 1.0e-6)
+  {
+    safe_tangent_y = Eigen::Vector3d::UnitY();
+  }
+  safe_tangent_y.normalize();
+  safe_tangent_x = safe_tangent_y.cross(safe_normal);
+  if (safe_tangent_x.norm() < 1.0e-6)
+  {
+    safe_tangent_x = Eigen::Vector3d::UnitX();
+  }
+  safe_tangent_x.normalize();
+
+  task.goal.manifold_params.resize(29);
   task.goal.manifold_params.segment<3>(0) = contact_pt;
   task.goal.manifold_params.segment<3>(3) = contact_vel;
-  task.goal.manifold_params.segment<3>(6) =
-      landing_normal.norm() > 1.0e-6 ? landing_normal.normalized()
-                                      : Eigen::Vector3d::UnitZ();
-  task.goal.manifold_params(9) = robot_l;
-  task.goal.manifold_params(10) = v_plus;
+  // The terminal manifold stores the plate state at planning start.
+  // Dynamic terminal mapping then evaluates the true terminal state at the
+  // optimized final time T using this base state.
+  task.goal.manifold_params.segment<3>(6) = plate_position;
+  task.goal.manifold_params.segment<3>(9) = plate_velocity;
+  task.goal.manifold_params.segment<3>(12) = safe_tangent_x;
+  task.goal.manifold_params.segment<3>(15) = safe_tangent_y;
+  task.goal.manifold_params.segment<3>(18) = safe_normal;
+  task.goal.manifold_params(21) = robot_l;
+  task.goal.manifold_params(22) = v_plus;
+  task.goal.manifold_params(23) = terminal_thrust_nominal;
+  task.goal.manifold_params(24) = terminal_thrust_range;
+  task.goal.manifold_params(25) = 0.0; // nu_x seed
+  task.goal.manifold_params(26) = 0.0; // nu_y seed
+  task.goal.manifold_params(27) = 0.0; // tau_f seed
+  task.goal.manifold_params(28) = use_dynamics_terminal_accel ? 1.0 : 0.0;
 
   task.runtime_policy.touch_goal = true;
   task.runtime_policy.enable_keep_current = false;
@@ -109,9 +148,16 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                          contact_pt,
                          contact_vel,
                          Eigen::Vector3d::Zero(),
+                         contact_pt,
+                         Eigen::Vector3d::Zero(),
+                         Eigen::Vector3d::UnitX(),
+                         Eigen::Vector3d::UnitY(),
                          Eigen::Vector3d::UnitZ(),
                          0.0,
                          0.0,
+                         9.81,
+                         0.0,
+                         false,
                          force_plain,
                          false,
                          false);
@@ -123,9 +169,16 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                                    const Eigen::Vector3d &contact_pt,
                                    const Eigen::Vector3d &contact_vel,
                                    const Eigen::Vector3d &contact_acc,
+                                   const Eigen::Vector3d &plate_position,
+                                   const Eigen::Vector3d &plate_velocity,
+                                   const Eigen::Vector3d &landing_tangent_x,
+                                   const Eigen::Vector3d &landing_tangent_y,
                                    const Eigen::Vector3d &landing_normal,
                                    const double robot_l,
                                    const double v_plus,
+                                   const double terminal_thrust_nominal,
+                                   const double terminal_thrust_range,
+                                   const bool use_dynamics_terminal_accel,
                                    const bool force_plain,
                                    const bool prefer_corridor,
                                    const bool prefer_esdf)
@@ -136,9 +189,16 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                          contact_pt,
                          contact_vel,
                          contact_acc,
+                         plate_position,
+                         plate_velocity,
+                         landing_tangent_x,
+                         landing_tangent_y,
                          landing_normal,
                          robot_l,
                          v_plus,
+                         terminal_thrust_nominal,
+                         terminal_thrust_range,
+                         use_dynamics_terminal_accel,
                          force_plain,
                          prefer_corridor,
                          prefer_esdf)
@@ -158,9 +218,16 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                contact_pt,
                contact_vel,
                Eigen::Vector3d::Zero(),
+               contact_pt,
+               Eigen::Vector3d::Zero(),
+               Eigen::Vector3d::UnitX(),
+               Eigen::Vector3d::UnitY(),
                Eigen::Vector3d::UnitZ(),
                0.0,
                0.0,
+               9.81,
+               0.0,
+               false,
                force_plain,
                false,
                false);

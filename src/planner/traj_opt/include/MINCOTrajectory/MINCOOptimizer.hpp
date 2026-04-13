@@ -6,6 +6,7 @@
 #include <Eigen/Dense>
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -182,8 +183,10 @@ public:
     ref_waypoints_ = waypoints;
 
     workspace_->resize(piece_num_);
-    workspace_->head_state = boundary_head;
-    workspace_->tail_state = boundary_tail;
+    nominal_head_state_ = boundary_head;
+    nominal_tail_state_ = boundary_tail;
+    workspace_->head_state = nominal_head_state_;
+    workspace_->tail_state = nominal_tail_state_;
     return piece_num_ > 0;
   }
 
@@ -206,14 +209,17 @@ public:
 
   Eigen::VectorXd generateInitialGuess() const
   {
-    int dim_T = piece_num_;
-    int dim_P = 0;
-    for (int i = 1; i < piece_num_; ++i)
-    {
-      dim_P += active_spatial_map_->getUnconstrainedDim(i);
-    }
+    return generateInitialGuess(nullptr);
+  }
 
-    const int total_dim = dim_T + dim_P;
+  Eigen::VectorXd generateInitialGuess(const TerminalMappingBase<DIM, S> *terminal_mapping) const
+  {
+    const int dim_T = piece_num_;
+    const int total_dim =
+        getCoreDecisionDim() +
+        ((terminal_mapping != nullptr && terminal_mapping->enabled())
+             ? terminal_mapping->extraVariableDim()
+             : 0);
 
     if (has_warm_start_guess_ &&
         warm_start_guess_.size() == total_dim &&
@@ -235,6 +241,12 @@ public:
       x.segment(offset, dof) =
           active_spatial_map_->toUnconstrained(ref_waypoints_.row(i).transpose(), i);
       offset += dof;
+    }
+
+    if (terminal_mapping != nullptr && terminal_mapping->enabled())
+    {
+      terminal_mapping->setInitialExtraVariables(
+          x.segment(offset, terminal_mapping->extraVariableDim()));
     }
 
     return x;
@@ -267,6 +279,16 @@ public:
 
     grad_out.setZero();
     double total_cost = 0.0;
+    const int core_dim = getCoreDecisionDim();
+    const int extra_dim =
+        (terminal_mapping != nullptr && terminal_mapping->enabled())
+            ? terminal_mapping->extraVariableDim()
+            : 0;
+
+    if (x.size() != core_dim + extra_dim)
+    {
+      return std::numeric_limits<double>::infinity();
+    }
 
     // Constraint elimination path:
     //   x = [tau, xi] -> (T, P_inner) through active time/spatial maps
@@ -274,6 +296,23 @@ public:
     //   -> accumulate costs/partials in physical variables
     //   -> backpropagate to the unconstrained decision vector x
     decodeDecisionVariables(x, grad_out, total_cost);
+    workspace_->head_state = nominal_head_state_;
+    workspace_->tail_state = nominal_tail_state_;
+    if (terminal_mapping != nullptr && terminal_mapping->enabled())
+    {
+      const auto extra_vars = x.segment(core_dim, extra_dim);
+      terminal_mapping->mapBoundaryStates(nominal_head_state_,
+                                          nominal_tail_state_,
+                                          workspace_->cache_T,
+                                          extra_vars,
+                                          workspace_->head_state,
+                                          workspace_->tail_state);
+      if (extra_dim > 0)
+      {
+        total_cost += terminal_mapping->addExtraVariableCost(
+            extra_vars, grad_out.segment(core_dim, extra_dim));
+      }
+    }
     traj_.generate(workspace_->cache_P_inner,
                    workspace_->head_state,
                    workspace_->tail_state,
@@ -322,9 +361,11 @@ public:
     // gradient before mapping dJ/dT back to tau.
     if (terminal_mapping != nullptr && terminal_mapping->enabled())
     {
+      const auto extra_vars = x.segment(core_dim, extra_dim);
       terminal_mapping->backwardTerminalTimeGradient(workspace_->grad_by_head_state,
                                                      workspace_->grad_by_tail_state,
                                                      workspace_->cache_T,
+                                                     extra_vars,
                                                      workspace_->grad_by_times);
     }
 
@@ -332,9 +373,11 @@ public:
 
     if (terminal_mapping != nullptr && terminal_mapping->enabled())
     {
+      const auto extra_vars = x.segment(core_dim, extra_dim);
       terminal_mapping->backwardTerminalGradient(workspace_->grad_by_head_state,
                                                  workspace_->grad_by_tail_state,
                                                  workspace_->cache_T,
+                                                 extra_vars,
                                                  grad_out);
     }
     return total_cost;
@@ -346,6 +389,16 @@ public:
   }
 
 private:
+  int getCoreDecisionDim() const
+  {
+    int dim_P = 0;
+    for (int i = 1; i < piece_num_; ++i)
+    {
+      dim_P += active_spatial_map_->getUnconstrainedDim(i);
+    }
+    return piece_num_ + dim_P;
+  }
+
   void decodeDecisionVariables(const Eigen::Ref<const Eigen::VectorXd> &x,
                                Eigen::Ref<Eigen::VectorXd> grad_out,
                                double &total_cost)
@@ -524,6 +577,8 @@ private:
 
 private:
   TrajType traj_;
+  BoundaryState nominal_head_state_{BoundaryState::Zero()};
+  BoundaryState nominal_tail_state_{BoundaryState::Zero()};
   int piece_num_{0};
   int samples_per_piece_{5};
   double rho_energy_{1.0};

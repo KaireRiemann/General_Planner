@@ -108,6 +108,7 @@ namespace ego_planner
     double t_now_;
     bool tracking_task_enabled_{false};
     bool tracking_semantic_enabled_{false};
+    const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> *terminal_mapping_{nullptr};
     cost_functional::TrackingReference tracking_reference_;
     cost_functional::TrackingSemanticGuide tracking_semantic_guide_;
 
@@ -137,6 +138,7 @@ namespace ego_planner
     void setIfTouchGoal(const bool touch_goal);
     void setConstraintPoints(ConstraintPoints cps);
     void setUseMultitopologyTrajs(bool use_multitopology_trajs);
+    void setTerminalMapping(const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> *terminal_mapping);
 
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }
@@ -169,6 +171,10 @@ namespace ego_planner
     bool optimizeTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                             const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                             double &final_cost);
+    bool optimizePerchingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                    const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                    const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                    double &final_cost);
     bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                     const cost_functional::TrackingReference &tracking_ref,
@@ -178,6 +184,10 @@ namespace ego_planner
     bool optimizeTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                              const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                              double &final_cost);
+    bool optimizePerchingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                                     const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                                     double &final_cost);
     bool optimizeTrackingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                                      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                                      const cost_functional::TrackingReference &tracking_ref,
@@ -189,6 +199,12 @@ namespace ego_planner
                             const spatial_map::PolyhedraH &corridor_hpolys,
                             const Eigen::VectorXi *corridor_piece_idx,
                             double &final_cost);
+    bool optimizePerchingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
+                                    const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
+                                    const spatial_map::PolyhedraH &corridor_hpolys,
+                                    const Eigen::VectorXi *corridor_piece_idx,
+                                    const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                    double &final_cost);
     bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                     const spatial_map::PolyhedraH &corridor_hpolys,

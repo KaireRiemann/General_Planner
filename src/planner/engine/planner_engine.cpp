@@ -2,6 +2,7 @@
 
 #include <plan_manage/planner_manager.h>
 #include <plan_manage/tracking_yaw_planner.hpp>
+#include <MINCOTrajectory/terminal_mapping.hpp>
 #include <optimization/backend_plugin_input.hpp>
 #include <runtime/context_builder.hpp>
 #include <SFCGenerator/geo_utils.hpp>
@@ -25,6 +26,23 @@ struct EdgeLess
   {
     return lhs.first < rhs.first || (lhs.first == rhs.first && lhs.second < rhs.second);
   }
+};
+
+struct PerchingSemanticModel
+{
+  bool valid{false};
+  Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d surface_x{Eigen::Vector3d::UnitX()};
+  Eigen::Vector3d surface_y{Eigen::Vector3d::UnitY()};
+  Eigen::Vector3d surface_z{Eigen::Vector3d::UnitZ()};
+  double robot_l{0.0};
+  double v_plus{0.0};
+  double thrust_nominal{9.81};
+  double thrust_range{0.0};
+  bool use_dynamics_terminal_accel{false};
+  Eigen::Vector2d nu_seed{Eigen::Vector2d::Zero()};
+  double tau_f_seed{0.0};
 };
 
 void appendCorridorVisualization(const Eigen::MatrixX4d &hpoly,
@@ -176,6 +194,88 @@ const char *seedKindString(const ego_planner::core::SeedSpec::Kind kind)
   }
 }
 
+bool decodePerchingSemanticModel(const ego_planner::core::PerchingSemanticArtifact &artifact,
+                                 PerchingSemanticModel &model)
+{
+  model = PerchingSemanticModel{};
+  if (!artifact.valid)
+  {
+    return false;
+  }
+
+  const Eigen::VectorXd &params = artifact.terminal_manifold_params;
+  if (params.size() >= 29)
+  {
+    model.plate_position = params.segment<3>(6);
+    model.plate_velocity = params.segment<3>(9);
+    model.surface_x = params.segment<3>(12);
+    model.surface_y = params.segment<3>(15);
+    model.surface_z = params.segment<3>(18);
+    model.robot_l = params(21);
+    model.v_plus = params(22);
+    model.thrust_nominal = params(23);
+    model.thrust_range = params(24);
+    model.nu_seed.x() = params(25);
+    model.nu_seed.y() = params(26);
+    model.tau_f_seed = params(27);
+    model.use_dynamics_terminal_accel = params(28) > 0.5;
+  }
+  else if (params.size() >= 11)
+  {
+    model.surface_z = params.segment<3>(6);
+    model.robot_l = params(9);
+    model.v_plus = params(10);
+    model.plate_position = artifact.contact_state.position - model.robot_l * model.surface_z;
+    model.plate_velocity = artifact.contact_state.velocity + model.v_plus * model.surface_z;
+    model.thrust_nominal = 9.81;
+    model.thrust_range = 0.0;
+    model.use_dynamics_terminal_accel = false;
+  }
+  else
+  {
+    return false;
+  }
+
+  if (!model.surface_z.allFinite() || model.surface_z.norm() < 1.0e-6)
+  {
+    model.surface_z = Eigen::Vector3d::UnitZ();
+  }
+  model.surface_z.normalize();
+
+  if (!model.surface_x.allFinite() || model.surface_x.norm() < 1.0e-6)
+  {
+    model.surface_x = Eigen::Vector3d::UnitX();
+  }
+  model.surface_x.normalize();
+
+  if (!model.surface_y.allFinite() || model.surface_y.norm() < 1.0e-6)
+  {
+    model.surface_y = model.surface_z.cross(model.surface_x);
+  }
+  if (!model.surface_y.allFinite() || model.surface_y.norm() < 1.0e-6)
+  {
+    model.surface_y = Eigen::Vector3d::UnitY();
+  }
+  model.surface_y.normalize();
+  model.surface_x = model.surface_y.cross(model.surface_z);
+  if (!model.surface_x.allFinite() || model.surface_x.norm() < 1.0e-6)
+  {
+    model.surface_x = Eigen::Vector3d::UnitX();
+  }
+  model.surface_x.normalize();
+
+  model.robot_l = std::max(0.0, model.robot_l);
+  model.v_plus = std::max(0.0, model.v_plus);
+  model.thrust_range = std::max(0.0, model.thrust_range);
+  model.valid =
+      model.plate_position.allFinite() &&
+      model.plate_velocity.allFinite() &&
+      model.nu_seed.allFinite() &&
+      std::isfinite(model.thrust_nominal) &&
+      std::isfinite(model.tau_f_seed);
+  return model.valid;
+}
+
 int countEnabledFeasibleSets(const ego_planner::core::PlanningProblem &problem,
                              const ego_planner::core::FeasibleSetType type)
 {
@@ -270,7 +370,7 @@ bool PlannerEngine::solveProblem(const core::PlanningProblem &problem,
   case core::TaskType::TRACKING:
     return solveTrackingCompiledProblem(problem, solution);
   case core::TaskType::PERCHING:
-    return solveStateToStateCompiledProblem(problem, solution);
+    return solvePerchingCompiledProblem(problem, solution);
   case core::TaskType::UNKNOWN:
   default:
     break;
@@ -296,7 +396,7 @@ bool PlannerEngine::solveCompatibility(const core::PlanningProblem &problem,
   case core::TaskType::TRACKING:
     return solveTrackingCompiledProblem(problem, solution);
   case core::TaskType::PERCHING:
-    return solveStateToStateCompiledProblem(problem, solution);
+    return solvePerchingCompiledProblem(problem, solution);
   case core::TaskType::UNKNOWN:
   default:
     solution.success = false;
@@ -765,6 +865,224 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   return flag_success;
 }
 
+bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &problem,
+                                                 core::PlanningSolution &solution)
+{
+  if (planner_manager_ == nullptr)
+  {
+    solution.success = false;
+    solution.message = "null planner manager";
+    return false;
+  }
+
+  auto *optimizer = planner_manager_->getOptimizer();
+  const auto visualization = planner_manager_->getVisualization();
+  const char *compiled_active_mode = activeSpaceModelString(problem.active_space_model);
+
+  if (problem.representation != core::RepresentationKind::MINCO ||
+      !problem.start_boundary.valid ||
+      !problem.terminal_boundary.valid)
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled perching problem has invalid MINCO boundaries";
+    return false;
+  }
+
+  PerchingSemanticModel perching_model;
+  if (!decodePerchingSemanticModel(problem.task_semantics.perching, perching_model))
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled perching problem is missing valid terminal-manifold semantics";
+    return false;
+  }
+
+  state_to_state_initializer_.setResources(planner_manager_->makeStateToStateInitResources());
+  solver::StateToStateInitializationResult init_result;
+  if (!state_to_state_initializer_.initialize(problem, init_result))
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled perching initialization failed: " + init_result.failure_reason;
+    return false;
+  }
+
+  const frontend::InitArtifact &init_artifact = init_result.init_artifact;
+  populateInitArtifacts(init_artifact, solution);
+  const frontend::InitArtifact &solver_input = init_artifact;
+  solution.active_space_model = init_result.selected_mode;
+
+  const MINCOBoundaryState3D &headState = solver_input.head_state;
+  const MINCOBoundaryState3D &tailState = solver_input.tail_state;
+  const Eigen::MatrixXd &innerPts = solver_input.inner_points;
+  const Eigen::VectorXd &durations = solver_input.durations;
+  const MINCOTraj3D &initTraj = solver_input.init_traj;
+  const spatial_map::PolyhedraH &corridor_hpolys = solver_input.corridor_hpolys;
+  const Eigen::VectorXi &corridor_piece_idx = solver_input.corridor_piece_idx;
+  const std::vector<Eigen::Vector3d> &active_guide_path = solver_input.guide_path;
+  const std::vector<Eigen::Vector3d> &display_path =
+      solver_input.dense_path.empty() ? solver_input.guide_path : solver_input.dense_path;
+  const char *selected_mode_str = activeSpaceModelString(init_result.selected_mode);
+
+  if (!solver_input.hasValidTiming() || !solver_input.hasValidPieceLayout())
+  {
+    solution.success = false;
+    solution.used_legacy_adapter = false;
+    solution.message = "compiled perching initialization returned invalid timing/layout";
+    return false;
+  }
+
+  minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S> perching_mapping;
+  perching_mapping.configure(perching_model.plate_position,
+                             perching_model.plate_velocity,
+                             perching_model.surface_x,
+                             perching_model.surface_y,
+                             perching_model.surface_z,
+                             perching_model.robot_l,
+                             perching_model.v_plus,
+                             perching_model.thrust_nominal,
+                             perching_model.thrust_range,
+                             perching_model.use_dynamics_terminal_accel,
+                             perching_model.nu_seed,
+                             perching_model.tau_f_seed);
+  ROS_INFO("[CompiledPerching] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu plate_now=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
+           compiled_active_mode,
+           selected_mode_str,
+           solver_input.source.c_str(),
+           active_guide_path.size(),
+           corridor_hpolys.size(),
+           perching_model.plate_position.x(),
+           perching_model.plate_position.y(),
+           perching_model.plate_position.z(),
+           perching_model.plate_velocity.x(),
+           perching_model.plate_velocity.y(),
+           perching_model.plate_velocity.z(),
+           perching_model.surface_z.x(),
+           perching_model.surface_z.y(),
+           perching_model.surface_z.z());
+
+  optimizer->setIfTouchGoal(true);
+
+  Eigen::MatrixXd cstr_pts =
+      initTraj.getInitConstraintPoints(optimizer->get_cps_num_prePiece_());
+  std::vector<std::pair<int, int>> segments;
+  const bool use_corridor = init_result.selected_mode == core::ActiveSpaceModel::CORRIDOR;
+  const bool use_esdf = init_result.selected_mode == core::ActiveSpaceModel::ESDF;
+  if (!use_corridor && !use_esdf)
+  {
+    if (optimizer->finelyCheckAndSetConstraintPoints(segments, initTraj, cstr_pts, true) ==
+        PolyTrajOptimizer::CHK_RET::ERR)
+    {
+      solution.success = false;
+      solution.used_legacy_adapter = false;
+      solution.message = "compiled perching seed failed initial collision checking";
+      return false;
+    }
+  }
+
+  std::vector<Eigen::Vector3d> point_set;
+  point_set.reserve(static_cast<std::size_t>(cstr_pts.cols()));
+  for (int i = 0; i < cstr_pts.cols(); ++i)
+  {
+    point_set.push_back(cstr_pts.col(i));
+  }
+  if (visualization)
+  {
+    if (!display_path.empty())
+    {
+      visualization->displayGlobalPathList(display_path, 0.08, 2);
+    }
+    if (!active_guide_path.empty())
+    {
+      visualization->displayFrontendList(active_guide_path, 0.10, 2);
+    }
+    if (use_corridor && !corridor_hpolys.empty())
+    {
+      std::vector<Eigen::Vector3d> tri, edges;
+      buildCorridorVisualization(corridor_hpolys, tri, edges);
+      visualization->displayCorridor(tri, edges, 2);
+    }
+    visualization->displayInitPathList(point_set, 0.2, 2);
+  }
+
+  double final_cost = 0.0;
+  bool flag_success = false;
+  if (use_corridor)
+  {
+    flag_success = optimizer->optimizePerchingTrajectory(headState,
+                                                         tailState,
+                                                         innerPts,
+                                                         durations,
+                                                         corridor_hpolys,
+                                                         &corridor_piece_idx,
+                                                         perching_mapping,
+                                                         final_cost);
+  }
+  else if (use_esdf)
+  {
+    flag_success = optimizer->optimizePerchingTrajectoryWithDistanceField(headState,
+                                                                          tailState,
+                                                                          innerPts,
+                                                                          durations,
+                                                                          perching_mapping,
+                                                                          final_cost);
+  }
+  else
+  {
+    flag_success = optimizer->optimizePerchingTrajectory(headState,
+                                                         tailState,
+                                                         innerPts,
+                                                         durations,
+                                                         perching_mapping,
+                                                         final_cost);
+  }
+
+  solution.success = flag_success;
+  solution.used_legacy_adapter = false;
+  solution.touch_goal = true;
+  solution.message = flag_success
+                         ? std::string("compiled perching solve success; selected_mode=") + selected_mode_str
+                         : std::string("compiled perching solve failed after optimizer; selected_mode=") + selected_mode_str;
+
+  if (!flag_success)
+  {
+    return false;
+  }
+
+  const MINCOTraj3D opt_traj = optimizer->getTrajectory();
+  const double total_T = opt_traj.getTotalDuration();
+  const Eigen::Vector3d final_pos = opt_traj.evaluate(total_T, 0);
+  const Eigen::Vector3d final_vel = opt_traj.evaluate(total_T, 1);
+  const Eigen::Vector3d final_acc = opt_traj.evaluate(total_T, 2);
+  const Eigen::Vector3d predicted_plate_at_touch =
+      perching_model.plate_position + perching_model.plate_velocity * total_T;
+  ROS_INFO("[CompiledPerching] solved T=%.2f final_pos=[%.2f %.2f %.2f] final_vel=[%.2f %.2f %.2f] final_acc=[%.2f %.2f %.2f] predicted_plate=[%.2f %.2f %.2f]",
+           total_T,
+           final_pos.x(),
+           final_pos.y(),
+           final_pos.z(),
+           final_vel.x(),
+           final_vel.y(),
+           final_vel.z(),
+           final_acc.x(),
+           final_acc.y(),
+           final_acc.z(),
+           predicted_plate_at_touch.x(),
+           predicted_plate_at_touch.y(),
+           predicted_plate_at_touch.z());
+
+  planner_manager_->setLocalTrajFromOpt(opt_traj, true);
+  planner_manager_->clearActiveTrackingArtifacts();
+  cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
+  if (visualization)
+  {
+    visualization->displayOptimalList(cstr_pts, 2);
+  }
+  solution.trajectory = planner_manager_->traj_.local_traj.traj;
+  return true;
+}
+
 bool PlannerEngine::solveTrackingCompiledProblem(const core::PlanningProblem &problem,
                                                  core::PlanningSolution &solution)
 {
@@ -1080,7 +1398,7 @@ bool PlannerEngine::solveTrackingLegacy(const core::PlanningProblem &problem,
 bool PlannerEngine::solvePerchingLegacy(const core::PlanningProblem &problem,
                                         core::PlanningSolution &solution)
 {
-  return solveStateToStateCompiledProblem(problem, solution);
+  return solvePerchingCompiledProblem(problem, solution);
 }
 
 } // namespace ego_planner::engine

@@ -19,10 +19,16 @@ namespace ego_planner
   constexpr int TRAJ_DIM = MINCO_TRAJ_DIM;
   constexpr int MINCO_S = MINCO_TRAJ_S;
   constexpr int MINCO_ORDER = MINCO_TRAJ_ORDER;
+  constexpr int SNAP_S = SNAP_TRAJ_S;
+  constexpr int SNAP_ORDER = SNAP_TRAJ_ORDER;
   using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
   using ESDFMINCOOpt = MINCOOpt;
   using CorridorMINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
+  using SnapOpt = minco::MINCOOptimizer<TRAJ_DIM, SNAP_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using ESDFSnapOpt = SnapOpt;
+  using CorridorSnapOpt = minco::MINCOOptimizer<TRAJ_DIM, SNAP_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
   using MINCOTraj = MINCOTraj3D;
+  using SnapTraj = SnapTraj3D;
   using Vec3 = Eigen::Vector3d;
   using WaypointsMat = Eigen::Matrix<double, Eigen::Dynamic, TRAJ_DIM>;
   

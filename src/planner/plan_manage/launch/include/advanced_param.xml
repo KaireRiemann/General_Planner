@@ -54,6 +54,7 @@
     <arg name="perching_min_prediction_time" default="0.8"/>
     <arg name="perching_max_prediction_time" default="1.8"/>
     <arg name="perching_terminal_thrust" default="9.81"/>
+    <arg name="perching_terminal_thrust_range" default="0.0"/>
     <arg name="perching_use_dynamics_terminal_accel" default="false"/>
     <arg name="perching_replan_if_unsafe" default="true"/>
     <arg name="perching_arrive_pos_thresh" default="0.45"/>
@@ -147,6 +148,7 @@
         <param name="fsm/perching_min_prediction_time" value="$(arg perching_min_prediction_time)" type="double"/>
         <param name="fsm/perching_max_prediction_time" value="$(arg perching_max_prediction_time)" type="double"/>
         <param name="fsm/perching_terminal_thrust" value="$(arg perching_terminal_thrust)" type="double"/>
+        <param name="fsm/perching_terminal_thrust_range" value="$(arg perching_terminal_thrust_range)" type="double"/>
         <param name="fsm/perching_use_dynamics_terminal_accel" value="$(arg perching_use_dynamics_terminal_accel)" type="bool"/>
         <param name="fsm/perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)" type="bool"/>
         <param name="fsm/perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)" type="double"/>

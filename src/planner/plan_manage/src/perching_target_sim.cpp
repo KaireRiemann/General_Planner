@@ -146,7 +146,7 @@ int main(int argc, char **argv)
       });
   ros::Rate rate(std::max(1.0, publish_rate));
 
-  ROS_INFO("Perching target simulator: odom=%s trigger=%s reset=%s mode=%s orientation=%s trigger_mode=%s",
+  ROS_INFO("Perching target simulator: odom=%s trigger=%s reset=%s lock=%s mode=%s orientation=%s trigger_mode=%s",
            odom_topic.c_str(),
            trigger_topic.c_str(),
            reset_topic.c_str(),

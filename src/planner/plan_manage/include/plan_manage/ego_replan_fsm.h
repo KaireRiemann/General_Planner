@@ -182,12 +182,15 @@ namespace ego_planner
     double perching_min_prediction_time_{1.0};
     double perching_max_prediction_time_{5.0};
     double perching_terminal_thrust_{9.81};
+    double perching_terminal_thrust_range_{0.0};
     bool perching_use_dynamics_terminal_accel_{false};
     bool perching_override_target_orientation_{false};
     bool perching_replan_if_unsafe_{true};
     double perching_arrive_pos_thresh_{0.45};
     double perching_arrive_vel_thresh_{0.85};
     double perching_min_execute_time_{0.30};
+    // double perching_successor_lead_time_{0.60};
+    // double perching_replan_target_shift_thresh_{0.35};
     Eigen::Vector3d perching_axis_{Eigen::Vector3d::UnitY()};
     double perching_theta_{-1.5708};
     bool perching_round_active_{false};

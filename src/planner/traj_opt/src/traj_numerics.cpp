@@ -149,19 +149,33 @@ namespace ego_planner
 
       if (opt->tracking_task_enabled_)
       {
-        total_cost = opt->corridorMincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->tracking_corridor_cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->corridorMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_corridor_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->corridorMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_corridor_cost_manager_);
       }
       else
       {
-        total_cost = opt->corridorMincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->corridor_cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->corridorMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->corridor_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->corridorMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->corridor_cost_manager_);
       }
     }
     else if (opt->optimize_mode_ == MODE_ESDF)
@@ -174,19 +188,33 @@ namespace ego_planner
 
       if (opt->tracking_task_enabled_)
       {
-        total_cost = opt->distanceFieldMincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->tracking_cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->distanceFieldMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->distanceFieldMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_cost_manager_);
       }
       else
       {
-        total_cost = opt->distanceFieldMincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->distance_field_cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->distanceFieldMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->distance_field_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->distanceFieldMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->distance_field_cost_manager_);
       }
 
       const Eigen::MatrixXd constraint_points =
@@ -204,19 +232,33 @@ namespace ego_planner
 
       if (opt->tracking_task_enabled_)
       {
-        total_cost = opt->mincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->tracking_cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->mincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->mincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->tracking_cost_manager_);
       }
       else
       {
-        total_cost = opt->mincoOpt_.evaluate(
-            x_vec,
-            grad_vec,
-            time_cost_wrapper,
-            opt->cost_manager_);
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->mincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->mincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->cost_manager_);
       }
 
       const Eigen::MatrixXd constraint_points =

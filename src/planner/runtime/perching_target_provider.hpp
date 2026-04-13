@@ -14,10 +14,17 @@ struct PerchingTerminalState
   Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond landing_orientation{Eigen::Quaterniond::Identity()};
+  Eigen::Vector3d landing_tangent_x{Eigen::Vector3d::UnitX()};
+  Eigen::Vector3d landing_tangent_y{Eigen::Vector3d::UnitY()};
   Eigen::Vector3d landing_normal{Eigen::Vector3d::UnitZ()};
   Eigen::Vector3d terminal_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d terminal_velocity{Eigen::Vector3d::Zero()};
   Eigen::Vector3d terminal_acceleration{Eigen::Vector3d::Zero()};
+  double terminal_thrust_nominal{9.81};
+  double terminal_thrust_range{0.0};
+  bool use_dynamics_terminal_accel{false};
+  Eigen::Vector2d tangential_velocity_seed{Eigen::Vector2d::Zero()};
+  double thrust_phase_seed{0.0};
 };
 
 // Converts a moving landing plate odometry into perching terminal semantics.
@@ -32,6 +39,7 @@ public:
                  double min_prediction_time,
                  double max_prediction_time,
                  double terminal_thrust,
+                 double terminal_thrust_range,
                  bool use_dynamics_terminal_accel,
                  const Eigen::Quaterniond &fallback_landing_orientation,
                  bool override_target_orientation);
@@ -56,6 +64,7 @@ private:
   double min_prediction_time_{1.0};
   double max_prediction_time_{5.0};
   double terminal_thrust_{9.81};
+  double terminal_thrust_range_{0.0};
   bool use_dynamics_terminal_accel_{false};
   bool override_target_orientation_{false};
   bool has_target_{false};
