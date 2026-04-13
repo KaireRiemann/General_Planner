@@ -125,6 +125,7 @@
         <arg name="target0_z" value="0.0"/>
         <arg name="use_perching_task" value="true"/>
         <arg name="perching_target_odom_topic" value="/perching/target_odom"/>
+        <arg name="perching_lock_topic" value="$(arg perching_lock_topic)"/>
         <arg name="perching_auto_start" value="false"/>
         <arg name="perching_robot_l" value="$(arg perching_robot_l)"/>
         <arg name="perching_v_plus" value="$(arg perching_v_plus)"/>

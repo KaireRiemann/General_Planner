@@ -1,6 +1,7 @@
 #include <Eigen/Geometry>
 #include <nav_msgs/Odometry.h>
 #include <ros/ros.h>
+#include <std_msgs/Bool.h>
 #include <std_msgs/Empty.h>
 
 #include <algorithm>
@@ -52,6 +53,7 @@ int main(int argc, char **argv)
   std::string odom_topic = "/perching/target_odom";
   std::string trigger_topic = "/land_triger";
   std::string reset_topic = "/perching/reset";
+  std::string lock_topic = "/perching/lock";
   std::string trigger_mode = "once";
   double publish_rate = 50.0;
   double px = 0.5;
@@ -87,6 +89,7 @@ int main(int argc, char **argv)
   nh.param("odom_topic", odom_topic, odom_topic);
   nh.param("trigger_topic", trigger_topic, trigger_topic);
   nh.param("reset_topic", reset_topic, reset_topic);
+  nh.param("lock_topic", lock_topic, lock_topic);
   nh.param("trigger_mode", trigger_mode, trigger_mode);
   nh.param("publish_rate", publish_rate, publish_rate);
   nh.param("perching_px", px, px);
@@ -125,6 +128,10 @@ int main(int argc, char **argv)
 
   ros::Time round_start_time = ros::Time::now();
   bool trigger_sent = false;
+  bool motion_locked = false;
+  bool lock_latched = false;
+  Eigen::Vector3d lock_pos(px, py, pz);
+  Eigen::Quaterniond lock_q = Eigen::Quaterniond::Identity();
   int round_id = 0;
 
   auto reset_round = [&round_start_time, &trigger_sent, &round_id]()
@@ -144,12 +151,24 @@ int main(int argc, char **argv)
       {
         reset_round();
       });
+  ros::Subscriber lock_sub = nh.subscribe<std_msgs::Bool>(
+      lock_topic,
+      1,
+      [&motion_locked](const std_msgs::BoolConstPtr &msg)
+      {
+        if (!msg)
+        {
+          return;
+        }
+        motion_locked = msg->data;
+      });
   ros::Rate rate(std::max(1.0, publish_rate));
 
   ROS_INFO("Perching target simulator: odom=%s trigger=%s reset=%s lock=%s mode=%s orientation=%s trigger_mode=%s",
            odom_topic.c_str(),
            trigger_topic.c_str(),
            reset_topic.c_str(),
+           lock_topic.c_str(),
            motion_mode.c_str(),
            orientation_mode.c_str(),
            trigger_mode.c_str());
@@ -219,6 +238,26 @@ int main(int argc, char **argv)
                             yaw);
     }
     q = normalized(q);
+
+    if (motion_locked)
+    {
+      if (!lock_latched)
+      {
+        lock_pos = pos;
+        lock_q = q;
+        lock_latched = true;
+        ROS_INFO("Perching target simulator locked motion at [%.2f %.2f %.2f].",
+                 lock_pos.x(), lock_pos.y(), lock_pos.z());
+      }
+      pos = lock_pos;
+      q = lock_q;
+      vel.setZero();
+    }
+    else if (lock_latched)
+    {
+      lock_latched = false;
+      ROS_INFO("Perching target simulator unlocked motion.");
+    }
 
     nav_msgs::Odometry odom;
     odom.header.stamp = now;

@@ -11,6 +11,7 @@
 #include <sensor_msgs/Imu.h>
 #include <ros/ros.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/Bool.h>
 #include <std_msgs/Float64.h>
 #include <vector>
 #include <visualization_msgs/Marker.h>
@@ -177,6 +178,7 @@ namespace ego_planner
     bool perching_triggered_{false};
     std::string perching_target_odom_topic_{"/perching/target_odom"};
     std::string perching_trigger_topic_{"/land_triger"};
+    std::string perching_lock_topic_{"/perching/lock"};
     double perching_robot_l_{0.02};
     double perching_v_plus_{0.3};
     double perching_min_prediction_time_{1.0};
@@ -243,7 +245,7 @@ namespace ego_planner
     ros::NodeHandle node_;
     ros::Timer exec_timer_, safety_timer_;
     ros::Subscriber waypoint_sub_, odom_sub_, trigger_sub_, broadcast_ploytraj_sub_, mandatory_stop_sub_, tracking_ref_sub_, tracking_target_odom_sub_, perching_target_odom_sub_, perching_trigger_sub_;
-    ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_, tracking_target_goal_pub_;
+    ros::Publisher poly_traj_pub_, data_disp_pub_, broadcast_ploytraj_pub_, heartbeat_pub_, ground_height_pub_, tracking_target_goal_pub_, perching_lock_pub_;
 
     /* state machine functions */
     void execFSMCallback(const ros::TimerEvent &e);

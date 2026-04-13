@@ -1,6 +1,8 @@
 #include <tasks/perching_task.hpp>
 #include <tasks/state_to_state_task.hpp>
 
+#include <algorithm>
+
 namespace
 {
 
@@ -40,8 +42,9 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                                                    const Eigen::Vector3d &contact_pt,
                                                    const Eigen::Vector3d &contact_vel,
                                                    const Eigen::Vector3d &contact_acc,
-                                                   const Eigen::Vector3d &plate_position,
+                                                   const Eigen::Vector3d &plate_position_now,
                                                    const Eigen::Vector3d &plate_velocity,
+                                                   const double prediction_time,
                                                    const Eigen::Vector3d &landing_tangent_x,
                                                    const Eigen::Vector3d &landing_tangent_y,
                                                    const Eigen::Vector3d &landing_normal,
@@ -93,13 +96,14 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   }
   safe_tangent_x.normalize();
 
-  task.goal.manifold_params.resize(29);
+  task.goal.manifold_params.resize(30);
   task.goal.manifold_params.segment<3>(0) = contact_pt;
   task.goal.manifold_params.segment<3>(3) = contact_vel;
-  // The terminal manifold stores the plate state at planning start.
-  // Dynamic terminal mapping then evaluates the true terminal state at the
-  // optimized final time T using this base state.
-  task.goal.manifold_params.segment<3>(6) = plate_position;
+  // The terminal manifold stores the plate state at planning start and the
+  // reference prediction time used to build the contact seed.
+  // Dynamic terminal mapping evaluates the true terminal state at optimized
+  // final time T using (T - prediction_time) relative propagation.
+  task.goal.manifold_params.segment<3>(6) = plate_position_now;
   task.goal.manifold_params.segment<3>(9) = plate_velocity;
   task.goal.manifold_params.segment<3>(12) = safe_tangent_x;
   task.goal.manifold_params.segment<3>(15) = safe_tangent_y;
@@ -112,6 +116,7 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   task.goal.manifold_params(26) = 0.0; // nu_y seed
   task.goal.manifold_params(27) = 0.0; // tau_f seed
   task.goal.manifold_params(28) = use_dynamics_terminal_accel ? 1.0 : 0.0;
+  task.goal.manifold_params(29) = std::max(0.0, prediction_time);
 
   task.runtime_policy.touch_goal = true;
   task.runtime_policy.enable_keep_current = false;
@@ -150,6 +155,7 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                          Eigen::Vector3d::Zero(),
                          contact_pt,
                          Eigen::Vector3d::Zero(),
+                         0.0,
                          Eigen::Vector3d::UnitX(),
                          Eigen::Vector3d::UnitY(),
                          Eigen::Vector3d::UnitZ(),
@@ -169,8 +175,9 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                                    const Eigen::Vector3d &contact_pt,
                                    const Eigen::Vector3d &contact_vel,
                                    const Eigen::Vector3d &contact_acc,
-                                   const Eigen::Vector3d &plate_position,
+                                   const Eigen::Vector3d &plate_position_now,
                                    const Eigen::Vector3d &plate_velocity,
+                                   const double prediction_time,
                                    const Eigen::Vector3d &landing_tangent_x,
                                    const Eigen::Vector3d &landing_tangent_y,
                                    const Eigen::Vector3d &landing_normal,
@@ -189,8 +196,9 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                          contact_pt,
                          contact_vel,
                          contact_acc,
-                         plate_position,
+                         plate_position_now,
                          plate_velocity,
+                         prediction_time,
                          landing_tangent_x,
                          landing_tangent_y,
                          landing_normal,
@@ -220,6 +228,7 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                Eigen::Vector3d::Zero(),
                contact_pt,
                Eigen::Vector3d::Zero(),
+               0.0,
                Eigen::Vector3d::UnitX(),
                Eigen::Vector3d::UnitY(),
                Eigen::Vector3d::UnitZ(),

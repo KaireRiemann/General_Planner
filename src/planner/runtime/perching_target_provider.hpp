@@ -11,6 +11,7 @@ struct PerchingTerminalState
 {
   bool valid{false};
   double prediction_time{0.0};
+  Eigen::Vector3d plate_position_now{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond landing_orientation{Eigen::Quaterniond::Identity()};
@@ -54,6 +55,9 @@ public:
   bool buildTerminalState(const Eigen::Vector3d &ego_position,
                           double max_velocity,
                           PerchingTerminalState &terminal) const;
+
+  bool buildTerminalStateAtPrediction(double prediction_time,
+                                      PerchingTerminalState &terminal) const;
 
   static Eigen::Quaterniond quaternionFromAxisAngle(const Eigen::Vector3d &axis,
                                                     double theta);

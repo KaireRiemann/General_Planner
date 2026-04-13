@@ -149,7 +149,7 @@ public:
  * @brief Simplified Fast-Perching-style dynamic terminal mapping.
  *
  * This mapping follows the paper semantics in a lightweight way:
- *   tail_pos(T) = Xi(T) + l * z_s
+ *   tail_pos(T) = Xi_ref + Xi_dot * (T - T_ref) + l * z_s
  *   tail_vel(T) = Xi_dot + nu_x * x_s + nu_y * y_s - v_plus * z_s
  *   tail_acc(T) = (tau_m + tau_r * sin(tau_f)) * z_s + g
  *   tail_jerk(T) = 0                              (when S >= 4)
@@ -192,6 +192,7 @@ public:
 
   void configure(const Eigen::Vector3d &plate_position,
                  const Eigen::Vector3d &plate_velocity,
+                 const double reference_time,
                  const Eigen::Vector3d &surface_x,
                  const Eigen::Vector3d &surface_y,
                  const Eigen::Vector3d &surface_z,
@@ -207,6 +208,7 @@ public:
   {
     plate_position_ = plate_position;
     plate_velocity_ = plate_velocity;
+    reference_time_ = std::max(0.0, reference_time);
     surface_x_ = normalizedOr(surface_x, Eigen::Vector3d::UnitX());
     surface_y_ = normalizedOr(surface_y, Eigen::Vector3d::UnitY());
     surface_z_ = normalizedOr(surface_z, Eigen::Vector3d::UnitZ());
@@ -269,7 +271,8 @@ public:
     const double nu_y = extra_vars.size() > IDX_NU_Y ? extra_vars(IDX_NU_Y) : 0.0;
     const double tau_f = extra_vars.size() > IDX_TAU_F ? extra_vars(IDX_TAU_F) : 0.0;
 
-    mapped_tail_state.col(0) = plate_position_ + plate_velocity_ * total_T + robot_l_ * surface_z_;
+    const double dt_from_ref = std::max(0.0, total_T - reference_time_);
+    mapped_tail_state.col(0) = plate_position_ + plate_velocity_ * dt_from_ref + robot_l_ * surface_z_;
     mapped_tail_state.col(1) = plate_velocity_ +
                                nu_x * surface_x_ +
                                nu_y * surface_y_ -
@@ -365,6 +368,7 @@ private:
   bool configured_{false};
   Eigen::Vector3d plate_position_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity_{Eigen::Vector3d::Zero()};
+  double reference_time_{0.0};
   Eigen::Vector3d surface_x_{Eigen::Vector3d::UnitX()};
   Eigen::Vector3d surface_y_{Eigen::Vector3d::UnitY()};
   Eigen::Vector3d surface_z_{Eigen::Vector3d::UnitZ()};

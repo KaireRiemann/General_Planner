@@ -44,6 +44,7 @@
     <arg name="tracking_relative_offset_y" default="0.0"/>
     <arg name="tracking_relative_offset_z" default="0.0"/>
     <arg name="perching_target_odom_topic" default="/perching/target_odom"/>
+    <arg name="perching_lock_topic" default="/perching/lock"/>
     <arg name="perching_auto_start" default="false"/>
     <arg name="perching_robot_l" default="0.02"/>
     <arg name="perching_v_plus" default="0.3"/>
@@ -141,6 +142,7 @@
         <param name="fsm/tracking_replan_distance_buffer" value="0.55" type="double"/>
         <param name="fsm/tracking_replan_height_buffer" value="0.30" type="double"/>
         <param name="fsm/perching_target_odom_topic" value="$(arg perching_target_odom_topic)" type="str"/>
+        <param name="fsm/perching_lock_topic" value="$(arg perching_lock_topic)" type="str"/>
         <param name="fsm/perching_trigger_topic" value="/land_triger" type="str"/>
         <param name="fsm/perching_auto_start" value="$(arg perching_auto_start)" type="bool"/>
         <param name="fsm/perching_robot_l" value="$(arg perching_robot_l)" type="double"/>

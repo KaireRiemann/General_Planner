@@ -31,8 +31,9 @@ struct EdgeLess
 struct PerchingSemanticModel
 {
   bool valid{false};
-  Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d plate_position_ref{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
+  double reference_time{0.0};
   Eigen::Vector3d surface_x{Eigen::Vector3d::UnitX()};
   Eigen::Vector3d surface_y{Eigen::Vector3d::UnitY()};
   Eigen::Vector3d surface_z{Eigen::Vector3d::UnitZ()};
@@ -206,7 +207,7 @@ bool decodePerchingSemanticModel(const ego_planner::core::PerchingSemanticArtifa
   const Eigen::VectorXd &params = artifact.terminal_manifold_params;
   if (params.size() >= 29)
   {
-    model.plate_position = params.segment<3>(6);
+    model.plate_position_ref = params.segment<3>(6);
     model.plate_velocity = params.segment<3>(9);
     model.surface_x = params.segment<3>(12);
     model.surface_y = params.segment<3>(15);
@@ -219,14 +220,16 @@ bool decodePerchingSemanticModel(const ego_planner::core::PerchingSemanticArtifa
     model.nu_seed.y() = params(26);
     model.tau_f_seed = params(27);
     model.use_dynamics_terminal_accel = params(28) > 0.5;
+    model.reference_time = params.size() >= 30 ? std::max(0.0, params(29)) : 0.0;
   }
   else if (params.size() >= 11)
   {
     model.surface_z = params.segment<3>(6);
     model.robot_l = params(9);
     model.v_plus = params(10);
-    model.plate_position = artifact.contact_state.position - model.robot_l * model.surface_z;
+    model.plate_position_ref = artifact.contact_state.position - model.robot_l * model.surface_z;
     model.plate_velocity = artifact.contact_state.velocity + model.v_plus * model.surface_z;
+    model.reference_time = 0.0;
     model.thrust_nominal = 9.81;
     model.thrust_range = 0.0;
     model.use_dynamics_terminal_accel = false;
@@ -268,11 +271,12 @@ bool decodePerchingSemanticModel(const ego_planner::core::PerchingSemanticArtifa
   model.v_plus = std::max(0.0, model.v_plus);
   model.thrust_range = std::max(0.0, model.thrust_range);
   model.valid =
-      model.plate_position.allFinite() &&
+      model.plate_position_ref.allFinite() &&
       model.plate_velocity.allFinite() &&
       model.nu_seed.allFinite() &&
       std::isfinite(model.thrust_nominal) &&
-      std::isfinite(model.tau_f_seed);
+      std::isfinite(model.tau_f_seed) &&
+      std::isfinite(model.reference_time);
   return model.valid;
 }
 
@@ -934,8 +938,9 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   }
 
   minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S> perching_mapping;
-  perching_mapping.configure(perching_model.plate_position,
+  perching_mapping.configure(perching_model.plate_position_ref,
                              perching_model.plate_velocity,
+                             perching_model.reference_time,
                              perching_model.surface_x,
                              perching_model.surface_y,
                              perching_model.surface_z,
@@ -946,18 +951,19 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
                              perching_model.use_dynamics_terminal_accel,
                              perching_model.nu_seed,
                              perching_model.tau_f_seed);
-  ROS_INFO("[CompiledPerching] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu plate_now=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
+  ROS_INFO("[CompiledPerching] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu plate_ref=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] pred_ref_t=%.2f normal=[%.2f %.2f %.2f]",
            compiled_active_mode,
            selected_mode_str,
            solver_input.source.c_str(),
            active_guide_path.size(),
            corridor_hpolys.size(),
-           perching_model.plate_position.x(),
-           perching_model.plate_position.y(),
-           perching_model.plate_position.z(),
+           perching_model.plate_position_ref.x(),
+           perching_model.plate_position_ref.y(),
+           perching_model.plate_position_ref.z(),
            perching_model.plate_velocity.x(),
            perching_model.plate_velocity.y(),
            perching_model.plate_velocity.z(),
+           perching_model.reference_time,
            perching_model.surface_z.x(),
            perching_model.surface_z.y(),
            perching_model.surface_z.z());
@@ -1056,8 +1062,9 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   const Eigen::Vector3d final_vel = opt_traj.evaluate(total_T, 1);
   const Eigen::Vector3d final_acc = opt_traj.evaluate(total_T, 2);
   const Eigen::Vector3d predicted_plate_at_touch =
-      perching_model.plate_position + perching_model.plate_velocity * total_T;
-  ROS_INFO("[CompiledPerching] solved T=%.2f final_pos=[%.2f %.2f %.2f] final_vel=[%.2f %.2f %.2f] final_acc=[%.2f %.2f %.2f] predicted_plate=[%.2f %.2f %.2f]",
+      perching_model.plate_position_ref +
+      perching_model.plate_velocity * std::max(0.0, total_T - perching_model.reference_time);
+  ROS_INFO("[CompiledPerching] solved T=%.2f final_pos=[%.2f %.2f %.2f] final_vel=[%.2f %.2f %.2f] final_acc=[%.2f %.2f %.2f] predicted_plate=[%.2f %.2f %.2f] ref_t=%.2f",
            total_T,
            final_pos.x(),
            final_pos.y(),
@@ -1070,7 +1077,8 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            final_acc.z(),
            predicted_plate_at_touch.x(),
            predicted_plate_at_touch.y(),
-           predicted_plate_at_touch.z());
+           predicted_plate_at_touch.z(),
+           perching_model.reference_time);
 
   planner_manager_->setLocalTrajFromOpt(opt_traj, true);
   planner_manager_->clearActiveTrackingArtifacts();

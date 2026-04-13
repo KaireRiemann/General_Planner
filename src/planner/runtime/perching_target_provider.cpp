@@ -65,6 +65,22 @@ bool PerchingTargetProvider::buildTerminalState(const Eigen::Vector3d &ego_posit
                                                 const double max_velocity,
                                                 PerchingTerminalState &terminal) const
 {
+  if (!has_target_)
+  {
+    return false;
+  }
+
+  const double nominal_speed = std::max(0.2, 0.75 * std::max(0.2, max_velocity));
+  const double raw_time = (plate_position_ - ego_position).norm() / nominal_speed;
+  const double prediction_time =
+      std::min(max_prediction_time_, std::max(min_prediction_time_, raw_time));
+
+  return buildTerminalStateAtPrediction(prediction_time, terminal);
+}
+
+bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double prediction_time,
+                                                            PerchingTerminalState &terminal) const
+{
   terminal = PerchingTerminalState{};
   if (!has_target_)
   {
@@ -95,16 +111,11 @@ bool PerchingTargetProvider::buildTerminalState(const Eigen::Vector3d &ego_posit
   tangent_x = tangent_y.cross(normal);
   tangent_x.normalize();
 
-  const double nominal_speed = std::max(0.2, 0.75 * max_velocity);
-  const double raw_time = (plate_position_ - ego_position).norm() / nominal_speed;
-  const double prediction_time =
-    std::min(max_prediction_time_, std::max(min_prediction_time_, raw_time));
-
   const double clamped_prediction_time = std::max(0.0, prediction_time);
-
   terminal.valid = true;
-  terminal.prediction_time = prediction_time;
-  terminal.plate_position = plate_position_ + plate_velocity_ * prediction_time;
+  terminal.prediction_time = clamped_prediction_time;
+  terminal.plate_position_now = plate_position_;
+  terminal.plate_position = plate_position_ + plate_velocity_ * clamped_prediction_time;
   terminal.plate_velocity = plate_velocity_;
   terminal.landing_orientation = landing_q;
   terminal.landing_tangent_x = tangent_x;
