@@ -138,7 +138,9 @@ catkin_package(
 ## Build ##
 ###########
 find_package(Armadillo REQUIRED)
+find_package(Eigen3 REQUIRED)
 include_directories(${ARMADILLO_INCLUDE_DIRS})
+include_directories(${EIGEN3_INCLUDE_DIRS})
 
 
 ## Specify additional locations of header files
@@ -170,6 +172,7 @@ target_link_libraries(odom_visualization
 
 target_link_libraries(odom_visualization_plate
    ${catkin_LIBRARIES}
+   ${EIGEN3_LIBRARIES}
 )
 
 #############
