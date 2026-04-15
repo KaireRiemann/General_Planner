@@ -57,6 +57,7 @@ add_executable(ego_planner_node
   ../frontend/guide_path_service.cpp
   ../frontend/corridor_service.cpp
   ../frontend/transit_init_service.cpp
+  ../frontend/perching_init_service.cpp
   ../frontend/visible_region_service.cpp
   ../frontend/terminal_manifold_service.cpp
   ../frontend/warm_start_service.cpp
