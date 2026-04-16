@@ -1688,7 +1688,7 @@ namespace ego_planner
           perching_terminal.terminal_position,
           perching_terminal.terminal_velocity,
           perching_terminal.terminal_acceleration,
-          perching_terminal.plate_position_now,
+          perching_terminal.plate_position,
           perching_terminal.plate_velocity,
           perching_terminal.prediction_time,
           perching_terminal.landing_tangent_x,

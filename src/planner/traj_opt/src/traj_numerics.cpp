@@ -122,11 +122,16 @@ namespace ego_planner
     fill(opt->min_ellip_dist2_.begin(), opt->min_ellip_dist2_.end(), std::numeric_limits<double>::max());
     if (opt->optimize_mode_ == MODE_CORRIDOR && opt->tracking_task_enabled_)
       opt->tracking_corridor_cost_manager_.resetAccumulation();
+    else if (opt->optimize_mode_ == MODE_CORRIDOR && opt->perching_acceptance_active_)
+      opt->perching_cost_manager_.resetAccumulation();
     else if (opt->optimize_mode_ == MODE_CORRIDOR)
       opt->corridor_cost_manager_.resetAccumulation();
     else if ((opt->optimize_mode_ == MODE_ESDF || opt->optimize_mode_ == MODE_PLAIN) &&
              opt->tracking_task_enabled_)
       opt->tracking_cost_manager_.resetAccumulation();
+    else if ((opt->optimize_mode_ == MODE_ESDF || opt->optimize_mode_ == MODE_PLAIN) &&
+             opt->perching_acceptance_active_)
+      opt->perching_cost_manager_.resetAccumulation();
     else if (opt->optimize_mode_ == MODE_ESDF)
       opt->distance_field_cost_manager_.resetAccumulation();
     else
@@ -161,6 +166,21 @@ namespace ego_planner
                                grad_vec,
                                time_cost_wrapper,
                                opt->tracking_corridor_cost_manager_);
+      }
+      else if (opt->perching_acceptance_active_)
+      {
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->corridorMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->corridorMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_);
       }
       else
       {
@@ -200,6 +220,21 @@ namespace ego_planner
                                grad_vec,
                                time_cost_wrapper,
                                opt->tracking_cost_manager_);
+      }
+      else if (opt->perching_acceptance_active_)
+      {
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->distanceFieldMincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->distanceFieldMincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_);
       }
       else
       {
@@ -244,6 +279,21 @@ namespace ego_planner
                                grad_vec,
                                time_cost_wrapper,
                                opt->tracking_cost_manager_);
+      }
+      else if (opt->perching_acceptance_active_)
+      {
+        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
+                         ? opt->mincoOpt_.evaluateWithTerminalMapping(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_,
+                               opt->terminal_mapping_)
+                         : opt->mincoOpt_.evaluate(
+                               x_vec,
+                               grad_vec,
+                               time_cost_wrapper,
+                               opt->perching_cost_manager_);
       }
       else
       {

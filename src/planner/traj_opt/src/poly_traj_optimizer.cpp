@@ -14,6 +14,15 @@ using namespace std;
 
 namespace
 {
+  bool perchingTerminalAccepted(const ego_planner::PolyTrajOptimizer::PerchingTerminalMetrics &metrics,
+                                const ego_planner::PolyTrajOptimizer::PerchingCheckConfig &config)
+  {
+    return metrics.valid &&
+           metrics.contact_position_error <= config.contact_position_tolerance &&
+           metrics.relative_tangential_speed <= config.relative_tangential_speed_tolerance &&
+           metrics.relative_normal_speed <= config.relative_normal_speed_tolerance;
+  }
+
   spatial_map::PolyhedronV makeSpatialVertexPoly(const Eigen::Matrix3Xd &vertices)
   {
     spatial_map::PolyhedronV mapped;
@@ -358,6 +367,50 @@ namespace ego_planner
       tracking_cost_manager_.wei_track_view_dir_smooth = wei_tracking_view_dir_smooth_;
     }
 
+    const auto *perching_mapping =
+        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+            : nullptr;
+    perching_cost_manager_.setPerchingSemanticConfig(
+        perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
+    perching_cost_manager_.setSpatialMode(cost_functional::PerchingCostFunctionalManager::SPATIAL_PLAIN);
+    perching_cost_manager_.setCorridor(nullptr, nullptr);
+    perching_cost_manager_.setReferencePoints(nullptr, 0.0);
+    perching_cost_manager_.grid_map = grid_map_;
+    perching_cost_manager_.cps = &cps_;
+    perching_cost_manager_.swarm_traj = swarm_trajs_;
+    perching_cost_manager_.wei_obs = wei_obs_;
+    perching_cost_manager_.wei_obs_soft = wei_obs_soft_;
+    perching_cost_manager_.wei_dist = wei_dist_;
+    perching_cost_manager_.wei_corridor = wei_corridor_;
+    perching_cost_manager_.wei_corridor_ref = wei_corridor_ref_;
+    perching_cost_manager_.wei_swarm = wei_swarm_mod_;
+    perching_cost_manager_.wei_feas = wei_feas_;
+    perching_cost_manager_.wei_sqrvar = wei_sqrvar_;
+    perching_cost_manager_.wei_perch_floor = wei_perching_floor_;
+    perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
+    perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
+    perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.obs_clearance = obs_clearance_;
+    perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
+    perching_cost_manager_.safe_margin = safety_margin_;
+    perching_cost_manager_.corridor_clearance = corridor_clearance_;
+    perching_cost_manager_.corridor_smoothing = corridor_smoothing_;
+    perching_cost_manager_.swarm_clearance = swarm_clearance_;
+    perching_cost_manager_.max_vel = max_vel_;
+    perching_cost_manager_.max_acc = max_acc_;
+    perching_cost_manager_.max_jer = max_jer_;
+    perching_cost_manager_.thrust_min = perching_thrust_min_;
+    perching_cost_manager_.thrust_max = perching_thrust_max_;
+    perching_cost_manager_.omega_max = perching_omega_max_;
+    perching_cost_manager_.robot_radius = perching_robot_radius_;
+    perching_cost_manager_.platform_radius = perching_platform_radius_;
+    perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.drone_id = drone_id_;
+    perching_cost_manager_.t_now = t_now_;
+    perching_cost_manager_.touch_goal = touch_goal_;
+    perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
     Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
@@ -390,6 +443,10 @@ namespace ego_planner
       if (tracking_task_enabled_)
       {
         tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
+      else if (perching_acceptance_active_)
+      {
+        perching_cost_manager_.wei_swarm = wei_swarm_mod_;
       }
       else
       {
@@ -433,19 +490,58 @@ namespace ego_planner
         if (!flag_swarm_too_close)
         {
           const MINCOTraj &traj = mincoOpt_.getTrajectory();
-          Eigen::MatrixXd init_points = getInitConstraintPoints(); 
-
-          std::vector<std::pair<int, int>> segments_nouse;
-          if (finelyCheckAndSetConstraintPoints(segments_nouse, traj, init_points, false) == CHK_RET::OBS_FREE)
+          if (perching_acceptance_active_ &&
+              terminal_mapping_ != nullptr &&
+              terminal_mapping_->enabled())
           {
-            flag_success = true;
-            PRINTF_COND("\033[32miter=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
+            PerchingTerminalMetrics metrics;
+            Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+            const Eigen::VectorXd extra_vars =
+                (terminal_mapping_ != nullptr && terminal_mapping_->enabled() &&
+                 terminal_mapping_->extraVariableDim() > 0)
+                    ? x_final.tail(terminal_mapping_->extraVariableDim())
+                    : Eigen::VectorXd{};
+            const bool metrics_ok =
+                evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, metrics);
+            const bool approach_collision_free =
+                metrics_ok && isTrajectoryCollisionFreeUntil(traj, metrics.approach_check_until);
+            const bool terminal_ok =
+                metrics_ok && perchingTerminalAccepted(metrics, perching_check_config_);
+
+            if (approach_collision_free && terminal_ok)
+            {
+              flag_success = true;
+              PRINTF_COND("\033[32miter=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
+            }
+            else
+            {
+              flag_still_unsafe = true;
+              restart_nums++;
+              ROS_WARN("Perching plain optimize rejected: approach_collision_free=%s terminal_ok=%s "
+                       "contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f approach_until=%.3f",
+                       approach_collision_free ? "yes" : "no",
+                       metrics_ok ? (terminal_ok ? "yes" : "no") : "invalid",
+                       metrics.contact_position_error,
+                       metrics.relative_tangential_speed,
+                       metrics.relative_normal_speed,
+                       metrics.approach_check_until);
+            }
           }
           else
           {
-            flag_still_unsafe = true;
-            restart_nums++;
-            PRINTF_COND("\033[32miter=%d,time(ms)=%5.3f, fine check collided, keep optimizing\n\033[0m", iter_num_, time_ms);
+            Eigen::MatrixXd init_points = getInitConstraintPoints();
+            std::vector<std::pair<int, int>> segments_nouse;
+            if (finelyCheckAndSetConstraintPoints(segments_nouse, traj, init_points, false) == CHK_RET::OBS_FREE)
+            {
+              flag_success = true;
+              PRINTF_COND("\033[32miter=%d,time(ms)=%5.3f,total_t(ms)=%5.3f,cost=%5.3f\n\033[0m", iter_num_, time_ms, total_time_ms, final_cost);
+            }
+            else
+            {
+              flag_still_unsafe = true;
+              restart_nums++;
+              PRINTF_COND("\033[32miter=%d,time(ms)=%5.3f, fine check collided, keep optimizing\n\033[0m", iter_num_, time_ms);
+            }
           }
         }
         else
@@ -515,7 +611,9 @@ namespace ego_planner
       double &final_cost)
   {
     terminal_mapping_ = &terminal_mapping;
+    perching_acceptance_active_ = true;
     const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
+    perching_acceptance_active_ = false;
     terminal_mapping_ = nullptr;
     return success;
   }
@@ -634,6 +732,50 @@ namespace ego_planner
       tracking_corridor_cost_manager_.track_los_clearance = tracking_los_clearance_;
     }
 
+    const auto *perching_mapping =
+        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+            : nullptr;
+    perching_cost_manager_.setPerchingSemanticConfig(
+        perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
+    perching_cost_manager_.setSpatialMode(cost_functional::PerchingCostFunctionalManager::SPATIAL_ESDF);
+    perching_cost_manager_.setCorridor(nullptr, nullptr);
+    perching_cost_manager_.setReferencePoints(nullptr, 0.0);
+    perching_cost_manager_.grid_map = grid_map_;
+    perching_cost_manager_.cps = &cps_;
+    perching_cost_manager_.swarm_traj = swarm_trajs_;
+    perching_cost_manager_.wei_obs = wei_obs_;
+    perching_cost_manager_.wei_obs_soft = wei_obs_soft_;
+    perching_cost_manager_.wei_dist = wei_dist_;
+    perching_cost_manager_.wei_corridor = wei_corridor_;
+    perching_cost_manager_.wei_corridor_ref = wei_corridor_ref_;
+    perching_cost_manager_.wei_swarm = wei_swarm_mod_;
+    perching_cost_manager_.wei_feas = wei_feas_;
+    perching_cost_manager_.wei_sqrvar = wei_sqrvar_;
+    perching_cost_manager_.wei_perch_floor = wei_perching_floor_;
+    perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
+    perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
+    perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.obs_clearance = obs_clearance_;
+    perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
+    perching_cost_manager_.safe_margin = safety_margin_;
+    perching_cost_manager_.corridor_clearance = corridor_clearance_;
+    perching_cost_manager_.corridor_smoothing = corridor_smoothing_;
+    perching_cost_manager_.swarm_clearance = swarm_clearance_;
+    perching_cost_manager_.max_vel = max_vel_;
+    perching_cost_manager_.max_acc = max_acc_;
+    perching_cost_manager_.max_jer = max_jer_;
+    perching_cost_manager_.thrust_min = perching_thrust_min_;
+    perching_cost_manager_.thrust_max = perching_thrust_max_;
+    perching_cost_manager_.omega_max = perching_omega_max_;
+    perching_cost_manager_.robot_radius = perching_robot_radius_;
+    perching_cost_manager_.platform_radius = perching_platform_radius_;
+    perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.drone_id = drone_id_;
+    perching_cost_manager_.t_now = t_now_;
+    perching_cost_manager_.touch_goal = touch_goal_;
+    perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
     Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
@@ -655,14 +797,17 @@ namespace ego_planner
     lbfgs_params.past = 3;
     lbfgs_params.delta = 1.0e-2;
 
-    const auto computeMinSdf = [&](const MINCOTraj &traj) -> double
+    const auto computeMinSdf = [&](const MINCOTraj &traj, const double until_time = -1.0) -> double
     {
       const double total_duration = traj.getTotalDuration();
+      const double horizon =
+          until_time >= 0.0 ? std::min(std::max(0.0, until_time), total_duration)
+                            : total_duration;
       const double dt = std::max(0.01, std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1)));
       double min_sdf = std::numeric_limits<double>::infinity();
-      for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+      for (double t = 0.0; t <= horizon + 1.0e-6; t += dt)
       {
-        const double sample_t = std::min(t, total_duration);
+        const double sample_t = std::min(t, horizon);
         min_sdf = std::min(min_sdf, grid_map_->getDistance(traj.evaluate(sample_t, 0)));
       }
       return std::isfinite(min_sdf) ? min_sdf : 0.0;
@@ -682,6 +827,10 @@ namespace ego_planner
       if (tracking_task_enabled_)
       {
         tracking_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
+      else if (perching_acceptance_active_)
+      {
+        perching_cost_manager_.wei_swarm = wei_swarm_mod_;
       }
       else
       {
@@ -714,11 +863,40 @@ namespace ego_planner
         }
 
         const MINCOTraj &traj = distanceFieldMincoOpt_.getTrajectory();
-        const double min_sdf = computeMinSdf(traj);
-        const bool flag_collision_free = min_sdf >= sdf_collision_tol;
-        const bool flag_margin_safe = min_sdf >= sdf_soft_margin;
+        double min_sdf = 0.0;
+        bool flag_collision_free = false;
+        bool flag_margin_safe = false;
+        PerchingTerminalMetrics perching_metrics;
+        bool perching_metrics_ok = true;
+        bool perching_terminal_ok = true;
 
-        if (!flag_swarm_too_close && flag_collision_free)
+        if (perching_acceptance_active_ &&
+            terminal_mapping_ != nullptr &&
+            terminal_mapping_->enabled())
+        {
+          Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+          const Eigen::VectorXd extra_vars =
+              terminal_mapping_->extraVariableDim() > 0
+                  ? x_final.tail(terminal_mapping_->extraVariableDim())
+                  : Eigen::VectorXd{};
+          perching_metrics_ok =
+              evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, perching_metrics);
+          min_sdf = computeMinSdf(traj, perching_metrics.approach_check_until);
+          flag_collision_free = min_sdf >= sdf_collision_tol;
+          flag_margin_safe = min_sdf >= sdf_soft_margin;
+          perching_terminal_ok = perching_metrics_ok &&
+                                 perchingTerminalAccepted(perching_metrics, perching_check_config_);
+        }
+        else
+        {
+          min_sdf = computeMinSdf(traj);
+          flag_collision_free = min_sdf >= sdf_collision_tol;
+          flag_margin_safe = min_sdf >= sdf_soft_margin;
+        }
+
+        if (!flag_swarm_too_close &&
+            flag_collision_free &&
+            (!perching_acceptance_active_ || perching_terminal_ok))
         {
           flag_success = true;
           if (!flag_margin_safe)
@@ -729,19 +907,43 @@ namespace ego_planner
         }
         else
         {
-          ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f cost=%.3f",
-                   flag_collision_free ? "yes" : "no",
-                   flag_swarm_too_close ? "no" : "yes",
-                   min_sdf,
-                   sdf_soft_margin,
-                   sdf_collision_tol,
-                   final_cost);
+          if (perching_acceptance_active_)
+          {
+            ROS_WARN("Perching ESDF optimize rejected: approach_collision_free=%s terminal_ok=%s swarm_safe=%s "
+                     "min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f "
+                     "contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f approach_until=%.3f cost=%.3f",
+                     flag_collision_free ? "yes" : "no",
+                     perching_metrics_ok ? (perching_terminal_ok ? "yes" : "no") : "invalid",
+                     flag_swarm_too_close ? "no" : "yes",
+                     min_sdf,
+                     sdf_soft_margin,
+                     sdf_collision_tol,
+                     perching_metrics.contact_position_error,
+                     perching_metrics.relative_tangential_speed,
+                     perching_metrics.relative_normal_speed,
+                     perching_metrics.approach_check_until,
+                     final_cost);
+          }
+          else
+          {
+            ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f cost=%.3f",
+                     flag_collision_free ? "yes" : "no",
+                     flag_swarm_too_close ? "no" : "yes",
+                     min_sdf,
+                     sdf_soft_margin,
+                     sdf_collision_tol,
+                     final_cost);
+          }
           restart_nums++;
           if (!flag_margin_safe || !flag_collision_free)
           {
             if (tracking_task_enabled_)
             {
               tracking_cost_manager_.wei_dist *= 2.0;
+            }
+            else if (perching_acceptance_active_)
+            {
+              perching_cost_manager_.wei_dist *= 2.0;
             }
             else
             {
@@ -763,12 +965,41 @@ namespace ego_planner
 
     if (!flag_success && init_esdf_free)
     {
-      Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
-      final_cost = distanceFieldMincoOpt_.evaluate(x0, grad_dummy, time_cost_, distance_field_cost_manager_);
-      ROS_WARN("ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f).",
-               init_min_sdf,
-               sdf_collision_tol);
-      return true;
+      if (perching_acceptance_active_ &&
+          terminal_mapping_ != nullptr &&
+          terminal_mapping_->enabled())
+      {
+        PerchingTerminalMetrics metrics;
+        const Eigen::VectorXd extra_vars =
+            (terminal_mapping_ != nullptr && terminal_mapping_->enabled() &&
+             terminal_mapping_->extraVariableDim() > 0)
+                ? x0.tail(terminal_mapping_->extraVariableDim())
+                : Eigen::VectorXd{};
+        const bool metrics_ok =
+            evaluatePerchingTerminalMetrics(init_traj, iniState, finState, *terminal_mapping_, extra_vars, metrics);
+        if (metrics_ok && perchingTerminalAccepted(metrics, perching_check_config_))
+        {
+          Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
+          final_cost = distanceFieldMincoOpt_.evaluateWithTerminalMapping(
+              x0, grad_dummy, time_cost_, perching_cost_manager_, terminal_mapping_);
+          ROS_WARN("Perching ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f).",
+                   init_min_sdf,
+                   sdf_collision_tol,
+                   metrics.contact_position_error,
+                   metrics.relative_tangential_speed,
+                   metrics.relative_normal_speed);
+          return true;
+        }
+      }
+      else
+      {
+        Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
+        final_cost = distanceFieldMincoOpt_.evaluate(x0, grad_dummy, time_cost_, distance_field_cost_manager_);
+        ROS_WARN("ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f).",
+                 init_min_sdf,
+                 sdf_collision_tol);
+        return true;
+      }
     }
 
     return flag_success;
@@ -811,7 +1042,9 @@ namespace ego_planner
       double &final_cost)
   {
     terminal_mapping_ = &terminal_mapping;
+    perching_acceptance_active_ = true;
     const bool success = optimizeTrajectoryWithDistanceField(iniState, finState, initInnerPts, initT, final_cost);
+    perching_acceptance_active_ = false;
     terminal_mapping_ = nullptr;
     return success;
   }
@@ -1051,6 +1284,50 @@ namespace ego_planner
       tracking_corridor_cost_manager_.wei_terminal_vel = wei_tracking_terminal_vel_;
     }
 
+    const auto *perching_mapping =
+        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+            : nullptr;
+    perching_cost_manager_.setPerchingSemanticConfig(
+        perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
+    perching_cost_manager_.setSpatialMode(cost_functional::PerchingCostFunctionalManager::SPATIAL_CORRIDOR);
+    perching_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
+    perching_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
+    perching_cost_manager_.grid_map = grid_map_;
+    perching_cost_manager_.cps = &cps_;
+    perching_cost_manager_.swarm_traj = swarm_trajs_;
+    perching_cost_manager_.wei_obs = wei_obs_;
+    perching_cost_manager_.wei_obs_soft = wei_obs_soft_;
+    perching_cost_manager_.wei_dist = wei_dist_;
+    perching_cost_manager_.wei_corridor = wei_corridor_;
+    perching_cost_manager_.wei_corridor_ref = wei_corridor_ref_;
+    perching_cost_manager_.wei_swarm = wei_swarm_mod_;
+    perching_cost_manager_.wei_feas = wei_feas_;
+    perching_cost_manager_.wei_sqrvar = wei_sqrvar_;
+    perching_cost_manager_.wei_perch_floor = wei_perching_floor_;
+    perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
+    perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
+    perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.obs_clearance = obs_clearance_;
+    perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
+    perching_cost_manager_.safe_margin = safety_margin_;
+    perching_cost_manager_.corridor_clearance = corridor_clearance_;
+    perching_cost_manager_.corridor_smoothing = corridor_smoothing_;
+    perching_cost_manager_.swarm_clearance = swarm_clearance_;
+    perching_cost_manager_.max_vel = max_vel_;
+    perching_cost_manager_.max_acc = max_acc_;
+    perching_cost_manager_.max_jer = max_jer_;
+    perching_cost_manager_.thrust_min = perching_thrust_min_;
+    perching_cost_manager_.thrust_max = perching_thrust_max_;
+    perching_cost_manager_.omega_max = perching_omega_max_;
+    perching_cost_manager_.robot_radius = perching_robot_radius_;
+    perching_cost_manager_.platform_radius = perching_platform_radius_;
+    perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.drone_id = drone_id_;
+    perching_cost_manager_.t_now = t_now_;
+    perching_cost_manager_.touch_goal = touch_goal_;
+    perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
+
     Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
@@ -1089,6 +1366,13 @@ namespace ego_planner
         tracking_corridor_cost_manager_.wei_feas = wei_feas_work;
         tracking_corridor_cost_manager_.wei_swarm = wei_swarm_mod_;
       }
+      else if (perching_acceptance_active_)
+      {
+        perching_cost_manager_.wei_corridor = wei_corridor_work;
+        perching_cost_manager_.wei_corridor_ref = wei_corridor_ref_work;
+        perching_cost_manager_.wei_feas = wei_feas_work;
+        perching_cost_manager_.wei_swarm = wei_swarm_mod_;
+      }
       else
       {
         corridor_cost_manager_.wei_corridor = wei_corridor_work;
@@ -1121,18 +1405,45 @@ namespace ego_planner
                                     pow((swarm_clearance_ + swarm_trajs_->at(i).des_clearance) * 1.25, 2);
           }
         }
+        const MINCOTraj &traj = corridorMincoOpt_.getTrajectory();
+        const bool perching_mode =
+            perching_acceptance_active_ &&
+            terminal_mapping_ != nullptr &&
+            terminal_mapping_->enabled();
+        PerchingTerminalMetrics perching_metrics;
+        bool perching_metrics_ok = true;
+        bool perching_terminal_ok = true;
+        double approach_until = traj.getTotalDuration();
+        if (perching_mode)
+        {
+          Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+          const Eigen::VectorXd extra_vars =
+              terminal_mapping_->extraVariableDim() > 0
+                  ? x_final.tail(terminal_mapping_->extraVariableDim())
+                  : Eigen::VectorXd{};
+          perching_metrics_ok =
+              evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, perching_metrics);
+          approach_until = perching_metrics.approach_check_until;
+          perching_terminal_ok = perching_metrics_ok &&
+                                 perchingTerminalAccepted(perching_metrics, perching_check_config_);
+        }
         const bool flag_collision_free =
-            isTrajectoryCollisionFree(corridorMincoOpt_.getTrajectory());
+            perching_mode ? isTrajectoryCollisionFreeUntil(traj, approach_until)
+                          : isTrajectoryCollisionFree(traj);
 
         const double hard_corridor_margin =
             grid_map_ ? -0.5 * grid_map_->getResolution() : -1.0e-3;
         const bool flag_inside_corridor =
-            isTrajectoryInsideCorridor(corridorMincoOpt_.getTrajectory(),
-                                      normalized_corridor,
-                                      hard_corridor_margin);
+            perching_mode ? isTrajectoryInsideCorridorUntil(traj,
+                                                            normalized_corridor,
+                                                            hard_corridor_margin,
+                                                            approach_until)
+                          : isTrajectoryInsideCorridor(traj,
+                                                       normalized_corridor,
+                                                       hard_corridor_margin);
 
         const DynamicsCheckDebug dyn_debug =
-            analyzeTrajectoryDynamics(corridorMincoOpt_.getTrajectory(),
+            analyzeTrajectoryDynamics(traj,
                                       grid_map_,
                                       max_vel_,
                                       max_acc_,
@@ -1143,40 +1454,74 @@ namespace ego_planner
         if (!flag_swarm_too_close &&
             flag_collision_free &&
             flag_inside_corridor &&
-            flag_dyn_feasible)
+            flag_dyn_feasible &&
+            (!perching_mode || perching_terminal_ok))
         {
           flag_success = true;
         }
         else
         {
           const TrajectoryCheckDebug debug =
-              analyzeTrajectoryCheck(corridorMincoOpt_.getTrajectory(),
+              analyzeTrajectoryCheck(traj,
                                      grid_map_,
                                      normalized_corridor,
                                      corridor_clearance_,
                                      max_vel_);
 
-          ROS_WARN("Corridor optimize rejected: inside_corridor=%s collision_free=%s dyn_ok=%s swarm_safe=%s cost=%.3f "
-                   "first_collision_t=%.3f first_collision_pt=[%.2f %.2f %.2f] "
-                   "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f] "
-                   "max_v=%.2f(<=%.2f) max_a=%.2f(<=%.2f) max_j=%.2f(<=%.2f)",
-                   flag_inside_corridor ? "yes" : "no",
-                   flag_collision_free ? "yes" : "no",
-                   flag_dyn_feasible ? "yes" : "no",
-                   flag_swarm_too_close ? "no" : "yes",
-                   final_cost,
-                   debug.first_collision_t,
-                   debug.first_collision_pt.x(),
-                   debug.first_collision_pt.y(),
-                   debug.first_collision_pt.z(),
-                   debug.max_corridor_violation,
-                   debug.worst_corridor_t,
-                   debug.worst_corridor_pt.x(),
-                   debug.worst_corridor_pt.y(),
-                   debug.worst_corridor_pt.z(),
-                   dyn_debug.max_vel, 1.03 * max_vel_,
-                   dyn_debug.max_acc, 1.03 * max_acc_,
-                   dyn_debug.max_jer, 1.03 * max_jer_);
+          if (perching_mode)
+          {
+            ROS_WARN("Perching corridor optimize rejected: inside_corridor=%s approach_collision_free=%s terminal_ok=%s dyn_ok=%s swarm_safe=%s cost=%.3f "
+                     "contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f approach_until=%.3f "
+                     "first_collision_t=%.3f first_collision_pt=[%.2f %.2f %.2f] "
+                     "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f] "
+                     "max_v=%.2f(<=%.2f) max_a=%.2f(<=%.2f) max_j=%.2f(<=%.2f)",
+                     flag_inside_corridor ? "yes" : "no",
+                     flag_collision_free ? "yes" : "no",
+                     perching_metrics_ok ? (perching_terminal_ok ? "yes" : "no") : "invalid",
+                     flag_dyn_feasible ? "yes" : "no",
+                     flag_swarm_too_close ? "no" : "yes",
+                     final_cost,
+                     perching_metrics.contact_position_error,
+                     perching_metrics.relative_tangential_speed,
+                     perching_metrics.relative_normal_speed,
+                     approach_until,
+                     debug.first_collision_t,
+                     debug.first_collision_pt.x(),
+                     debug.first_collision_pt.y(),
+                     debug.first_collision_pt.z(),
+                     debug.max_corridor_violation,
+                     debug.worst_corridor_t,
+                     debug.worst_corridor_pt.x(),
+                     debug.worst_corridor_pt.y(),
+                     debug.worst_corridor_pt.z(),
+                     dyn_debug.max_vel, 1.03 * max_vel_,
+                     dyn_debug.max_acc, 1.03 * max_acc_,
+                     dyn_debug.max_jer, 1.03 * max_jer_);
+          }
+          else
+          {
+            ROS_WARN("Corridor optimize rejected: inside_corridor=%s collision_free=%s dyn_ok=%s swarm_safe=%s cost=%.3f "
+                     "first_collision_t=%.3f first_collision_pt=[%.2f %.2f %.2f] "
+                     "max_corridor_violation=%.3f worst_corridor_t=%.3f worst_corridor_pt=[%.2f %.2f %.2f] "
+                     "max_v=%.2f(<=%.2f) max_a=%.2f(<=%.2f) max_j=%.2f(<=%.2f)",
+                     flag_inside_corridor ? "yes" : "no",
+                     flag_collision_free ? "yes" : "no",
+                     flag_dyn_feasible ? "yes" : "no",
+                     flag_swarm_too_close ? "no" : "yes",
+                     final_cost,
+                     debug.first_collision_t,
+                     debug.first_collision_pt.x(),
+                     debug.first_collision_pt.y(),
+                     debug.first_collision_pt.z(),
+                     debug.max_corridor_violation,
+                     debug.worst_corridor_t,
+                     debug.worst_corridor_pt.x(),
+                     debug.worst_corridor_pt.y(),
+                     debug.worst_corridor_pt.z(),
+                     dyn_debug.max_vel, 1.03 * max_vel_,
+                     dyn_debug.max_acc, 1.03 * max_acc_,
+                     dyn_debug.max_jer, 1.03 * max_jer_);
+          }
           restart_nums++;
           if (!flag_inside_corridor || !flag_collision_free)
           {
@@ -1249,6 +1594,7 @@ namespace ego_planner
       double &final_cost)
   {
     terminal_mapping_ = &terminal_mapping;
+    perching_acceptance_active_ = true;
     const bool success = optimizeTrajectory(iniState,
                                             finState,
                                             initInnerPts,
@@ -1256,6 +1602,7 @@ namespace ego_planner
                                             corridor_hpolys,
                                             corridor_piece_idx,
                                             final_cost);
+    perching_acceptance_active_ = false;
     terminal_mapping_ = nullptr;
     return success;
   }
@@ -2132,6 +2479,28 @@ namespace ego_planner
     return true;
   }
 
+  bool PolyTrajOptimizer::isTrajectoryCollisionFreeUntil(const MINCOTraj &traj,
+                                                         const double until_time) const
+  {
+    if (!grid_map_)
+    {
+      return true;
+    }
+
+    const double horizon = std::min(std::max(0.0, until_time), traj.getTotalDuration());
+    const double t_step = std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1));
+    for (double t = 0.0; t <= horizon + 1.0e-6; t += t_step)
+    {
+      const double sample_t = std::min(t, horizon);
+      if (grid_map_->getInflateOccupancy(traj.evaluate(sample_t, 0)) != 0)
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   bool PolyTrajOptimizer::pointInsidePolytope(const Eigen::Vector3d &pt,
                                             const spatial_map::PolyhedronH &hpoly,
                                             double margin) const
@@ -2172,6 +2541,114 @@ namespace ego_planner
     return true;
   }
 
+  bool PolyTrajOptimizer::isTrajectoryInsideCorridorUntil(const MINCOTraj &traj,
+                                                          const spatial_map::PolyhedraH &corridor_hpolys,
+                                                          double margin,
+                                                          double until_time) const
+  {
+    const double total_duration = traj.getTotalDuration();
+    const double horizon = std::min(std::max(0.0, until_time), total_duration);
+    const double dt = std::min(0.05, 0.5 * corridor_smoothing_);
+    for (double t = 0.0; t <= horizon + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, horizon);
+      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
+      if (!pointInsideCorridor(pt, corridor_hpolys, margin))
+        return false;
+    }
+    return true;
+  }
+
+  bool PolyTrajOptimizer::evaluatePerchingTerminalMetrics(
+      const MINCOTraj &traj,
+      const Eigen::MatrixXd &iniState,
+      const Eigen::MatrixXd &nominalTailState,
+      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
+      PerchingTerminalMetrics &metrics) const
+  {
+    metrics = PerchingTerminalMetrics{};
+    if (!terminal_mapping.enabled())
+    {
+      return false;
+    }
+
+    const double total_duration = traj.getTotalDuration();
+    const double approach_until =
+        std::min(total_duration,
+                 std::max(0.0, total_duration - std::max(0.0, perching_check_config_.terminal_relax_time)));
+    const Eigen::VectorXd cache_T = traj.getDurations();
+    if (cache_T.size() <= 0)
+    {
+      return false;
+    }
+
+    minco::TerminalMappingBase<TRAJ_DIM, MINCO_S>::BoundaryState mapped_head = iniState;
+    minco::TerminalMappingBase<TRAJ_DIM, MINCO_S>::BoundaryState mapped_tail = nominalTailState;
+    terminal_mapping.mapBoundaryStates(iniState,
+                                       nominalTailState,
+                                       cache_T,
+                                       extra_vars,
+                                       mapped_head,
+                                       mapped_tail);
+
+    const double eps = std::max(1.0e-3, 1.0e-3 * std::max(1.0, total_duration));
+    Eigen::VectorXd cache_T_eps = cache_T;
+    cache_T_eps(cache_T_eps.size() - 1) += eps;
+    minco::TerminalMappingBase<TRAJ_DIM, MINCO_S>::BoundaryState mapped_head_eps = iniState;
+    minco::TerminalMappingBase<TRAJ_DIM, MINCO_S>::BoundaryState mapped_tail_eps = nominalTailState;
+    terminal_mapping.mapBoundaryStates(iniState,
+                                       nominalTailState,
+                                       cache_T_eps,
+                                       extra_vars,
+                                       mapped_head_eps,
+                                       mapped_tail_eps);
+
+    const Eigen::Vector3d expected_contact_position = mapped_tail.col(0);
+    const Eigen::Vector3d expected_contact_velocity = mapped_tail.col(1);
+    const Eigen::Vector3d estimated_plate_velocity =
+        (mapped_tail_eps.col(0) - mapped_tail.col(0)) / eps;
+    Eigen::Vector3d surface_normal = expected_contact_position - nominalTailState.col(0);
+    if (const auto *perching_mapping =
+            dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(&terminal_mapping))
+    {
+      surface_normal = perching_mapping->semanticConfig().surface_z;
+    }
+    if (!surface_normal.allFinite() || surface_normal.norm() < 1.0e-6)
+    {
+      surface_normal = Eigen::Vector3d::UnitZ();
+    }
+    else
+    {
+      surface_normal.normalize();
+    }
+
+    const Eigen::Vector3d final_position = traj.evaluate(total_duration, 0);
+    const Eigen::Vector3d final_velocity = traj.evaluate(total_duration, 1);
+    const Eigen::Vector3d relative_velocity = final_velocity - expected_contact_velocity;
+    const double signed_normal_speed = relative_velocity.dot(surface_normal);
+    const Eigen::Vector3d tangential_velocity =
+        relative_velocity - signed_normal_speed * surface_normal;
+
+    metrics.valid = expected_contact_position.allFinite() &&
+                    estimated_plate_velocity.allFinite() &&
+                    final_position.allFinite() &&
+                    final_velocity.allFinite();
+    metrics.total_duration = total_duration;
+    metrics.approach_check_until = approach_until;
+    metrics.expected_contact_position = expected_contact_position;
+    metrics.expected_contact_velocity = expected_contact_velocity;
+    metrics.expected_plate_velocity = estimated_plate_velocity;
+    metrics.surface_normal = surface_normal;
+    metrics.final_position = final_position;
+    metrics.final_velocity = final_velocity;
+    metrics.contact_position_error = (final_position - expected_contact_position).norm();
+    metrics.relative_tangential_speed = tangential_velocity.norm();
+    metrics.signed_relative_normal_speed = signed_normal_speed;
+    metrics.relative_normal_speed = std::abs(signed_normal_speed);
+    return metrics.valid;
+  }
+
   // =====================================================
   //  Setters
   // =====================================================
@@ -2198,6 +2675,20 @@ namespace ego_planner
     nh.param("optimization/weight_tracking_visible_fan", wei_tracking_visible_fan_, 45.0);
     nh.param("optimization/weight_tracking_view_dir_smooth", wei_tracking_view_dir_smooth_, 8.0);
     nh.param("optimization/tracking_los_clearance", tracking_los_clearance_, 0.20);
+    nh.param("optimization/weight_perching_floor", wei_perching_floor_, 40.0);
+    nh.param("optimization/weight_perching_thrust", wei_perching_thrust_, 8.0);
+    nh.param("optimization/weight_perching_omega", wei_perching_omega_, 10.0);
+    nh.param("optimization/weight_perching_collision", wei_perching_collision_, 120.0);
+    nh.param("optimization/perching_floor_height", perching_floor_height_, 0.10);
+    nh.param("optimization/perching_thrust_min", perching_thrust_min_, 4.0);
+    nh.param("optimization/perching_thrust_max", perching_thrust_max_, 18.0);
+    nh.param("optimization/perching_omega_max", perching_omega_max_, 6.0);
+    nh.param("optimization/perching_robot_radius", perching_robot_radius_, 0.18);
+    nh.param("optimization/perching_platform_radius", perching_platform_radius_, 0.60);
+    nh.param("optimization/perching_terminal_relax_time", perching_check_config_.terminal_relax_time, 0.35);
+    nh.param("optimization/perching_contact_position_tolerance", perching_check_config_.contact_position_tolerance, 0.18);
+    nh.param("optimization/perching_relative_tangential_speed_tolerance", perching_check_config_.relative_tangential_speed_tolerance, 0.45);
+    nh.param("optimization/perching_relative_normal_speed_tolerance", perching_check_config_.relative_normal_speed_tolerance, 0.80);
     nh.param("optimization/weight_swarm", wei_swarm_, -1.0);
     nh.param("optimization/weight_feasibility", wei_feas_, -1.0);
     nh.param("optimization/weight_sqrvariance", wei_sqrvar_, -1.0);
@@ -2221,6 +2712,21 @@ namespace ego_planner
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);
     tracking_smooth_eps_ = std::max(1.0e-4, tracking_smooth_eps_);
+    wei_perching_floor_ = std::max(0.0, wei_perching_floor_);
+    wei_perching_thrust_ = std::max(0.0, wei_perching_thrust_);
+    wei_perching_omega_ = std::max(0.0, wei_perching_omega_);
+    wei_perching_collision_ = std::max(0.0, wei_perching_collision_);
+    perching_floor_height_ = std::max(-5.0, perching_floor_height_);
+    perching_thrust_min_ = std::max(0.0, perching_thrust_min_);
+    perching_thrust_max_ = std::max(perching_thrust_min_ + 1.0e-3, perching_thrust_max_);
+    perching_omega_max_ = std::max(0.1, perching_omega_max_);
+    perching_robot_radius_ = std::max(0.01, perching_robot_radius_);
+    perching_platform_radius_ = std::max(0.05, perching_platform_radius_);
+    perching_check_config_.terminal_relax_time = std::max(0.0, perching_check_config_.terminal_relax_time);
+    perching_check_config_.contact_position_tolerance = std::max(0.0, perching_check_config_.contact_position_tolerance);
+    perching_check_config_.relative_tangential_speed_tolerance = std::max(0.0, perching_check_config_.relative_tangential_speed_tolerance);
+    perching_check_config_.relative_normal_speed_tolerance = std::max(0.0, perching_check_config_.relative_normal_speed_tolerance);
+    perching_check_config_.enabled = true;
   }
 
   void PolyTrajOptimizer::setEnvironment(const GridMap::Ptr &map)

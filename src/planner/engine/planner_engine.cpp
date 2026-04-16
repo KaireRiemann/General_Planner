@@ -812,6 +812,9 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
     solution.success = false;
     solution.used_legacy_adapter = false;
     solution.message = "compiled perching initialization failed: " + perching_init.message;
+    ROS_WARN("[CompiledPerchingInit] active_mode=%s result=failed reason=%s",
+             compiled_active_mode,
+             perching_init.message.c_str());
     return false;
   }
 
@@ -844,41 +847,60 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   const auto &decoded = perching_init.decoded_contact_semantics;
   const auto &predicted_contact = perching_init.predicted_contact_state;
   const auto &anchor = perching_init.pre_contact_anchor_state;
-  perching_mapping.configure(decoded.plate_position_ref,
-                             decoded.plate_velocity,
-                             decoded.reference_time,
-                             decoded.surface_x,
-                             decoded.surface_y,
-                             decoded.surface_z,
-                             decoded.robot_l,
-                             decoded.v_plus,
-                             decoded.thrust_nominal,
-                             decoded.thrust_range,
-                             decoded.use_dynamics_terminal_accel,
-                             decoded.nu_seed,
-                             decoded.tau_f_seed);
-  ROS_INFO("[CompiledPerching] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu contact=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] plate_ref=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] pred_ref_t=%.2f normal=[%.2f %.2f %.2f]",
+  typename minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S>::PerchingSemanticConfig
+      perching_semantics;
+  perching_semantics.plate_position = decoded.plate_position_ref;
+  perching_semantics.plate_velocity = decoded.plate_velocity;
+  perching_semantics.reference_time = decoded.reference_time;
+  perching_semantics.surface_x = decoded.surface_x;
+  perching_semantics.surface_y = decoded.surface_y;
+  perching_semantics.surface_z = decoded.surface_z;
+  perching_semantics.robot_l = decoded.robot_l;
+  perching_semantics.v_plus = decoded.v_plus;
+  perching_semantics.thrust_nominal = decoded.thrust_nominal;
+  perching_semantics.thrust_range = decoded.thrust_range;
+  perching_semantics.use_dynamics_terminal_accel = decoded.use_dynamics_terminal_accel;
+  perching_semantics.nu_seed = decoded.nu_seed;
+  perching_semantics.tau_f_seed = decoded.tau_f_seed;
+  perching_semantics.pre_contact_distance = anchor.pre_contact_distance;
+  perching_mapping.configure(perching_semantics);
+  ROS_INFO("[CompiledPerchingInit] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu",
            compiled_active_mode,
            selected_mode_str,
            solver_input.source.c_str(),
            active_guide_path.size(),
-           corridor_hpolys.size(),
+           corridor_hpolys.size());
+  ROS_INFO("[CompiledPerchingInit] predicted_contact pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] pred_t=%.2f plate_ref=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
            predicted_contact.contact_position.x(),
            predicted_contact.contact_position.y(),
            predicted_contact.contact_position.z(),
-           anchor.position.x(),
-           anchor.position.y(),
-           anchor.position.z(),
+           predicted_contact.contact_velocity.x(),
+           predicted_contact.contact_velocity.y(),
+           predicted_contact.contact_velocity.z(),
+           predicted_contact.contact_acceleration.x(),
+           predicted_contact.contact_acceleration.y(),
+           predicted_contact.contact_acceleration.z(),
+           predicted_contact.prediction_time,
            decoded.plate_position_ref.x(),
            decoded.plate_position_ref.y(),
            decoded.plate_position_ref.z(),
            decoded.plate_velocity.x(),
            decoded.plate_velocity.y(),
            decoded.plate_velocity.z(),
-           decoded.reference_time,
            decoded.surface_z.x(),
            decoded.surface_z.y(),
            decoded.surface_z.z());
+  ROS_INFO("[CompiledPerchingInit] pre_contact_anchor pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] distance=%.2f",
+           anchor.position.x(),
+           anchor.position.y(),
+           anchor.position.z(),
+           anchor.velocity.x(),
+           anchor.velocity.y(),
+           anchor.velocity.z(),
+           anchor.acceleration.x(),
+           anchor.acceleration.y(),
+           anchor.acceleration.z(),
+           anchor.pre_contact_distance);
 
   optimizer->setIfTouchGoal(true);
 

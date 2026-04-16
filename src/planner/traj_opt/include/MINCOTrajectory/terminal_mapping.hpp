@@ -178,6 +178,27 @@ public:
 
   using BoundaryState = typename TerminalMappingBase<DIM, S>::BoundaryState;
 
+  struct PerchingSemanticConfig
+  {
+    Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
+    Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
+    double reference_time{0.0};
+    Eigen::Vector3d surface_x{Eigen::Vector3d::UnitX()};
+    Eigen::Vector3d surface_y{Eigen::Vector3d::UnitY()};
+    Eigen::Vector3d surface_z{Eigen::Vector3d::UnitZ()};
+    double robot_l{0.0};
+    double v_plus{0.0};
+    double thrust_nominal{9.81};
+    double thrust_range{0.0};
+    bool use_dynamics_terminal_accel{false};
+    Eigen::Vector2d nu_seed{Eigen::Vector2d::Zero()};
+    double tau_f_seed{0.0};
+    double pre_contact_distance{0.4};
+    double terminal_relax_time{0.35};
+    double weight_nu{1.0e-2};
+    double weight_tau_f{1.0e-3};
+  };
+
   enum ExtraIndex
   {
     IDX_NU_X = 0,
@@ -189,6 +210,43 @@ public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
   PerchingTerminalMapping() = default;
+
+  /**
+   * @brief Primary perching configuration path.
+   *
+   * The intended caller is the task/frontend layer after it has decoded rich
+   * perching semantics such as contact frame, pre-contact distance and the
+   * relaxed terminal window. The mapping itself only consumes the subset that
+   * affects terminal-state forward/backward passes, but it keeps the richer
+   * semantic payload so downstream acceptance / debug code can stay aligned.
+   */
+  void configure(const PerchingSemanticConfig &config)
+  {
+    semantic_config_ = config;
+    semantic_config_.reference_time = std::max(0.0, semantic_config_.reference_time);
+    semantic_config_.surface_x = normalizedOr(semantic_config_.surface_x, Eigen::Vector3d::UnitX());
+    semantic_config_.surface_y = normalizedOr(semantic_config_.surface_y, Eigen::Vector3d::UnitY());
+    semantic_config_.surface_z = normalizedOr(semantic_config_.surface_z, Eigen::Vector3d::UnitZ());
+
+    // Keep the tangent frame right-handed and orthonormal enough for chain
+    // rule projections.
+    semantic_config_.surface_y =
+        normalizedOr(semantic_config_.surface_z.cross(semantic_config_.surface_x),
+                     Eigen::Vector3d::UnitY());
+    semantic_config_.surface_x =
+        normalizedOr(semantic_config_.surface_y.cross(semantic_config_.surface_z),
+                     Eigen::Vector3d::UnitX());
+
+    semantic_config_.robot_l = std::max(0.0, semantic_config_.robot_l);
+    semantic_config_.v_plus = std::max(0.0, semantic_config_.v_plus);
+    semantic_config_.thrust_nominal = std::max(0.0, semantic_config_.thrust_nominal);
+    semantic_config_.thrust_range = std::max(0.0, semantic_config_.thrust_range);
+    semantic_config_.pre_contact_distance = std::max(0.0, semantic_config_.pre_contact_distance);
+    semantic_config_.terminal_relax_time = std::max(0.0, semantic_config_.terminal_relax_time);
+    semantic_config_.weight_nu = std::max(0.0, semantic_config_.weight_nu);
+    semantic_config_.weight_tau_f = std::max(0.0, semantic_config_.weight_tau_f);
+    configured_ = true;
+  }
 
   void configure(const Eigen::Vector3d &plate_position,
                  const Eigen::Vector3d &plate_velocity,
@@ -203,31 +261,30 @@ public:
                  const bool use_dynamics_terminal_accel,
                  const Eigen::Vector2d &nu_seed = Eigen::Vector2d::Zero(),
                  const double tau_f_seed = 0.0,
+                 const double pre_contact_distance = 0.4,
+                 const double terminal_relax_time = 0.35,
                  const double weight_nu = 1.0e-2,
                  const double weight_tau_f = 1.0e-3)
   {
-    plate_position_ = plate_position;
-    plate_velocity_ = plate_velocity;
-    reference_time_ = std::max(0.0, reference_time);
-    surface_x_ = normalizedOr(surface_x, Eigen::Vector3d::UnitX());
-    surface_y_ = normalizedOr(surface_y, Eigen::Vector3d::UnitY());
-    surface_z_ = normalizedOr(surface_z, Eigen::Vector3d::UnitZ());
-
-    // Keep the tangent frame right-handed and orthonormal enough for chain
-    // rule projections.
-    surface_y_ = normalizedOr(surface_z_.cross(surface_x_), Eigen::Vector3d::UnitY());
-    surface_x_ = normalizedOr(surface_y_.cross(surface_z_), Eigen::Vector3d::UnitX());
-
-    robot_l_ = std::max(0.0, robot_l);
-    v_plus_ = std::max(0.0, v_plus);
-    thrust_nominal_ = thrust_nominal;
-    thrust_range_ = std::max(0.0, thrust_range);
-    use_dynamics_terminal_accel_ = use_dynamics_terminal_accel;
-    nu_seed_ = nu_seed;
-    tau_f_seed_ = tau_f_seed;
-    weight_nu_ = std::max(0.0, weight_nu);
-    weight_tau_f_ = std::max(0.0, weight_tau_f);
-    configured_ = true;
+    PerchingSemanticConfig config;
+    config.plate_position = plate_position;
+    config.plate_velocity = plate_velocity;
+    config.reference_time = reference_time;
+    config.surface_x = surface_x;
+    config.surface_y = surface_y;
+    config.surface_z = surface_z;
+    config.robot_l = robot_l;
+    config.v_plus = v_plus;
+    config.thrust_nominal = thrust_nominal;
+    config.thrust_range = thrust_range;
+    config.use_dynamics_terminal_accel = use_dynamics_terminal_accel;
+    config.nu_seed = nu_seed;
+    config.tau_f_seed = tau_f_seed;
+    config.pre_contact_distance = pre_contact_distance;
+    config.terminal_relax_time = terminal_relax_time;
+    config.weight_nu = weight_nu;
+    config.weight_tau_f = weight_tau_f;
+    configure(config);
   }
 
   bool enabled() const override
@@ -240,6 +297,11 @@ public:
     return EXTRA_DIM;
   }
 
+  const PerchingSemanticConfig &semanticConfig() const
+  {
+    return semantic_config_;
+  }
+
   void setInitialExtraVariables(Eigen::Ref<Eigen::VectorXd> extra_vars) const override
   {
     if (extra_vars.size() != EXTRA_DIM)
@@ -247,9 +309,9 @@ public:
       return;
     }
     extra_vars.setZero();
-    extra_vars(IDX_NU_X) = nu_seed_.x();
-    extra_vars(IDX_NU_Y) = nu_seed_.y();
-    extra_vars(IDX_TAU_F) = tau_f_seed_;
+    extra_vars(IDX_NU_X) = semantic_config_.nu_seed.x();
+    extra_vars(IDX_NU_Y) = semantic_config_.nu_seed.y();
+    extra_vars(IDX_TAU_F) = semantic_config_.tau_f_seed;
   }
 
   void mapBoundaryStates(const BoundaryState &nominal_head_state,
@@ -271,16 +333,25 @@ public:
     const double nu_y = extra_vars.size() > IDX_NU_Y ? extra_vars(IDX_NU_Y) : 0.0;
     const double tau_f = extra_vars.size() > IDX_TAU_F ? extra_vars(IDX_TAU_F) : 0.0;
 
-    const double dt_from_ref = std::max(0.0, total_T - reference_time_);
-    mapped_tail_state.col(0) = plate_position_ + plate_velocity_ * dt_from_ref + robot_l_ * surface_z_;
-    mapped_tail_state.col(1) = plate_velocity_ +
-                               nu_x * surface_x_ +
-                               nu_y * surface_y_ -
-                               v_plus_ * surface_z_;
-    if (use_dynamics_terminal_accel_)
+    // Adaptive / Fast-Perching style flexible terminal adjustment should
+    // follow the predicted platform trajectory continuously around the
+    // reference contact time, rather than clamping to only forward offsets.
+    const double dt_from_ref = total_T - semantic_config_.reference_time;
+    // pre_contact_distance / terminal_relax_time are task-semantic parameters
+    // carried by the mapping configuration, but the terminal forward map still
+    // represents the real contact state rather than the pre-contact anchor.
+    mapped_tail_state.col(0) = semantic_config_.plate_position +
+                               semantic_config_.plate_velocity * dt_from_ref +
+                               semantic_config_.robot_l * semantic_config_.surface_z;
+    mapped_tail_state.col(1) = semantic_config_.plate_velocity +
+                               nu_x * semantic_config_.surface_x +
+                               nu_y * semantic_config_.surface_y -
+                               semantic_config_.v_plus * semantic_config_.surface_z;
+    if (semantic_config_.use_dynamics_terminal_accel)
     {
       mapped_tail_state.col(2) =
-          nominal_tail_state.col(2) + thrust_range_ * std::sin(tau_f) * surface_z_;
+          nominal_tail_state.col(2) +
+          semantic_config_.thrust_range * std::sin(tau_f) * semantic_config_.surface_z;
     }
 
     for (int d = 3; d < S; ++d)
@@ -303,15 +374,16 @@ public:
     const double tau_f = extra_vars(IDX_TAU_F);
 
     double cost = 0.0;
-    cost += weight_nu_ * (nu_x * nu_x + nu_y * nu_y);
-    if (use_dynamics_terminal_accel_)
+    cost += semantic_config_.weight_nu * (nu_x * nu_x + nu_y * nu_y);
+    if (semantic_config_.use_dynamics_terminal_accel)
     {
-      cost += weight_tau_f_ * tau_f * tau_f;
+      cost += semantic_config_.weight_tau_f * tau_f * tau_f;
     }
 
-    grad_extra(IDX_NU_X) = 2.0 * weight_nu_ * nu_x;
-    grad_extra(IDX_NU_Y) = 2.0 * weight_nu_ * nu_y;
-    grad_extra(IDX_TAU_F) = use_dynamics_terminal_accel_ ? 2.0 * weight_tau_f_ * tau_f : 0.0;
+    grad_extra(IDX_NU_X) = 2.0 * semantic_config_.weight_nu * nu_x;
+    grad_extra(IDX_NU_Y) = 2.0 * semantic_config_.weight_nu * nu_y;
+    grad_extra(IDX_TAU_F) =
+        semantic_config_.use_dynamics_terminal_accel ? 2.0 * semantic_config_.weight_tau_f * tau_f : 0.0;
     return cost;
   }
 
@@ -329,12 +401,13 @@ public:
     const Eigen::Index offset = grad_out.size() - EXTRA_DIM;
     const double tau_f = extra_vars(IDX_TAU_F);
 
-    grad_out(offset + IDX_NU_X) += surface_x_.dot(grad_tail_state.col(1));
-    grad_out(offset + IDX_NU_Y) += surface_y_.dot(grad_tail_state.col(1));
-    if (use_dynamics_terminal_accel_)
+    grad_out(offset + IDX_NU_X) += semantic_config_.surface_x.dot(grad_tail_state.col(1));
+    grad_out(offset + IDX_NU_Y) += semantic_config_.surface_y.dot(grad_tail_state.col(1));
+    if (semantic_config_.use_dynamics_terminal_accel)
     {
       grad_out(offset + IDX_TAU_F) +=
-          thrust_range_ * std::cos(tau_f) * surface_z_.dot(grad_tail_state.col(2));
+          semantic_config_.thrust_range * std::cos(tau_f) *
+          semantic_config_.surface_z.dot(grad_tail_state.col(2));
     }
   }
 
@@ -349,7 +422,7 @@ public:
       return;
     }
 
-    const double time_chain = plate_velocity_.dot(grad_tail_state.col(0));
+    const double time_chain = semantic_config_.plate_velocity.dot(grad_tail_state.col(0));
     grad_by_times.array() += time_chain;
   }
 
@@ -366,22 +439,8 @@ private:
 
 private:
   bool configured_{false};
-  Eigen::Vector3d plate_position_{Eigen::Vector3d::Zero()};
-  Eigen::Vector3d plate_velocity_{Eigen::Vector3d::Zero()};
-  double reference_time_{0.0};
-  Eigen::Vector3d surface_x_{Eigen::Vector3d::UnitX()};
-  Eigen::Vector3d surface_y_{Eigen::Vector3d::UnitY()};
-  Eigen::Vector3d surface_z_{Eigen::Vector3d::UnitZ()};
+  PerchingSemanticConfig semantic_config_{};
   Eigen::Vector3d gravity_{Eigen::Vector3d(0.0, 0.0, -9.81)};
-  double robot_l_{0.0};
-  double v_plus_{0.0};
-  double thrust_nominal_{9.81};
-  double thrust_range_{0.0};
-  bool use_dynamics_terminal_accel_{false};
-  Eigen::Vector2d nu_seed_{Eigen::Vector2d::Zero()};
-  double tau_f_seed_{0.0};
-  double weight_nu_{1.0e-2};
-  double weight_tau_f_{1.0e-3};
 };
 
 } // namespace minco

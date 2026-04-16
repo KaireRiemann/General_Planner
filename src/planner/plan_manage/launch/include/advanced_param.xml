@@ -61,6 +61,16 @@
     <arg name="perching_arrive_pos_thresh" default="0.45"/>
     <arg name="perching_arrive_vel_thresh" default="0.85"/>
     <arg name="perching_min_execute_time" default="0.30"/>
+    <arg name="perching_weight_floor" default="40.0"/>
+    <arg name="perching_weight_thrust" default="8.0"/>
+    <arg name="perching_weight_omega" default="10.0"/>
+    <arg name="perching_weight_collision" default="120.0"/>
+    <arg name="perching_floor_height" default="0.10"/>
+    <arg name="perching_thrust_min" default="4.0"/>
+    <arg name="perching_thrust_max" default="18.0"/>
+    <arg name="perching_omega_max" default="6.0"/>
+    <arg name="perching_robot_radius" default="0.18"/>
+    <arg name="perching_platform_radius" default="0.60"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sensor_topics_absolute" default="false"/>
     <arg name="use_cloud_input_only" default="false"/>
@@ -266,6 +276,16 @@
         <param name="optimization/tracking_distance_max" value="4.0" type="double"/>
         <param name="optimization/tracking_height_tolerance" value="0.4" type="double"/>
         <param name="optimization/tracking_smooth_eps" value="0.1" type="double"/>
+        <param name="optimization/weight_perching_floor" value="$(arg perching_weight_floor)" type="double"/>
+        <param name="optimization/weight_perching_thrust" value="$(arg perching_weight_thrust)" type="double"/>
+        <param name="optimization/weight_perching_omega" value="$(arg perching_weight_omega)" type="double"/>
+        <param name="optimization/weight_perching_collision" value="$(arg perching_weight_collision)" type="double"/>
+        <param name="optimization/perching_floor_height" value="$(arg perching_floor_height)" type="double"/>
+        <param name="optimization/perching_thrust_min" value="$(arg perching_thrust_min)" type="double"/>
+        <param name="optimization/perching_thrust_max" value="$(arg perching_thrust_max)" type="double"/>
+        <param name="optimization/perching_omega_max" value="$(arg perching_omega_max)" type="double"/>
+        <param name="optimization/perching_robot_radius" value="$(arg perching_robot_radius)" type="double"/>
+        <param name="optimization/perching_platform_radius" value="$(arg perching_platform_radius)" type="double"/>
         <param name="optimization/weight_swarm" value="10000.0" type="double"/>
         <param name="optimization/weight_feasibility" value="10000.0" type="double"/>
         <param name="optimization/weight_sqrvariance" value="10000.0" type="double"/>

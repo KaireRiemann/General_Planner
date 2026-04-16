@@ -12,6 +12,8 @@ struct PerchingTerminalState
   bool valid{false};
   double prediction_time{0.0};
   Eigen::Vector3d plate_position_now{Eigen::Vector3d::Zero()};
+  // Plate state sampled at prediction_time in the future. This is the primary
+  // perching reference state used by the task/manifold layer.
   Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond landing_orientation{Eigen::Quaterniond::Identity()};

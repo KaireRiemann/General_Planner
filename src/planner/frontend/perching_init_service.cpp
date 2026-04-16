@@ -150,9 +150,9 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
 
   PerchingPredictedContactState &predicted = artifact.predicted_contact_state;
   const PerchingDecodedContactSemantics &semantics = artifact.decoded_contact_semantics;
+  // plate_position_ref is already the plate state sampled at reference_time.
   predicted.prediction_time = std::max(0.0, semantics.reference_time);
-  predicted.plate_position =
-      semantics.plate_position_ref + semantics.plate_velocity * predicted.prediction_time;
+  predicted.plate_position = semantics.plate_position_ref;
   predicted.contact_position =
       predicted.plate_position + semantics.robot_l * semantics.surface_z;
   predicted.contact_velocity =

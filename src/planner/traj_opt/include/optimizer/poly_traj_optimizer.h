@@ -4,6 +4,7 @@
 #include "plan_env/grid_map.h"
 #include "optimizer/traj_types.h"
 #include "CostFunctionalManager/EgoCostManager.hpp"
+#include "CostFunctionalManager/PerchingCostManager.hpp"
 #include "CostFunctionalManager/CorridorCostManager.hpp"
 #include "CostFunctionalManager/DistanceFieldCostManager.hpp"
 #include "CostFunctionalManager/TrackingCostManager.hpp"
@@ -17,6 +18,7 @@
 #include <ros/ros.h>
 #include "optimizer/lbfgs.hpp"
 #include <memory>
+#include <limits>
 
 namespace ego_planner
 {
@@ -33,6 +35,7 @@ namespace ego_planner
     //general cost functional manager
     cost_functional::LinearTimeCost time_cost_;
     cost_functional::EgoCostFunctionalManager cost_manager_;
+    cost_functional::PerchingCostFunctionalManager perching_cost_manager_;
     cost_functional::CorridorCostFunctionalManager corridor_cost_manager_;
     cost_functional::DistanceFieldCostFunctionalManager distance_field_cost_manager_;
     cost_functional::TrackingCostFunctionalManager tracking_cost_manager_;
@@ -93,10 +96,20 @@ namespace ego_planner
     double tracking_distance_max_;
     double tracking_height_tolerance_;
     double tracking_smooth_eps_;
+    double wei_perching_floor_;
+    double wei_perching_thrust_;
+    double wei_perching_omega_;
+    double wei_perching_collision_;
     double safety_margin_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
     double max_vel_, max_acc_, max_jer_;
+    double perching_floor_height_;
+    double perching_thrust_min_;
+    double perching_thrust_max_;
+    double perching_omega_max_;
+    double perching_robot_radius_;
+    double perching_platform_radius_;
     double rho_energy_{1.0};
     enum OptimizeMode
     {
@@ -127,6 +140,32 @@ namespace ego_planner
       OBS_FREE,
       ERR,
       FINISH
+    };
+
+    struct PerchingCheckConfig
+    {
+      bool enabled{false};
+      double terminal_relax_time{0.35};
+      double contact_position_tolerance{0.18};
+      double relative_tangential_speed_tolerance{0.45};
+      double relative_normal_speed_tolerance{0.80};
+    };
+
+    struct PerchingTerminalMetrics
+    {
+      bool valid{false};
+      double total_duration{0.0};
+      double approach_check_until{0.0};
+      Eigen::Vector3d expected_contact_position{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d expected_contact_velocity{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d expected_plate_velocity{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d surface_normal{Eigen::Vector3d::UnitZ()};
+      Eigen::Vector3d final_position{Eigen::Vector3d::Zero()};
+      Eigen::Vector3d final_velocity{Eigen::Vector3d::Zero()};
+      double contact_position_error{std::numeric_limits<double>::infinity()};
+      double relative_tangential_speed{std::numeric_limits<double>::infinity()};
+      double relative_normal_speed{std::numeric_limits<double>::infinity()};
+      double signed_relative_normal_speed{0.0};
     };
 
     /* set variables */
@@ -228,11 +267,25 @@ namespace ego_planner
     bool allowRebound(void);
     std::vector<Types::ConstraintPoints> distinctiveTrajs(std::vector<std::pair<int, int>> segments);
     bool isTrajectoryCollisionFree(const MINCOTraj &traj) const;
+    bool isTrajectoryCollisionFreeUntil(const MINCOTraj &traj,
+                                        double until_time) const;
 
 
     bool isTrajectoryInsideCorridor(const MINCOTraj &traj,
                                 const spatial_map::PolyhedraH &corridor_hpolys,
                                 double margin) const;
+    bool isTrajectoryInsideCorridorUntil(const MINCOTraj &traj,
+                                         const spatial_map::PolyhedraH &corridor_hpolys,
+                                         double margin,
+                                         double until_time) const;
+
+    bool evaluatePerchingTerminalMetrics(
+        const MINCOTraj &traj,
+        const Eigen::MatrixXd &iniState,
+        const Eigen::MatrixXd &nominalTailState,
+        const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+        const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
+        PerchingTerminalMetrics &metrics) const;
 
     bool pointInsidePolytope(const Eigen::Vector3d &pt,
                             const spatial_map::PolyhedronH &hpoly,
@@ -245,6 +298,9 @@ namespace ego_planner
   public:
     using Ptr = std::unique_ptr<PolyTrajOptimizer>;
     //typedef std::unique_ptr<PolyTrajOptimizer> Ptr;
+  private:
+    PerchingCheckConfig perching_check_config_;
+    bool perching_acceptance_active_{false};
   };
 
 } // namespace ego_planner
