@@ -265,6 +265,10 @@ namespace ego_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       double &final_cost)
   {
+    if (perching_acceptance_active_)
+    {
+      clearLastPerchingExtraVariables();
+    }
     optimize_mode_ = MODE_PLAIN;
     resetSpatialOptimizationContext();
 
@@ -567,6 +571,20 @@ namespace ego_planner
     } while ((flag_still_unsafe && restart_nums < 3) ||
              (flag_force_return && force_stop_type_ == STOP_FOR_REBOUND && rebound_times <= 20));
 
+    if (flag_success)
+    {
+      Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+      mincoOpt_.setWarmStartGuess(x_final);
+      if (perching_acceptance_active_ &&
+          terminal_mapping_ != nullptr &&
+          terminal_mapping_->enabled() &&
+          terminal_mapping_->extraVariableDim() > 0)
+      {
+        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
+        has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
+      }
+    }
+
     return flag_success;
   }
 
@@ -623,6 +641,10 @@ namespace ego_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       double &final_cost)
   {
+    if (perching_acceptance_active_)
+    {
+      clearLastPerchingExtraVariables();
+    }
     optimize_mode_ = MODE_ESDF;
     resetSpatialOptimizationContext();
 
@@ -982,6 +1004,9 @@ namespace ego_planner
           Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
           final_cost = distanceFieldMincoOpt_.evaluateWithTerminalMapping(
               x0, grad_dummy, time_cost_, perching_cost_manager_, terminal_mapping_);
+          distanceFieldMincoOpt_.setWarmStartGuess(x0);
+          last_perching_extra_vars_ = extra_vars;
+          has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
           ROS_WARN("Perching ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f).",
                    init_min_sdf,
                    sdf_collision_tol,
@@ -999,6 +1024,20 @@ namespace ego_planner
                  init_min_sdf,
                  sdf_collision_tol);
         return true;
+      }
+    }
+
+    if (flag_success)
+    {
+      Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+      distanceFieldMincoOpt_.setWarmStartGuess(x_final);
+      if (perching_acceptance_active_ &&
+          terminal_mapping_ != nullptr &&
+          terminal_mapping_->enabled() &&
+          terminal_mapping_->extraVariableDim() > 0)
+      {
+        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
+        has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
       }
     }
 
@@ -1056,6 +1095,10 @@ namespace ego_planner
       const Eigen::VectorXi *corridor_piece_idx,
       double &final_cost)
   {
+    if (perching_acceptance_active_)
+    {
+      clearLastPerchingExtraVariables();
+    }
     optimize_mode_ = MODE_CORRIDOR;
     resetSpatialOptimizationContext();
 
@@ -1550,6 +1593,14 @@ namespace ego_planner
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
       corridorMincoOpt_.setWarmStartGuess(x_final);
+      if (perching_acceptance_active_ &&
+          terminal_mapping_ != nullptr &&
+          terminal_mapping_->enabled() &&
+          terminal_mapping_->extraVariableDim() > 0)
+      {
+        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
+        has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
+      }
     }
     return flag_success;
   }

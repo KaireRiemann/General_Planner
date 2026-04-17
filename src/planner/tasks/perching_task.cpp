@@ -9,8 +9,9 @@ namespace
 ego_planner::core::TaskDefinition buildPerchingTransitTemplate(const Eigen::Vector3d &start_pt,
                                                                const Eigen::Vector3d &start_vel,
                                                                const Eigen::Vector3d &start_acc,
-                                                               const Eigen::Vector3d &contact_pt,
-                                                               const Eigen::Vector3d &contact_vel,
+                                                               const Eigen::Vector3d &approach_anchor_pt,
+                                                               const Eigen::Vector3d &approach_anchor_vel,
+                                                               const Eigen::Vector3d &approach_anchor_acc,
                                                                const bool force_plain,
                                                                const bool prefer_corridor,
                                                                const bool prefer_esdf)
@@ -18,8 +19,8 @@ ego_planner::core::TaskDefinition buildPerchingTransitTemplate(const Eigen::Vect
   auto task = ego_planner::tasks::StateToStateTask::buildDefinition(start_pt,
                                                                     start_vel,
                                                                     start_acc,
-                                                                    contact_pt,
-                                                                    contact_vel,
+                                                                    approach_anchor_pt,
+                                                                    approach_anchor_vel,
                                                                     true,
                                                                     false,
                                                                     false,
@@ -28,6 +29,11 @@ ego_planner::core::TaskDefinition buildPerchingTransitTemplate(const Eigen::Vect
                                                                     prefer_esdf);
   task.task_name = "perching";
   task.type = ego_planner::core::TaskType::PERCHING;
+  task.goal.state.acceleration = approach_anchor_acc;
+  if (!task.phases.empty())
+  {
+    task.phases.front().goal.state.acceleration = approach_anchor_acc;
+  }
   return task;
 }
 
@@ -39,6 +45,9 @@ namespace ego_planner::tasks
 core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_pt,
                                                    const Eigen::Vector3d &start_vel,
                                                    const Eigen::Vector3d &start_acc,
+                                                   const Eigen::Vector3d &approach_anchor_pt,
+                                                   const Eigen::Vector3d &approach_anchor_vel,
+                                                   const Eigen::Vector3d &approach_anchor_acc,
                                                    const Eigen::Vector3d &contact_pt,
                                                    const Eigen::Vector3d &contact_vel,
                                                    const Eigen::Vector3d &contact_acc,
@@ -48,6 +57,8 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                                                    const Eigen::Vector3d &landing_tangent_x,
                                                    const Eigen::Vector3d &landing_tangent_y,
                                                    const Eigen::Vector3d &landing_normal,
+                                                   const Eigen::Vector2d &tangential_velocity_seed,
+                                                   const double thrust_phase_seed,
                                                    const double robot_l,
                                                    const double v_plus,
                                                    const double terminal_thrust_nominal,
@@ -63,8 +74,9 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   core::TaskDefinition task = buildPerchingTransitTemplate(start_pt,
                                                            start_vel,
                                                            start_acc,
-                                                           contact_pt,
-                                                           contact_vel,
+                                                           approach_anchor_pt,
+                                                           approach_anchor_vel,
+                                                           approach_anchor_acc,
                                                            force_plain,
                                                            prefer_corridor,
                                                            prefer_esdf);
@@ -113,9 +125,9 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   task.goal.manifold_params(22) = v_plus;
   task.goal.manifold_params(23) = terminal_thrust_nominal;
   task.goal.manifold_params(24) = terminal_thrust_range;
-  task.goal.manifold_params(25) = 0.0; // nu_x seed
-  task.goal.manifold_params(26) = 0.0; // nu_y seed
-  task.goal.manifold_params(27) = 0.0; // tau_f seed
+  task.goal.manifold_params(25) = tangential_velocity_seed.x();
+  task.goal.manifold_params(26) = tangential_velocity_seed.y();
+  task.goal.manifold_params(27) = thrust_phase_seed;
   task.goal.manifold_params(28) = use_dynamics_terminal_accel ? 1.0 : 0.0;
   task.goal.manifold_params(29) = std::max(0.0, prediction_time);
 
@@ -125,16 +137,16 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
 
   task.phases.clear();
   core::PhaseDefinition approach;
-  approach.name = "approach";
+  approach.name = "approach_anchor";
   approach.goal.semantic = core::GoalSemanticType::TERMINAL_SET;
   approach.goal.state.valid = true;
-  approach.goal.state.position = contact_pt;
-  approach.goal.state.velocity = contact_vel;
-  approach.goal.state.acceleration = contact_acc;
+  approach.goal.state.position = approach_anchor_pt;
+  approach.goal.state.velocity = approach_anchor_vel;
+  approach.goal.state.acceleration = approach_anchor_acc;
   task.phases.push_back(approach);
 
   core::PhaseDefinition contact;
-  contact.name = "contact";
+  contact.name = "contact_final";
   contact.goal = task.goal;
   task.phases.push_back(contact);
 
@@ -151,6 +163,9 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
   return buildDefinition(start_pt,
                          start_vel,
                          start_acc,
+                         contact_pt - 0.4 * Eigen::Vector3d::UnitZ(),
+                         contact_vel,
+                         Eigen::Vector3d::Zero(),
                          contact_pt,
                          contact_vel,
                          Eigen::Vector3d::Zero(),
@@ -160,6 +175,8 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
                          Eigen::Vector3d::UnitX(),
                          Eigen::Vector3d::UnitY(),
                          Eigen::Vector3d::UnitZ(),
+                         Eigen::Vector2d::Zero(),
+                         0.0,
                          0.0,
                          0.0,
                          9.81,
@@ -173,6 +190,9 @@ core::TaskDefinition PerchingTask::buildDefinition(const Eigen::Vector3d &start_
 core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                                    const Eigen::Vector3d &start_vel,
                                    const Eigen::Vector3d &start_acc,
+                                   const Eigen::Vector3d &approach_anchor_pt,
+                                   const Eigen::Vector3d &approach_anchor_vel,
+                                   const Eigen::Vector3d &approach_anchor_acc,
                                    const Eigen::Vector3d &contact_pt,
                                    const Eigen::Vector3d &contact_vel,
                                    const Eigen::Vector3d &contact_acc,
@@ -182,6 +202,8 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                                    const Eigen::Vector3d &landing_tangent_x,
                                    const Eigen::Vector3d &landing_tangent_y,
                                    const Eigen::Vector3d &landing_normal,
+                                   const Eigen::Vector2d &tangential_velocity_seed,
+                                   const double thrust_phase_seed,
                                    const double robot_l,
                                    const double v_plus,
                                    const double terminal_thrust_nominal,
@@ -194,6 +216,9 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
   return buildDefinition(start_pt,
                          start_vel,
                          start_acc,
+                         approach_anchor_pt,
+                         approach_anchor_vel,
+                         approach_anchor_acc,
                          contact_pt,
                          contact_vel,
                          contact_acc,
@@ -203,6 +228,8 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                          landing_tangent_x,
                          landing_tangent_y,
                          landing_normal,
+                         tangential_velocity_seed,
+                         thrust_phase_seed,
                          robot_l,
                          v_plus,
                          terminal_thrust_nominal,
@@ -224,6 +251,9 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
   return build(start_pt,
                start_vel,
                start_acc,
+               contact_pt - 0.4 * Eigen::Vector3d::UnitZ(),
+               contact_vel,
+               Eigen::Vector3d::Zero(),
                contact_pt,
                contact_vel,
                Eigen::Vector3d::Zero(),
@@ -233,6 +263,8 @@ core::TaskSpec PerchingTask::build(const Eigen::Vector3d &start_pt,
                Eigen::Vector3d::UnitX(),
                Eigen::Vector3d::UnitY(),
                Eigen::Vector3d::UnitZ(),
+               Eigen::Vector2d::Zero(),
+               0.0,
                0.0,
                0.0,
                9.81,

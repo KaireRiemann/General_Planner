@@ -92,3 +92,20 @@ add_dependencies(perching_target_sim ${catkin_EXPORTED_TARGETS})
 add_executable(body_to_world src/body_to_world.cpp)
 target_link_libraries(body_to_world ${catkin_LIBRARIES})
 add_dependencies(body_to_world ${catkin_EXPORTED_TARGETS})
+
+add_executable(perching_semantics_regression
+  src/perching_semantics_regression.cpp
+  ../tasks/task_factory.cpp
+  ../tasks/state_to_state_task.cpp
+  ../tasks/tracking_task.cpp
+  ../tasks/perching_task.cpp
+  ../compiler/problem_compiler.cpp
+  ../compiler/reference_builder.cpp
+  ../compiler/feasible_set_builder.cpp
+  ../compiler/seed_builder.cpp
+  ../frontend/guide_path_service.cpp
+  ../frontend/warm_start_service.cpp
+  ../runtime/perching_target_provider.cpp
+  )
+target_link_libraries(perching_semantics_regression ${catkin_LIBRARIES})
+add_dependencies(perching_semantics_regression ${catkin_EXPORTED_TARGETS})

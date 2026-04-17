@@ -11,6 +11,7 @@ struct PerchingTerminalState
 {
   bool valid{false};
   double prediction_time{0.0};
+  double approach_distance{0.0};
   Eigen::Vector3d plate_position_now{Eigen::Vector3d::Zero()};
   // Plate state sampled at prediction_time in the future. This is the primary
   // perching reference state used by the task/manifold layer.
@@ -20,6 +21,9 @@ struct PerchingTerminalState
   Eigen::Vector3d landing_tangent_x{Eigen::Vector3d::UnitX()};
   Eigen::Vector3d landing_tangent_y{Eigen::Vector3d::UnitY()};
   Eigen::Vector3d landing_normal{Eigen::Vector3d::UnitZ()};
+  Eigen::Vector3d approach_anchor_position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d approach_anchor_velocity{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d approach_anchor_acceleration{Eigen::Vector3d::Zero()};
   Eigen::Vector3d terminal_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d terminal_velocity{Eigen::Vector3d::Zero()};
   Eigen::Vector3d terminal_acceleration{Eigen::Vector3d::Zero()};
@@ -61,6 +65,11 @@ public:
   bool buildTerminalStateAtPrediction(double prediction_time,
                                       PerchingTerminalState &terminal) const;
 
+  void setTerminalWarmStartHint(const Eigen::Vector2d &tangential_velocity_seed,
+                                double thrust_phase_seed);
+
+  void clearTerminalWarmStartHint();
+
   static Eigen::Quaterniond quaternionFromAxisAngle(const Eigen::Vector3d &axis,
                                                     double theta);
 
@@ -79,6 +88,9 @@ private:
   Eigen::Vector3d plate_velocity_{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond plate_orientation_{Eigen::Quaterniond::Identity()};
   Eigen::Quaterniond fallback_landing_orientation_{Eigen::Quaterniond::Identity()};
+  bool has_terminal_warm_start_hint_{false};
+  Eigen::Vector2d tangential_velocity_seed_hint_{Eigen::Vector2d::Zero()};
+  double thrust_phase_seed_hint_{0.0};
 };
 
 } // namespace ego_planner::runtime

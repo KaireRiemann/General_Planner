@@ -112,8 +112,10 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   tangent_x.normalize();
 
   const double clamped_prediction_time = std::max(0.0, prediction_time);
+  const double approach_distance = std::max(0.4, robot_l_ + 0.2);
   terminal.valid = true;
   terminal.prediction_time = clamped_prediction_time;
+  terminal.approach_distance = approach_distance;
   terminal.plate_position_now = plate_position_;
   terminal.plate_position = plate_position_ + plate_velocity_ * clamped_prediction_time;
   terminal.plate_velocity = plate_velocity_;
@@ -127,16 +129,45 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   terminal.terminal_thrust_nominal = terminal_thrust_;
   terminal.terminal_thrust_range = terminal_thrust_range_;
   terminal.use_dynamics_terminal_accel = use_dynamics_terminal_accel_;
-  terminal.tangential_velocity_seed.setZero();
-  terminal.thrust_phase_seed = 0.0;
+  terminal.tangential_velocity_seed =
+      has_terminal_warm_start_hint_ ? tangential_velocity_seed_hint_ : Eigen::Vector2d::Zero();
+  terminal.thrust_phase_seed =
+      has_terminal_warm_start_hint_ ? thrust_phase_seed_hint_ : 0.0;
   if (use_dynamics_terminal_accel_)
   {
     terminal.terminal_acceleration =
         terminal_thrust_ * normal + Eigen::Vector3d(0.0, 0.0, -9.81);
   }
+  terminal.approach_anchor_position =
+      terminal.terminal_position - terminal.approach_distance * normal;
+  terminal.approach_anchor_velocity = terminal.terminal_velocity;
+  terminal.approach_anchor_acceleration = terminal.terminal_acceleration;
   return terminal.terminal_position.allFinite() &&
+         terminal.approach_anchor_position.allFinite() &&
          terminal.terminal_velocity.allFinite() &&
          terminal.terminal_acceleration.allFinite();
+}
+
+void PerchingTargetProvider::setTerminalWarmStartHint(
+    const Eigen::Vector2d &tangential_velocity_seed,
+    const double thrust_phase_seed)
+{
+  if (!tangential_velocity_seed.allFinite() || !std::isfinite(thrust_phase_seed))
+  {
+    clearTerminalWarmStartHint();
+    return;
+  }
+
+  tangential_velocity_seed_hint_ = tangential_velocity_seed;
+  thrust_phase_seed_hint_ = thrust_phase_seed;
+  has_terminal_warm_start_hint_ = true;
+}
+
+void PerchingTargetProvider::clearTerminalWarmStartHint()
+{
+  tangential_velocity_seed_hint_.setZero();
+  thrust_phase_seed_hint_ = 0.0;
+  has_terminal_warm_start_hint_ = false;
 }
 
 Eigen::Quaterniond PerchingTargetProvider::quaternionFromAxisAngle(const Eigen::Vector3d &axis,

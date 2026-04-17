@@ -60,6 +60,7 @@
     <arg name="perching_replan_if_unsafe" default="true"/>
     <arg name="perching_arrive_pos_thresh" default="0.45"/>
     <arg name="perching_arrive_vel_thresh" default="0.85"/>
+    <arg name="perching_stage_entry_hold_time" default="0.20"/>
     <arg name="perching_min_execute_time" default="0.30"/>
     <arg name="perching_weight_floor" default="40.0"/>
     <arg name="perching_weight_thrust" default="8.0"/>
@@ -165,6 +166,7 @@
         <param name="fsm/perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)" type="bool"/>
         <param name="fsm/perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)" type="double"/>
         <param name="fsm/perching_arrive_vel_thresh" value="$(arg perching_arrive_vel_thresh)" type="double"/>
+        <param name="fsm/perching_stage_entry_hold_time" value="$(arg perching_stage_entry_hold_time)" type="double"/>
         <param name="fsm/perching_min_execute_time" value="$(arg perching_min_execute_time)" type="double"/>
         <param name="fsm/perching_override_target_orientation" value="false" type="bool"/>
         <param name="fsm/perching_axis_x" value="$(arg perching_axis_x)" type="double"/>

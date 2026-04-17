@@ -863,6 +863,11 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   perching_semantics.nu_seed = decoded.nu_seed;
   perching_semantics.tau_f_seed = decoded.tau_f_seed;
   perching_semantics.pre_contact_distance = anchor.pre_contact_distance;
+  // Fast-Perching keeps the tangential relaxation heavily regularized. The
+  // generic terminal-mapping defaults are far too weak here and let the solver
+  // "slide" along the contact tangent instead of converging to a crisp perch.
+  perching_semantics.weight_nu = 1.0e2;
+  perching_semantics.weight_tau_f = decoded.use_dynamics_terminal_accel ? 1.0e-1 : 0.0;
   perching_mapping.configure(perching_semantics);
   ROS_INFO("[CompiledPerchingInit] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu",
            compiled_active_mode,

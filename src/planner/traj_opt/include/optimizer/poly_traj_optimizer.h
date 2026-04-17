@@ -279,6 +279,24 @@ namespace ego_planner
                                          double margin,
                                          double until_time) const;
 
+    bool getLastPerchingExtraVariables(Eigen::VectorXd &extra_vars) const
+    {
+      if (!has_last_perching_extra_vars_)
+      {
+        extra_vars.resize(0);
+        return false;
+      }
+
+      extra_vars = last_perching_extra_vars_;
+      return extra_vars.size() > 0;
+    }
+
+    void clearLastPerchingExtraVariables()
+    {
+      last_perching_extra_vars_.resize(0);
+      has_last_perching_extra_vars_ = false;
+    }
+
     bool evaluatePerchingTerminalMetrics(
         const MINCOTraj &traj,
         const Eigen::MatrixXd &iniState,
@@ -301,6 +319,8 @@ namespace ego_planner
   private:
     PerchingCheckConfig perching_check_config_;
     bool perching_acceptance_active_{false};
+    bool has_last_perching_extra_vars_{false};
+    Eigen::VectorXd last_perching_extra_vars_;
   };
 
 } // namespace ego_planner

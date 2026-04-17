@@ -1,6 +1,6 @@
 <launch>
-    <!-- Fast-Perching style V1 test:
-         moving landing plate odom -> PERCHING TaskDefinition -> PlannerEngine. -->
+    <!-- Tracking-integrated perching test:
+         moving landing plate odom -> tracking_follow -> perching_final. -->
     <arg name="map_size_x" default="200.0"/>
     <arg name="map_size_y" default="200.0"/>
     <arg name="map_size_z" default="3.0"/>
@@ -11,9 +11,13 @@
     <arg name="init_y" default="-1.0"/>
     <arg name="init_z" default="1.4"/>
 
-    <arg name="use_esdf" default="false"/>
+    <arg name="use_esdf" default="true"/>
     <arg name="use_sfc_corridor" default="false"/>
-    <arg name="enable_esdf" default="false"/>
+    <arg name="enable_esdf" default="true"/>
+    <arg name="tracking_target_odom_topic" default="/perching/target_odom"/>
+    <arg name="tracking_relative_offset_x" default="0.4"/>
+    <arg name="tracking_relative_offset_y" default="0.0"/>
+    <arg name="tracking_relative_offset_z" default="0.0"/>
 
     <arg name="plate_motion_mode" default="line"/>
     <arg name="plate_line_start_x" default="-1.8"/>
@@ -92,7 +96,7 @@
         <param name="attitude_sine_enable" value="$(arg plate_attitude_sine_enable)"/>
         <param name="attitude_sine_amplitude" value="$(arg plate_attitude_sine_amplitude)"/>
         <param name="attitude_sine_rate" value="$(arg plate_attitude_sine_rate)"/>
-        <param name="publish_trigger" value="true"/>
+        <param name="publish_trigger" value="false"/>
         <param name="trigger_delay" value="1.2"/>
     </node>
 
@@ -123,7 +127,13 @@
         <arg name="target0_x" value="0.0"/>
         <arg name="target0_y" value="0.0"/>
         <arg name="target0_z" value="0.0"/>
+        <arg name="use_tracking_task" value="true"/>
         <arg name="use_perching_task" value="true"/>
+        <arg name="tracking_target_odom_topic" value="$(arg tracking_target_odom_topic)"/>
+        <arg name="tracking_relay_goal" value="false"/>
+        <arg name="tracking_relative_offset_x" value="$(arg tracking_relative_offset_x)"/>
+        <arg name="tracking_relative_offset_y" value="$(arg tracking_relative_offset_y)"/>
+        <arg name="tracking_relative_offset_z" value="$(arg tracking_relative_offset_z)"/>
         <arg name="perching_target_odom_topic" value="/perching/target_odom"/>
         <arg name="perching_lock_topic" value="$(arg perching_lock_topic)"/>
         <arg name="perching_auto_start" value="false"/>

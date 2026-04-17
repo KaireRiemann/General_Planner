@@ -120,8 +120,12 @@ bool PerchingInitService::decodeContactSemantics(const core::PlanningProblem &pr
   semantics.v_plus = std::max(0.0, semantics.v_plus);
   semantics.thrust_nominal = std::max(0.0, semantics.thrust_nominal);
   semantics.thrust_range = std::max(0.0, semantics.thrust_range);
+  const double compiled_approach_distance =
+      std::max(0.0, problem.task_semantics.perching.approach_distance);
   semantics.pre_contact_distance =
-      std::max(kDefaultPreContactDistance, semantics.robot_l + 0.2);
+      compiled_approach_distance > 1.0e-6
+          ? compiled_approach_distance
+          : std::max(kDefaultPreContactDistance, semantics.robot_l + 0.2);
   semantics.valid = semantics.plate_position_ref.allFinite() &&
                     semantics.plate_velocity.allFinite() &&
                     semantics.surface_x.allFinite() &&
@@ -178,10 +182,26 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   }
 
   PerchingPreContactAnchorState &anchor = artifact.pre_contact_anchor_state;
-  anchor.pre_contact_distance = semantics.pre_contact_distance;
-  anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
-  anchor.velocity = predicted.contact_velocity;
-  anchor.acceleration = predicted.contact_acceleration;
+  const core::PerchingSemanticArtifact &compiled_semantics = problem.task_semantics.perching;
+  if (compiled_semantics.approach_anchor_state.valid)
+  {
+    anchor.position = compiled_semantics.approach_anchor_state.position;
+    anchor.velocity = compiled_semantics.approach_anchor_state.velocity;
+    anchor.acceleration = compiled_semantics.approach_anchor_state.acceleration;
+    anchor.pre_contact_distance =
+        compiled_semantics.approach_distance > 1.0e-6
+            ? compiled_semantics.approach_distance
+            : std::max(0.0,
+                       (predicted.contact_position - anchor.position)
+                           .dot(semantics.surface_z));
+  }
+  else
+  {
+    anchor.pre_contact_distance = semantics.pre_contact_distance;
+    anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
+    anchor.velocity = predicted.contact_velocity;
+    anchor.acceleration = predicted.contact_acceleration;
+  }
   anchor.valid = anchor.position.allFinite() &&
                  anchor.velocity.allFinite() &&
                  anchor.acceleration.allFinite();

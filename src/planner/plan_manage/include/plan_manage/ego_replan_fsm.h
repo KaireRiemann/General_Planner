@@ -84,6 +84,12 @@ namespace ego_planner
       ARRIVED_AND_HOLD,
       EMERGENCY_STOP
     };
+    enum class TaskRuntimeStage
+    {
+      NONE = 0,
+      TRACKING_FOLLOW,
+      PERCHING_FINAL
+    };
     struct StateToStateDecisionDebug
     {
       StateToStateRuntimeDecision decision{StateToStateRuntimeDecision::KEEP_EXECUTING};
@@ -191,11 +197,15 @@ namespace ego_planner
     double perching_arrive_pos_thresh_{0.45};
     double perching_arrive_vel_thresh_{0.85};
     double perching_min_execute_time_{0.30};
+    double perching_stage_entry_hold_time_{0.20};
     // double perching_successor_lead_time_{0.60};
     // double perching_replan_target_shift_thresh_{0.35};
     Eigen::Vector3d perching_axis_{Eigen::Vector3d::UnitY()};
     double perching_theta_{-1.5708};
     bool perching_round_active_{false};
+    double perching_stage_entry_stable_since_{-1.0};
+    bool have_active_perching_terminal_{false};
+    bool perching_contact_latched_{false};
     bool have_planned_local_target_{false};
     bool have_planned_final_goal_{false};
     bool have_planned_tracking_target_now_{false};
@@ -211,6 +221,7 @@ namespace ego_planner
     Eigen::Vector3d planned_final_goal_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
+    runtime::PerchingTerminalState active_perching_terminal_;
     runtime::LocalTargetSelection pending_state2state_target_selection_;
     bool have_pending_state2state_target_selection_{false};
     core::RuntimePolicy active_state2state_runtime_policy_;
@@ -232,6 +243,7 @@ namespace ego_planner
     bool have_trigger_, have_target_, have_odom_, have_new_target_, have_recv_pre_agent_, touch_goal_, mandatory_stop_;
     bool have_tracking_ref_{false};
     FSM_EXEC_STATE exec_state_;
+    TaskRuntimeStage task_runtime_stage_{TaskRuntimeStage::NONE};
     int continously_called_times_{0};
 
     Eigen::Vector3d start_pt_, start_vel_, start_acc_;   // start state
@@ -278,6 +290,18 @@ namespace ego_planner
     StateToStateRuntimeDecision evaluateStateToStateDecision(const LocalTrajData *info,
                                                              double t_cur,
                                                              StateToStateDecisionDebug *debug = nullptr);
+    bool integratedTrackingPerchingMode() const;
+    bool standalonePerchingMode() const;
+    TaskRuntimeStage initialTaskRuntimeStage() const;
+    const char *taskRuntimeStageString(TaskRuntimeStage stage) const;
+    bool buildPerchingPlanningTerminal(const Eigen::Vector3d &planning_start,
+                                       runtime::PerchingTerminalState &terminal,
+                                       bool apply_map_fallback) const;
+    bool perchingEntryGateSatisfied(const runtime::PerchingTerminalState &terminal,
+                                    double *distance_to_anchor = nullptr,
+                                    double *relative_anchor_speed = nullptr) const;
+    bool shouldEnterPerchingFinalStage(runtime::PerchingTerminalState &terminal);
+    bool shouldReleasePerchingContactHold() const;
     bool callCurrentTaskPlan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);
     bool planFromLocalTraj(const int trial_times = 1);
