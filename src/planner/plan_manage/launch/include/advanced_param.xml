@@ -48,6 +48,7 @@
     <arg name="perching_auto_start" default="false"/>
     <arg name="perching_robot_l" default="0.02"/>
     <arg name="perching_v_plus" default="0.3"/>
+    <arg name="perching_approach_velocity_alpha" default="0.35"/>
     <arg name="perching_axis_x" default="0.0"/>
     <arg name="perching_axis_y" default="1.0"/>
     <arg name="perching_axis_z" default="0.0"/>
@@ -158,6 +159,7 @@
         <param name="fsm/perching_auto_start" value="$(arg perching_auto_start)" type="bool"/>
         <param name="fsm/perching_robot_l" value="$(arg perching_robot_l)" type="double"/>
         <param name="fsm/perching_v_plus" value="$(arg perching_v_plus)" type="double"/>
+        <param name="fsm/perching_approach_velocity_alpha" value="$(arg perching_approach_velocity_alpha)" type="double"/>
         <param name="fsm/perching_min_prediction_time" value="$(arg perching_min_prediction_time)" type="double"/>
         <param name="fsm/perching_max_prediction_time" value="$(arg perching_max_prediction_time)" type="double"/>
         <param name="fsm/perching_terminal_thrust" value="$(arg perching_terminal_thrust)" type="double"/>

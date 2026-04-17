@@ -1,6 +1,9 @@
 #include <frontend/perching_init_service.hpp>
 
 #include <algorithm>
+#include <cmath>
+
+#include <ros/ros.h>
 
 namespace ego_planner::frontend
 {
@@ -10,6 +13,7 @@ namespace
 
 constexpr double kDefaultPreContactDistance = 0.4;
 constexpr double kGravity = 9.81;
+constexpr double kDefaultApproachVelocityAlpha = 0.35;
 
 Eigen::Vector3d normalizedOrFallback(const Eigen::Vector3d &vec,
                                      const Eigen::Vector3d &fallback)
@@ -49,13 +53,78 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
   approach_problem.terminal_boundary.velocity = anchor_state.velocity;
   approach_problem.terminal_boundary.acceleration = anchor_state.acceleration;
 
-  // The contact manifold remains perching-owned semantics. Approach transit
-  // init must not treat the real contact point or any contact-derived corridor
-  // hint as a generic free-space target.
-  approach_problem.references.guide_path.clear();
-  approach_problem.references.guide_times.clear();
-  approach_problem.feasible_sets.clear();
-  approach_problem.seed = core::SeedSpec{};
+  const std::size_t guide_pts_before = approach_problem.references.guide_path.size();
+  const std::size_t guide_times_before = approach_problem.references.guide_times.size();
+  const std::size_t feasible_before = approach_problem.feasible_sets.size();
+  const bool seed_valid_before = approach_problem.seed.valid;
+
+  if (!approach_problem.references.guide_path.empty())
+  {
+    std::vector<Eigen::Vector3d> filtered_guide_path;
+    std::vector<double> filtered_guide_times;
+    filtered_guide_path.reserve(approach_problem.references.guide_path.size());
+    const bool have_paired_times =
+        approach_problem.references.guide_times.size() == approach_problem.references.guide_path.size();
+    if (have_paired_times)
+    {
+      filtered_guide_times.reserve(approach_problem.references.guide_times.size());
+    }
+
+    for (std::size_t i = 0; i < approach_problem.references.guide_path.size(); ++i)
+    {
+      const Eigen::Vector3d &pt = approach_problem.references.guide_path[i];
+      if (!pt.allFinite())
+      {
+        continue;
+      }
+      filtered_guide_path.push_back(pt);
+      if (have_paired_times)
+      {
+        filtered_guide_times.push_back(approach_problem.references.guide_times[i]);
+      }
+    }
+
+    approach_problem.references.guide_path.swap(filtered_guide_path);
+    if (have_paired_times)
+    {
+      bool monotonic_times = true;
+      for (std::size_t i = 0; i < filtered_guide_times.size(); ++i)
+      {
+        if (!std::isfinite(filtered_guide_times[i]) ||
+            (i > 0 && filtered_guide_times[i] + 1.0e-6 < filtered_guide_times[i - 1]))
+        {
+          monotonic_times = false;
+          break;
+        }
+      }
+      if (monotonic_times)
+      {
+        approach_problem.references.guide_times.swap(filtered_guide_times);
+      }
+      else
+      {
+        approach_problem.references.guide_times.clear();
+      }
+    }
+    else
+    {
+      approach_problem.references.guide_times.clear();
+    }
+  }
+  else if (!approach_problem.references.guide_times.empty())
+  {
+    approach_problem.references.guide_times.clear();
+  }
+
+  ROS_INFO("[PerchingInit] handoff artifacts preserved: guide_pts=%zu->%zu guide_times=%zu->%zu feasible_sets=%zu->%zu seed_valid=%s->%s",
+           guide_pts_before,
+           approach_problem.references.guide_path.size(),
+           guide_times_before,
+           approach_problem.references.guide_times.size(),
+           feasible_before,
+           approach_problem.feasible_sets.size(),
+           seed_valid_before ? "yes" : "no",
+           approach_problem.seed.valid ? "yes" : "no");
 
   return approach_problem;
 }
@@ -183,6 +252,7 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
 
   PerchingPreContactAnchorState &anchor = artifact.pre_contact_anchor_state;
   const core::PerchingSemanticArtifact &compiled_semantics = problem.task_semantics.perching;
+  std::string anchor_source = "fallback_recompute";
   if (compiled_semantics.approach_anchor_state.valid)
   {
     anchor.position = compiled_semantics.approach_anchor_state.position;
@@ -194,13 +264,33 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
             : std::max(0.0,
                        (predicted.contact_position - anchor.position)
                            .dot(semantics.surface_z));
+    anchor_source = "task_semantics";
+  }
+  else if (!problem.phase_specs.empty() &&
+           problem.phase_specs.front().has_cached_goal_state &&
+           problem.phase_specs.front().cached_goal_state.valid)
+  {
+    const core::StateDefinition &phase_goal_state =
+        problem.phase_specs.front().cached_goal_state;
+    anchor.position = phase_goal_state.position;
+    anchor.velocity = phase_goal_state.velocity;
+    anchor.acceleration = phase_goal_state.acceleration;
+    anchor.pre_contact_distance =
+        compiled_semantics.approach_distance > 1.0e-6
+            ? compiled_semantics.approach_distance
+            : std::max(0.0,
+                       (predicted.contact_position - anchor.position)
+                           .dot(semantics.surface_z));
+    anchor_source = "phase_ir";
   }
   else
   {
     anchor.pre_contact_distance = semantics.pre_contact_distance;
     anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
-    anchor.velocity = predicted.contact_velocity;
-    anchor.acceleration = predicted.contact_acceleration;
+    anchor.velocity =
+        semantics.plate_velocity -
+        kDefaultApproachVelocityAlpha * semantics.v_plus * semantics.surface_z;
+    anchor.acceleration = Eigen::Vector3d::Zero();
   }
   anchor.valid = anchor.position.allFinite() &&
                  anchor.velocity.allFinite() &&
@@ -210,6 +300,18 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
     artifact.message = "pre-contact anchor state is not finite";
     return false;
   }
+  ROS_INFO("[PerchingInit] approach anchor source=%s pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] distance=%.2f",
+           anchor_source.c_str(),
+           anchor.position.x(),
+           anchor.position.y(),
+           anchor.position.z(),
+           anchor.velocity.x(),
+           anchor.velocity.y(),
+           anchor.velocity.z(),
+           anchor.acceleration.x(),
+           anchor.acceleration.y(),
+           anchor.acceleration.z(),
+           anchor.pre_contact_distance);
 
   const core::PlanningProblem approach_problem = makeApproachProblem(problem, anchor);
   TransitInitResult transit_result;

@@ -43,6 +43,7 @@
     <arg name="perching_theta" default="-1.5708"/>
     <arg name="perching_robot_l" default="0.02"/>
     <arg name="perching_v_plus" default="0.30"/>
+    <arg name="perching_approach_velocity_alpha" default="0.35"/>
     <arg name="perching_min_prediction_time" default="0.8"/>
     <arg name="perching_max_prediction_time" default="1.8"/>
     <arg name="perching_terminal_thrust" default="9.81"/>
@@ -139,6 +140,7 @@
         <arg name="perching_auto_start" value="false"/>
         <arg name="perching_robot_l" value="$(arg perching_robot_l)"/>
         <arg name="perching_v_plus" value="$(arg perching_v_plus)"/>
+        <arg name="perching_approach_velocity_alpha" value="$(arg perching_approach_velocity_alpha)"/>
         <arg name="perching_axis_x" value="$(arg perching_axis_x)"/>
         <arg name="perching_axis_y" value="$(arg perching_axis_y)"/>
         <arg name="perching_axis_z" value="$(arg perching_axis_z)"/>

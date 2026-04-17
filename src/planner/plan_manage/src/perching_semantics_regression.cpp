@@ -51,6 +51,7 @@ ego_planner::runtime::PerchingTerminalState buildReferenceTerminal()
   ego_planner::runtime::PerchingTargetProvider provider;
   provider.configure(0.25,
                      0.30,
+                     0.35,
                      0.50,
                      2.00,
                      10.00,
@@ -80,6 +81,7 @@ void runProviderWarmStartRegression()
   ego_planner::runtime::PerchingTargetProvider provider;
   provider.configure(0.25,
                      0.30,
+                     0.35,
                      0.50,
                      2.00,
                      10.00,
@@ -117,6 +119,7 @@ void runProviderRegression()
   const Eigen::Vector3d expected_anchor =
       expected_contact - expected_approach_distance * expected_normal;
   const Eigen::Vector3d expected_terminal_velocity(0.4, -0.1, -0.1);
+  const Eigen::Vector3d expected_anchor_velocity(0.4, -0.1, 0.095);
   const Eigen::Vector3d expected_terminal_acceleration(0.0, 0.0, 0.19);
 
   require(terminal.valid, "terminal bundle should be valid");
@@ -131,10 +134,10 @@ void runProviderRegression()
           "approach anchor mismatch");
   require(approxVector(terminal.terminal_velocity, expected_terminal_velocity),
           "terminal velocity mismatch");
-  require(approxVector(terminal.approach_anchor_velocity, terminal.terminal_velocity),
-          "approach anchor velocity should match terminal velocity");
-  require(approxVector(terminal.approach_anchor_acceleration, terminal.terminal_acceleration),
-          "approach anchor acceleration should match terminal acceleration");
+  require(approxVector(terminal.approach_anchor_velocity, expected_anchor_velocity),
+          "approach anchor velocity mismatch");
+  require(approxVector(terminal.approach_anchor_acceleration, Eigen::Vector3d::Zero()),
+          "approach anchor acceleration should be zero for the approach stage");
   require(approxVector(terminal.terminal_acceleration, expected_terminal_acceleration, 1.0e-5),
           "terminal acceleration mismatch");
 }
@@ -203,6 +206,19 @@ void runCompilerRegression()
           "phase-1 should remain a terminal-set approach anchor");
   require(problem.phase_specs.back().terminal_is_manifold,
           "phase-2 should remain the final contact manifold");
+  require(problem.phase_specs.front().goal.isTerminalSet(),
+          "phase-1 goal should lower into solver-facing IR");
+  require(problem.phase_specs.front().has_cached_goal_state,
+          "phase-1 should cache the approach anchor state");
+  require(approxVector(problem.phase_specs.front().cached_goal_state.position,
+                       terminal.approach_anchor_position),
+          "phase-1 cached approach anchor mismatch");
+  require(problem.phase_specs.back().goal.isTerminalManifold(),
+          "phase-2 goal should lower into solver-facing IR");
+  require(problem.phase_specs.back().has_cached_manifold_params,
+          "phase-2 should cache terminal manifold parameters");
+  require(problem.phase_specs.back().cached_manifold_params.size() == 30,
+          "phase-2 cached manifold parameters should preserve perching semantics");
 }
 
 } // namespace

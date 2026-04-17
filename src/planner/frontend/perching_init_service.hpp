@@ -61,8 +61,9 @@ struct PerchingInitArtifact
 
 // PerchingInitService keeps perching-specific terminal/contact semantics out of
 // the shared transit initializer. It decodes the moving-contact manifold,
-// predicts the real contact state, builds a pre-contact anchor, then reuses the
-// shared TransitInitService only for the free-space approach segment.
+// predicts the real contact state, preserves any tracking->perching handoff
+// guide/seed artifacts, builds a pre-contact anchor, then reuses the shared
+// TransitInitService only for the free-space approach segment.
 class PerchingInitService
 {
 public:

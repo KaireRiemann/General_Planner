@@ -99,8 +99,13 @@ struct VariableLayoutSpec
 struct PhaseProblemSpec
 {
   std::string name;
+  GoalDefinition goal;
   bool terminal_is_set{false};
   bool terminal_is_manifold{false};
+  bool has_cached_goal_state{false};
+  StateDefinition cached_goal_state;
+  bool has_cached_manifold_params{false};
+  Eigen::VectorXd cached_manifold_params;
   std::vector<int> feasible_set_indices;
   uint32_t objective_mask{0U};
   uint32_t constraint_mask{0U};

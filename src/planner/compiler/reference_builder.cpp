@@ -3,6 +3,24 @@
 namespace ego_planner::compiler
 {
 
+namespace
+{
+
+void populatePhaseGoalCache(const core::GoalDefinition &goal,
+                            core::PhaseProblemSpec &phase_problem)
+{
+  phase_problem.goal = goal;
+  phase_problem.terminal_is_set = goal.isTerminalSet();
+  phase_problem.terminal_is_manifold = goal.isTerminalManifold();
+  phase_problem.has_cached_goal_state = goal.state.valid;
+  phase_problem.cached_goal_state = goal.state;
+  phase_problem.has_cached_manifold_params = goal.manifold_params.size() > 0;
+  phase_problem.cached_manifold_params =
+      phase_problem.has_cached_manifold_params ? goal.manifold_params : Eigen::VectorXd{};
+}
+
+} // namespace
+
 bool ReferenceBuilder::build(const core::PlanningContext &context,
                              const core::TaskDefinition &task_definition,
                              core::PlanningProblem &problem) const
@@ -101,8 +119,7 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
   {
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = task_definition.task_name.empty() ? "phase" : task_definition.task_name;
-    phase_problem.terminal_is_set = task_definition.goal.isTerminalSet();
-    phase_problem.terminal_is_manifold = task_definition.goal.isTerminalManifold();
+    populatePhaseGoalCache(task_definition.goal, phase_problem);
     problem.phase_specs.push_back(phase_problem);
     return true;
   }
@@ -112,8 +129,7 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
   {
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = phase.name;
-    phase_problem.terminal_is_set = phase.goal.isTerminalSet();
-    phase_problem.terminal_is_manifold = phase.goal.isTerminalManifold();
+    populatePhaseGoalCache(phase.goal, phase_problem);
     phase_problem.objective_mask = phase.objective_mask;
     phase_problem.constraint_mask = phase.constraint_mask;
     problem.phase_specs.push_back(phase_problem);

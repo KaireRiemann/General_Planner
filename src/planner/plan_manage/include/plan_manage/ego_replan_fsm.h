@@ -88,7 +88,9 @@ namespace ego_planner
     {
       NONE = 0,
       TRACKING_FOLLOW,
-      PERCHING_FINAL
+      PERCHING_APPROACH,
+      PERCHING_COMMIT,
+      PERCHING_CONTACT
     };
     struct StateToStateDecisionDebug
     {
@@ -187,6 +189,7 @@ namespace ego_planner
     std::string perching_lock_topic_{"/perching/lock"};
     double perching_robot_l_{0.02};
     double perching_v_plus_{0.3};
+    double perching_approach_velocity_alpha_{0.35};
     double perching_min_prediction_time_{1.0};
     double perching_max_prediction_time_{5.0};
     double perching_terminal_thrust_{9.81};
@@ -205,6 +208,7 @@ namespace ego_planner
     bool perching_round_active_{false};
     double perching_stage_entry_stable_since_{-1.0};
     bool have_active_perching_terminal_{false};
+    bool have_frozen_perching_terminal_{false};
     bool perching_contact_latched_{false};
     bool have_planned_local_target_{false};
     bool have_planned_final_goal_{false};
@@ -222,6 +226,11 @@ namespace ego_planner
     Eigen::Vector3d planned_tracking_target_pos_now_{Eigen::Vector3d::Zero()};
     Eigen::Vector3d planned_tracking_ref_end_{Eigen::Vector3d::Zero()};
     runtime::PerchingTerminalState active_perching_terminal_;
+    runtime::PerchingTerminalState frozen_perching_terminal_;
+    double frozen_perching_reference_time_{0.0};
+    Eigen::Vector3d frozen_surface_tangent_x_{Eigen::Vector3d::UnitX()};
+    Eigen::Vector3d frozen_surface_tangent_y_{Eigen::Vector3d::UnitY()};
+    Eigen::Vector3d frozen_surface_normal_{Eigen::Vector3d::UnitZ()};
     runtime::LocalTargetSelection pending_state2state_target_selection_;
     bool have_pending_state2state_target_selection_{false};
     core::RuntimePolicy active_state2state_runtime_policy_;
@@ -300,7 +309,13 @@ namespace ego_planner
     bool perchingEntryGateSatisfied(const runtime::PerchingTerminalState &terminal,
                                     double *distance_to_anchor = nullptr,
                                     double *relative_anchor_speed = nullptr) const;
-    bool shouldEnterPerchingFinalStage(runtime::PerchingTerminalState &terminal);
+    bool shouldEnterPerchingApproachStage(runtime::PerchingTerminalState &terminal);
+    bool perchingCommitGateSatisfied(const runtime::PerchingTerminalState &terminal,
+                                     double *distance_to_anchor = nullptr,
+                                     double *relative_anchor_speed = nullptr) const;
+    void freezePerchingCommitReference(const runtime::PerchingTerminalState &terminal,
+                                       const char *reason);
+    void clearFrozenPerchingCommitReference();
     bool shouldReleasePerchingContactHold() const;
     bool callCurrentTaskPlan(bool flag_use_poly_init, bool flag_randomPolyTraj);
     bool planFromGlobalTraj(const int trial_times = 1);

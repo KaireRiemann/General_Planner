@@ -43,6 +43,7 @@ class PerchingTargetProvider
 public:
   void configure(double robot_l,
                  double v_plus,
+                 double approach_velocity_alpha,
                  double min_prediction_time,
                  double max_prediction_time,
                  double terminal_thrust,
@@ -76,6 +77,7 @@ public:
 private:
   double robot_l_{0.02};
   double v_plus_{0.3};
+  double approach_velocity_alpha_{0.35};
   double min_prediction_time_{1.0};
   double max_prediction_time_{5.0};
   double terminal_thrust_{9.81};

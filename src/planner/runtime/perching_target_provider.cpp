@@ -25,6 +25,7 @@ Eigen::Quaterniond normalizedOrIdentity(Eigen::Quaterniond q)
 
 void PerchingTargetProvider::configure(const double robot_l,
                                        const double v_plus,
+                                       const double approach_velocity_alpha,
                                        const double min_prediction_time,
                                        const double max_prediction_time,
                                        const double terminal_thrust,
@@ -35,6 +36,7 @@ void PerchingTargetProvider::configure(const double robot_l,
 {
   robot_l_ = std::max(0.0, robot_l);
   v_plus_ = std::max(0.0, v_plus);
+  approach_velocity_alpha_ = std::max(0.0, std::min(1.0, approach_velocity_alpha));
   min_prediction_time_ = std::max(0.05, min_prediction_time);
   max_prediction_time_ = std::max(min_prediction_time_, max_prediction_time);
   terminal_thrust_ = std::max(0.0, terminal_thrust);
@@ -140,10 +142,13 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   }
   terminal.approach_anchor_position =
       terminal.terminal_position - terminal.approach_distance * normal;
-  terminal.approach_anchor_velocity = terminal.terminal_velocity;
-  terminal.approach_anchor_acceleration = terminal.terminal_acceleration;
+  terminal.approach_anchor_velocity =
+      plate_velocity_ - approach_velocity_alpha_ * v_plus_ * normal;
+  terminal.approach_anchor_acceleration = Eigen::Vector3d::Zero();
   return terminal.terminal_position.allFinite() &&
          terminal.approach_anchor_position.allFinite() &&
+         terminal.approach_anchor_velocity.allFinite() &&
+         terminal.approach_anchor_acceleration.allFinite() &&
          terminal.terminal_velocity.allFinite() &&
          terminal.terminal_acceleration.allFinite();
 }
