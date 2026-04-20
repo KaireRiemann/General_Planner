@@ -215,6 +215,357 @@ namespace
 
     return debug;
   }
+
+  struct PerchingInitialGuessDebug
+  {
+    std::string source{"generic_fallback"};
+    double total_duration{0.0};
+    double replan_offset{-1.0};
+    double best_pos_error{std::numeric_limits<double>::infinity()};
+    double best_vel_error{std::numeric_limits<double>::infinity()};
+    double max_speed{0.0};
+    double max_omega{0.0};
+    Eigen::VectorXd extra_vars;
+  };
+
+  template <typename TrajType>
+  double estimatePerchingGuessMaxSpeed(const TrajType &traj)
+  {
+    const double total_duration = traj.getTotalDuration();
+    if (!(total_duration > 0.0))
+    {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    const double dt = std::max(0.01, std::min(0.05, total_duration / 50.0));
+    double max_speed = 0.0;
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      max_speed = std::max(max_speed, traj.evaluate(sample_t, 1).norm());
+    }
+    return max_speed;
+  }
+
+  template <typename TrajType>
+  double estimatePerchingGuessMaxOmega(const TrajType &traj)
+  {
+    const double total_duration = traj.getTotalDuration();
+    if (!(total_duration > 0.0))
+    {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    const Eigen::Vector3d gravity(0.0, 0.0, -9.81);
+    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+    const double dt = std::max(0.01, std::min(0.05, total_duration / 50.0));
+    double max_omega = 0.0;
+
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      const Eigen::Vector3d thrust = traj.evaluate(sample_t, 2) - gravity;
+      const double thrust_norm = thrust.norm();
+      if (thrust_norm < 1.0e-4)
+      {
+        continue;
+      }
+
+      const Eigen::Vector3d zb = thrust / thrust_norm;
+      const Eigen::Vector3d jerk = traj.evaluate(sample_t, 3);
+      const Eigen::Vector3d zb_dot =
+          (identity - zb * zb.transpose()) * jerk / thrust_norm;
+      max_omega = std::max(max_omega, zb_dot.norm());
+    }
+
+    return max_omega;
+  }
+
+  template <typename OptimizerT>
+  void seedPerchingExtraVars(const OptimizerT &optimizer,
+                             const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+                             Eigen::VectorXd &extra_vars)
+  {
+    extra_vars.resize(terminal_mapping.extraVariableDim());
+    if (extra_vars.size() <= 0)
+    {
+      return;
+    }
+
+    terminal_mapping.setInitialExtraVariables(extra_vars);
+    const auto &warm = optimizer.warmStartGuess();
+    if (warm.size() >= extra_vars.size())
+    {
+      const Eigen::VectorXd warm_extra = warm.tail(extra_vars.size());
+      if (warm_extra.allFinite())
+      {
+        extra_vars = warm_extra;
+      }
+    }
+  }
+
+  template <typename OptimizerT>
+  bool buildShiftedPerchingWarmStartGuess(
+      const OptimizerT &optimizer,
+      const Eigen::MatrixXd &iniState,
+      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+      const int piece_num,
+      Eigen::VectorXd &x0,
+      PerchingInitialGuessDebug &debug)
+  {
+    if (!optimizer.hasWarmStartGuess())
+    {
+      return false;
+    }
+
+    const auto &prev_traj = optimizer.getTrajectory();
+    const double prev_total = prev_traj.getTotalDuration();
+    if (!(prev_total > 0.2))
+    {
+      return false;
+    }
+
+    const Eigen::Vector3d current_pos = iniState.col(0);
+    Eigen::Vector3d current_vel = Eigen::Vector3d::Zero();
+    if (iniState.cols() > 1)
+    {
+      current_vel = iniState.col(1);
+    }
+
+    double best_t = 0.0;
+    double best_score = std::numeric_limits<double>::infinity();
+    double best_pos_error = std::numeric_limits<double>::infinity();
+    double best_vel_error = std::numeric_limits<double>::infinity();
+    const double dt = std::max(0.02, std::min(0.05, prev_total / 80.0));
+
+    for (double t = 0.0; t <= prev_total + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, prev_total);
+      const Eigen::Vector3d sample_pos = prev_traj.evaluate(sample_t, 0);
+      const Eigen::Vector3d sample_vel = prev_traj.evaluate(sample_t, 1);
+      const double pos_error = (sample_pos - current_pos).norm();
+      const double vel_error = (sample_vel - current_vel).norm();
+      const double score = pos_error + 0.25 * vel_error;
+      if (score < best_score)
+      {
+        best_score = score;
+        best_t = sample_t;
+        best_pos_error = pos_error;
+        best_vel_error = vel_error;
+      }
+    }
+
+    const double pos_threshold = std::max(0.30, 0.20 * (1.0 + current_vel.norm()));
+    const double vel_threshold = 1.50;
+    const double remaining_T = prev_total - best_t;
+    if (best_pos_error > pos_threshold ||
+        best_vel_error > vel_threshold ||
+        remaining_T <= 0.2)
+    {
+      return false;
+    }
+
+    std::vector<double> time_segs(static_cast<std::size_t>(piece_num), remaining_T / piece_num);
+    typename OptimizerT::WaypointsType waypoints(piece_num + 1, ego_planner::TRAJ_DIM);
+    waypoints.row(0) = current_pos.transpose();
+    for (int i = 1; i < piece_num; ++i)
+    {
+      const double sample_t =
+          std::min(prev_total, best_t + remaining_T * (static_cast<double>(i) / piece_num));
+      waypoints.row(i) = prev_traj.evaluate(sample_t, 0).transpose();
+    }
+    waypoints.row(piece_num) = prev_traj.evaluate(prev_total, 0).transpose();
+
+    Eigen::VectorXd extra_vars;
+    seedPerchingExtraVars(optimizer, terminal_mapping, extra_vars);
+    x0 = optimizer.encodeDecisionVector(time_segs, waypoints, &terminal_mapping, &extra_vars);
+    if (x0.size() <= 0 || !x0.allFinite())
+    {
+      return false;
+    }
+
+    debug.source = "shifted_prev_solution";
+    debug.total_duration = remaining_T;
+    debug.replan_offset = best_t;
+    debug.best_pos_error = best_pos_error;
+    debug.best_vel_error = best_vel_error;
+    debug.extra_vars = extra_vars;
+    return true;
+  }
+
+  template <typename OptimizerT>
+  bool buildFastPerchingBvpGuess(
+      const OptimizerT &optimizer,
+      const Eigen::MatrixXd &iniState,
+      const Eigen::MatrixXd &nominal_tail_state,
+      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+      const int piece_num,
+      const double max_vel,
+      const double omega_max,
+      Eigen::VectorXd &x0,
+      PerchingInitialGuessDebug &debug)
+  {
+    using BoundaryState = typename OptimizerT::BoundaryState;
+    using TrajType = typename OptimizerT::TrajType;
+    using InnerPointsMat = typename OptimizerT::InnerPointsMat;
+
+    Eigen::VectorXd extra_vars;
+    seedPerchingExtraVars(optimizer, terminal_mapping, extra_vars);
+
+    const auto &semantic = terminal_mapping.semanticConfig();
+    const Eigen::Vector3d contact_now =
+        semantic.plate_position + semantic.robot_l * semantic.surface_z;
+    double total_T =
+        (contact_now - iniState.col(0)).norm() / std::max(0.5, max_vel);
+    total_T = std::max(total_T, std::max(0.6, 0.35 * piece_num));
+
+    TrajType bvp_traj;
+    BoundaryState mapped_head = iniState;
+    BoundaryState mapped_tail = nominal_tail_state;
+    double max_speed = std::numeric_limits<double>::infinity();
+    double max_omega = std::numeric_limits<double>::infinity();
+    bool generated = false;
+
+    for (int iter = 0; iter < 8; ++iter)
+    {
+      std::vector<double> time_segs(static_cast<std::size_t>(piece_num), total_T / piece_num);
+      Eigen::VectorXd cache_T(piece_num);
+      for (int i = 0; i < piece_num; ++i)
+      {
+        cache_T(i) = time_segs[static_cast<std::size_t>(i)];
+      }
+
+      mapped_head = iniState;
+      mapped_tail = nominal_tail_state;
+      terminal_mapping.mapBoundaryStates(iniState,
+                                         nominal_tail_state,
+                                         cache_T,
+                                         extra_vars,
+                                         mapped_head,
+                                         mapped_tail);
+
+      Eigen::VectorXd one_piece_duration(1);
+      one_piece_duration(0) = total_T;
+      InnerPointsMat empty_inner(ego_planner::TRAJ_DIM, 0);
+      if (!bvp_traj.generate(empty_inner, mapped_head, mapped_tail, one_piece_duration))
+      {
+        return false;
+      }
+
+      max_speed = estimatePerchingGuessMaxSpeed(bvp_traj);
+      max_omega = estimatePerchingGuessMaxOmega(bvp_traj);
+      generated = true;
+      if (max_speed <= 1.10 * max_vel &&
+          max_omega <= 1.50 * omega_max)
+      {
+        break;
+      }
+
+      total_T += std::max(0.5, 0.20 * total_T);
+    }
+
+    if (!generated)
+    {
+      return false;
+    }
+
+    std::vector<double> time_segs(static_cast<std::size_t>(piece_num), total_T / piece_num);
+    typename OptimizerT::WaypointsType waypoints(piece_num + 1, ego_planner::TRAJ_DIM);
+    waypoints.row(0) = iniState.col(0).transpose();
+    for (int i = 1; i < piece_num; ++i)
+    {
+      const double sample_t = total_T * (static_cast<double>(i) / piece_num);
+      waypoints.row(i) = bvp_traj.evaluate(sample_t, 0).transpose();
+    }
+    waypoints.row(piece_num) = mapped_tail.col(0).transpose();
+
+    x0 = optimizer.encodeDecisionVector(time_segs, waypoints, &terminal_mapping, &extra_vars);
+    if (x0.size() <= 0 || !x0.allFinite())
+    {
+      return false;
+    }
+
+    debug.source = "fast_perching_bvp";
+    debug.total_duration = total_T;
+    debug.replan_offset = -1.0;
+    debug.best_pos_error = 0.0;
+    debug.best_vel_error = 0.0;
+    debug.max_speed = max_speed;
+    debug.max_omega = max_omega;
+    debug.extra_vars = extra_vars;
+    return true;
+  }
+
+  template <typename OptimizerT>
+  Eigen::VectorXd buildPerchingSolverInitialGuess(
+      const OptimizerT &optimizer,
+      const Eigen::MatrixXd &iniState,
+      const Eigen::MatrixXd &nominal_tail_state,
+      const Eigen::VectorXd &initT,
+      const minco::TerminalMappingBase<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> *terminal_mapping,
+      const double max_vel,
+      const double omega_max,
+      const char *mode_label,
+      PerchingInitialGuessDebug &debug)
+  {
+    debug = PerchingInitialGuessDebug{};
+    const auto *perching_mapping =
+        terminal_mapping != nullptr
+            ? dynamic_cast<const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> *>(terminal_mapping)
+            : nullptr;
+    if (perching_mapping == nullptr || initT.size() <= 0)
+    {
+      return optimizer.generateInitialGuess(terminal_mapping);
+    }
+
+    const int piece_num = initT.size();
+    Eigen::VectorXd x0;
+    if (buildShiftedPerchingWarmStartGuess(optimizer,
+                                           iniState,
+                                           *perching_mapping,
+                                           piece_num,
+                                           x0,
+                                           debug))
+    {
+      ROS_INFO("[PerchingInitGuess] mode=%s source=%s total_T=%.2f replan_offset=%.2f pos_err=%.3f vel_err=%.3f nu_seed=[%.2f %.2f] tau_f=%.2f",
+               mode_label,
+               debug.source.c_str(),
+               debug.total_duration,
+               debug.replan_offset,
+               debug.best_pos_error,
+               debug.best_vel_error,
+               debug.extra_vars.size() > 0 ? debug.extra_vars(0) : 0.0,
+               debug.extra_vars.size() > 1 ? debug.extra_vars(1) : 0.0,
+               debug.extra_vars.size() > 2 ? debug.extra_vars(2) : 0.0);
+      return x0;
+    }
+
+    if (buildFastPerchingBvpGuess(optimizer,
+                                  iniState,
+                                  nominal_tail_state,
+                                  *perching_mapping,
+                                  piece_num,
+                                  max_vel,
+                                  omega_max,
+                                  x0,
+                                  debug))
+    {
+      ROS_INFO("[PerchingInitGuess] mode=%s source=%s total_T=%.2f max_speed=%.2f max_omega=%.2f nu_seed=[%.2f %.2f] tau_f=%.2f",
+               mode_label,
+               debug.source.c_str(),
+               debug.total_duration,
+               debug.max_speed,
+               debug.max_omega,
+               debug.extra_vars.size() > 0 ? debug.extra_vars(0) : 0.0,
+               debug.extra_vars.size() > 1 ? debug.extra_vars(1) : 0.0,
+               debug.extra_vars.size() > 2 ? debug.extra_vars(2) : 0.0);
+      return x0;
+    }
+
+    ROS_WARN("[PerchingInitGuess] mode=%s custom_init_failed, fallback_to_generic_solver_guess",
+             mode_label);
+    return optimizer.generateInitialGuess(terminal_mapping);
+  }
 } // namespace
 
 namespace ego_planner
@@ -415,7 +766,17 @@ namespace ego_planner
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = mincoOpt_.generateInitialGuess(terminal_mapping_);
+    PerchingInitialGuessDebug perching_init_debug;
+    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
+        mincoOpt_,
+        iniState,
+        finState,
+        initT,
+        terminal_mapping_,
+        max_vel_,
+        perching_omega_max_,
+        "plain",
+        perching_init_debug);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -798,7 +1159,17 @@ namespace ego_planner
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = distanceFieldMincoOpt_.generateInitialGuess(terminal_mapping_);
+    PerchingInitialGuessDebug perching_init_debug;
+    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
+        distanceFieldMincoOpt_,
+        iniState,
+        finState,
+        initT,
+        terminal_mapping_,
+        max_vel_,
+        perching_omega_max_,
+        "esdf",
+        perching_init_debug);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -1371,7 +1742,17 @@ namespace ego_planner
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
-    Eigen::VectorXd x0 = corridorMincoOpt_.generateInitialGuess(terminal_mapping_);
+    PerchingInitialGuessDebug perching_init_debug;
+    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
+        corridorMincoOpt_,
+        iniState,
+        finState,
+        initT,
+        terminal_mapping_,
+        max_vel_,
+        perching_omega_max_,
+        "corridor",
+        perching_init_debug);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -2730,6 +3111,7 @@ namespace ego_planner
     nh.param("optimization/weight_perching_thrust", wei_perching_thrust_, 8.0);
     nh.param("optimization/weight_perching_omega", wei_perching_omega_, 10.0);
     nh.param("optimization/weight_perching_collision", wei_perching_collision_, 120.0);
+    nh.param("optimization/weight_perching_time", wei_perching_time_, 100000.0);
     nh.param("optimization/perching_floor_height", perching_floor_height_, 0.10);
     nh.param("optimization/perching_thrust_min", perching_thrust_min_, 4.0);
     nh.param("optimization/perching_thrust_max", perching_thrust_max_, 18.0);
@@ -2767,6 +3149,7 @@ namespace ego_planner
     wei_perching_thrust_ = std::max(0.0, wei_perching_thrust_);
     wei_perching_omega_ = std::max(0.0, wei_perching_omega_);
     wei_perching_collision_ = std::max(0.0, wei_perching_collision_);
+    wei_perching_time_ = std::max(0.0, wei_perching_time_);
     perching_floor_height_ = std::max(-5.0, perching_floor_height_);
     perching_thrust_min_ = std::max(0.0, perching_thrust_min_);
     perching_thrust_max_ = std::max(perching_thrust_min_ + 1.0e-3, perching_thrust_max_);

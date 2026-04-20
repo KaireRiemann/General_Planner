@@ -19,6 +19,7 @@ namespace
 {
 
 using ego_planner::EGOPlannerManager;
+using ego_planner::MINCOBoundaryState3D;
 using ego_planner::MINCOTraj3D;
 
 struct EdgeLess
@@ -116,6 +117,26 @@ const char *managerDefaultModeString(const bool use_corridor, const bool use_esd
     return "ESDF";
   }
   return "PLAIN";
+}
+
+MINCOBoundaryState3D makeBoundaryState(const Eigen::Vector3d &pos,
+                                       const Eigen::Vector3d &vel,
+                                       const Eigen::Vector3d &acc)
+{
+  MINCOBoundaryState3D state = MINCOBoundaryState3D::Zero();
+  if constexpr (MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM > 0)
+  {
+    state.col(0) = pos;
+  }
+  if constexpr (MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM > 1)
+  {
+    state.col(1) = vel;
+  }
+  if constexpr (MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM > 2)
+  {
+    state.col(2) = acc;
+  }
+  return state;
 }
 
 const char *activeSpaceModelString(const ego_planner::core::ActiveSpaceModel mode)
@@ -477,7 +498,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
   solution.active_space_model = init_result.selected_mode;
 
   const MINCOBoundaryState3D &headState = solver_input.head_state;
-  const MINCOBoundaryState3D &tailState = solver_input.tail_state;
+  MINCOBoundaryState3D tailState = solver_input.tail_state;
   const Eigen::MatrixXd &innerPts = solver_input.inner_points;
   const Eigen::VectorXd &durations = solver_input.durations;
   const MINCOTraj3D &initTraj = solver_input.init_traj;
@@ -863,10 +884,10 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   perching_semantics.nu_seed = decoded.nu_seed;
   perching_semantics.tau_f_seed = decoded.tau_f_seed;
   perching_semantics.pre_contact_distance = anchor.pre_contact_distance;
-  // Fast-Perching keeps the tangential relaxation heavily regularized. The
-  // generic terminal-mapping defaults are far too weak here and let the solver
-  // "slide" along the contact tangent instead of converging to a crisp perch.
-  perching_semantics.weight_nu = 1.0e2;
+  // Fast-Perching uses a very strong rhoVt regularizer so the optimizer lands
+  // with almost no tangential slip. Matching that scale here reduces the
+  // "touch then slide away" behavior in the integrated planner.
+  perching_semantics.weight_nu = 1.0e5;
   perching_semantics.weight_tau_f = decoded.use_dynamics_terminal_accel ? 1.0e-1 : 0.0;
   perching_mapping.configure(perching_semantics);
   ROS_INFO("[CompiledPerchingInit] active_mode=%s selected_mode=%s init_source=%s guide_pts=%zu corridor_polys=%zu",
@@ -906,6 +927,20 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            anchor.acceleration.y(),
            anchor.acceleration.z(),
            anchor.pre_contact_distance);
+
+  tailState = makeBoundaryState(predicted_contact.contact_position,
+                                predicted_contact.contact_velocity,
+                                predicted_contact.contact_acceleration);
+  ROS_INFO("[CompiledPerchingInit] optimizer_nominal_contact_tail pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f]",
+           tailState.col(0).x(),
+           tailState.col(0).y(),
+           tailState.col(0).z(),
+           tailState.col(1).x(),
+           tailState.col(1).y(),
+           tailState.col(1).z(),
+           tailState.col(2).x(),
+           tailState.col(2).y(),
+           tailState.col(2).z());
 
   optimizer->setIfTouchGoal(true);
 

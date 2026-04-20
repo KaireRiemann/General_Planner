@@ -12,6 +12,12 @@ void populatePhaseGoalCache(const core::GoalDefinition &goal,
   phase_problem.goal = goal;
   phase_problem.terminal_is_set = goal.isTerminalSet();
   phase_problem.terminal_is_manifold = goal.isTerminalManifold();
+  phase_problem.goal_state.valid = goal.state.valid;
+  phase_problem.goal_state.position = goal.state.position;
+  phase_problem.goal_state.velocity = goal.state.velocity;
+  phase_problem.goal_state.acceleration = goal.state.acceleration;
+  phase_problem.manifold_params = goal.manifold_params;
+
   phase_problem.has_cached_goal_state = goal.state.valid;
   phase_problem.cached_goal_state = goal.state;
   phase_problem.has_cached_manifold_params = goal.manifold_params.size() > 0;
@@ -125,13 +131,20 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
   }
 
   problem.phase_specs.reserve(task_definition.phases.size());
-  for (const auto &phase : task_definition.phases)
+  for (std::size_t phase_index = 0; phase_index < task_definition.phases.size(); ++phase_index)
   {
+    const auto &phase = task_definition.phases[phase_index];
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = phase.name;
     populatePhaseGoalCache(phase.goal, phase_problem);
     phase_problem.objective_mask = phase.objective_mask;
     phase_problem.constraint_mask = phase.constraint_mask;
+
+    // Perching phases are lowered in order:
+    //   phase 0 -> approach_anchor
+    //   phase 1 -> contact_final
+    // The concrete goal content is preserved in phase_problem.goal,
+    // phase_problem.goal_state, and phase_problem.manifold_params.
     problem.phase_specs.push_back(phase_problem);
   }
   return true;

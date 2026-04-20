@@ -88,6 +88,8 @@ namespace ego_planner
     {
       NONE = 0,
       TRACKING_FOLLOW,
+      // Perching runtime is split into handoff approach, frozen-reference
+      // commit, and optional contact hold after touchdown.
       PERCHING_APPROACH,
       PERCHING_COMMIT,
       PERCHING_CONTACT
@@ -313,6 +315,15 @@ namespace ego_planner
     bool perchingCommitGateSatisfied(const runtime::PerchingTerminalState &terminal,
                                      double *distance_to_anchor = nullptr,
                                      double *relative_anchor_speed = nullptr) const;
+    bool perchingCommitRuntimeActive() const;
+    bool frozenPerchingTerminalReady() const;
+    void transitionTaskRuntimeStage(TaskRuntimeStage new_stage,
+                                    const char *reason,
+                                    const runtime::PerchingTerminalState *terminal = nullptr);
+    void logPerchingCommitSuppressedReplan(const char *reason,
+                                           double remaining_time,
+                                           double dist_to_contact,
+                                           double rel_contact_speed) const;
     void freezePerchingCommitReference(const runtime::PerchingTerminalState &terminal,
                                        const char *reason);
     void clearFrozenPerchingCommitReference();

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <ros/ros.h>
 
@@ -15,6 +16,14 @@ constexpr double kDefaultPreContactDistance = 0.4;
 constexpr double kGravity = 9.81;
 constexpr double kDefaultApproachVelocityAlpha = 0.35;
 
+bool isFiniteStateDefinition(const core::StateDefinition &state)
+{
+  return state.valid &&
+         state.position.allFinite() &&
+         state.velocity.allFinite() &&
+         state.acceleration.allFinite();
+}
+
 Eigen::Vector3d normalizedOrFallback(const Eigen::Vector3d &vec,
                                      const Eigen::Vector3d &fallback)
 {
@@ -23,6 +32,70 @@ Eigen::Vector3d normalizedOrFallback(const Eigen::Vector3d &vec,
     return fallback;
   }
   return vec.normalized();
+}
+
+Eigen::Vector3d softenedApproachAnchorVelocity(const Eigen::Vector3d &plate_velocity,
+                                               const double v_plus,
+                                               const Eigen::Vector3d &surface_normal,
+                                               const double alpha)
+{
+  return plate_velocity - alpha * v_plus * surface_normal;
+}
+
+bool keepGuidePrefixTowardAnchor(const std::vector<Eigen::Vector3d> &input_path,
+                                 const Eigen::Vector3d &anchor_position,
+                                 std::vector<Eigen::Vector3d> &output_path)
+{
+  output_path.clear();
+  if (input_path.empty() || !anchor_position.allFinite())
+  {
+    return false;
+  }
+
+  double best_dist = std::numeric_limits<double>::infinity();
+  std::size_t best_idx = 0;
+  for (std::size_t i = 0; i < input_path.size(); ++i)
+  {
+    if (!input_path[i].allFinite())
+    {
+      continue;
+    }
+    const double dist = (input_path[i] - anchor_position).norm();
+    if (dist < best_dist)
+    {
+      best_dist = dist;
+      best_idx = i;
+    }
+  }
+
+  if (!std::isfinite(best_dist))
+  {
+    return false;
+  }
+
+  output_path.reserve(best_idx + 1);
+  for (std::size_t i = 0; i <= best_idx; ++i)
+  {
+    if (input_path[i].allFinite())
+    {
+      output_path.push_back(input_path[i]);
+    }
+  }
+
+  if (output_path.empty())
+  {
+    return false;
+  }
+
+  if ((output_path.back() - anchor_position).norm() > 1.0e-3)
+  {
+    output_path.push_back(anchor_position);
+  }
+  else
+  {
+    output_path.back() = anchor_position;
+  }
+  return true;
 }
 
 void orthonormalizeContactFrame(PerchingDecodedContactSemantics &semantics)
@@ -48,6 +121,13 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
 {
   core::PlanningProblem approach_problem = problem;
   approach_problem.problem_name = problem.problem_name + "_perching_approach";
+  // Perching should not inherit the rolling tracking local/global trajectory
+  // as a warm-start. Fast-Perching replans the perching segment from the
+  // current relative state instead of extending the previous tracking path.
+  approach_problem.task.flag_poly_init = true;
+  approach_problem.task.flag_random_poly_traj = false;
+  approach_problem.task_definition.runtime_policy.flag_poly_init = true;
+  approach_problem.task_definition.runtime_policy.flag_random_poly_traj = false;
   approach_problem.terminal_boundary.valid = anchor_state.valid;
   approach_problem.terminal_boundary.position = anchor_state.position;
   approach_problem.terminal_boundary.velocity = anchor_state.velocity;
@@ -57,6 +137,9 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
   const std::size_t guide_times_before = approach_problem.references.guide_times.size();
   const std::size_t feasible_before = approach_problem.feasible_sets.size();
   const bool seed_valid_before = approach_problem.seed.valid;
+  const std::size_t seed_anchor_before = approach_problem.seed.anchor_points.size();
+  bool guide_path_trimmed_to_anchor = false;
+  bool seed_trimmed_to_anchor = false;
 
   if (!approach_problem.references.guide_path.empty())
   {
@@ -116,15 +199,77 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
     approach_problem.references.guide_times.clear();
   }
 
-  ROS_INFO("[PerchingInit] handoff artifacts preserved: guide_pts=%zu->%zu guide_times=%zu->%zu feasible_sets=%zu->%zu seed_valid=%s->%s",
+  if (anchor_state.valid && !approach_problem.references.guide_path.empty())
+  {
+    std::vector<Eigen::Vector3d> clipped_guide_path;
+    if (keepGuidePrefixTowardAnchor(approach_problem.references.guide_path,
+                                    anchor_state.position,
+                                    clipped_guide_path))
+    {
+      guide_path_trimmed_to_anchor =
+          clipped_guide_path.size() < approach_problem.references.guide_path.size();
+      approach_problem.references.guide_path.swap(clipped_guide_path);
+      if (!approach_problem.references.guide_times.empty())
+      {
+        const std::size_t keep_count =
+            std::min(approach_problem.references.guide_times.size(),
+                     approach_problem.references.guide_path.size());
+        std::vector<double> clipped_guide_times(
+            approach_problem.references.guide_times.begin(),
+            approach_problem.references.guide_times.begin() + keep_count);
+        approach_problem.references.guide_times.swap(clipped_guide_times);
+      }
+    }
+  }
+
+  if (anchor_state.valid && approach_problem.seed.valid &&
+      !approach_problem.seed.anchor_points.empty())
+  {
+    std::vector<Eigen::Vector3d> clipped_seed_points;
+    if (keepGuidePrefixTowardAnchor(approach_problem.seed.anchor_points,
+                                    anchor_state.position,
+                                    clipped_seed_points))
+    {
+      seed_trimmed_to_anchor =
+          clipped_seed_points.size() < approach_problem.seed.anchor_points.size();
+      approach_problem.seed.anchor_points.swap(clipped_seed_points);
+      approach_problem.variable_layout.piece_num =
+          std::max(0, static_cast<int>(approach_problem.seed.anchor_points.size()) - 1);
+      approach_problem.variable_layout.inner_point_num =
+          std::max(0, static_cast<int>(approach_problem.seed.anchor_points.size()) - 2);
+    }
+  }
+
+  const bool guide_path_preserved =
+      guide_pts_before == 0 || !approach_problem.references.guide_path.empty();
+  const bool feasible_sets_preserved =
+      feasible_before == 0 || !approach_problem.feasible_sets.empty();
+  const bool seed_hint_preserved =
+      !seed_valid_before || approach_problem.seed.valid;
+  const bool guide_times_preserved =
+      guide_times_before == 0 || !approach_problem.references.guide_times.empty();
+
+  ROS_INFO("[PerchingInit] guide_path_preserved=%s guide_path_trimmed=%s guide_pts=%zu->%zu guide_times_preserved=%s guide_times=%zu->%zu",
+           guide_path_preserved ? "yes" : "no",
+           (approach_problem.references.guide_path.size() < guide_pts_before ||
+            guide_path_trimmed_to_anchor) ? "yes" : "no",
            guide_pts_before,
            approach_problem.references.guide_path.size(),
+           guide_times_preserved ? "yes" : "no",
            guide_times_before,
-           approach_problem.references.guide_times.size(),
+           approach_problem.references.guide_times.size());
+  ROS_INFO("[PerchingInit] feasible_sets_preserved=%s feasible_sets=%zu->%zu",
+           feasible_sets_preserved ? "yes" : "no",
            feasible_before,
-           approach_problem.feasible_sets.size(),
+           approach_problem.feasible_sets.size());
+  ROS_INFO("[PerchingInit] seed_hint_preserved=%s seed_valid=%s->%s",
+           seed_hint_preserved ? "yes" : "no",
            seed_valid_before ? "yes" : "no",
            approach_problem.seed.valid ? "yes" : "no");
+  ROS_INFO("[PerchingInit] approach init warm_start_mode=fresh_poly_init seed_anchor_pts=%zu->%zu seed_trimmed_to_anchor=%s",
+           seed_anchor_before,
+           approach_problem.seed.anchor_points.size(),
+           seed_trimmed_to_anchor ? "yes" : "no");
 
   return approach_problem;
 }
@@ -252,12 +397,21 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
 
   PerchingPreContactAnchorState &anchor = artifact.pre_contact_anchor_state;
   const core::PerchingSemanticArtifact &compiled_semantics = problem.task_semantics.perching;
+  const core::StateDefinition &semantic_anchor =
+      compiled_semantics.approach_anchor_state;
   std::string anchor_source = "fallback_recompute";
-  if (compiled_semantics.approach_anchor_state.valid)
+  Eigen::Vector3d previous_anchor_velocity = predicted.contact_velocity;
+  Eigen::Vector3d previous_anchor_acceleration = predicted.contact_acceleration;
+  const Eigen::Vector3d softened_anchor_velocity =
+      softenedApproachAnchorVelocity(semantics.plate_velocity,
+                                     semantics.v_plus,
+                                     semantics.surface_z,
+                                     kDefaultApproachVelocityAlpha);
+  if (isFiniteStateDefinition(semantic_anchor))
   {
-    anchor.position = compiled_semantics.approach_anchor_state.position;
-    anchor.velocity = compiled_semantics.approach_anchor_state.velocity;
-    anchor.acceleration = compiled_semantics.approach_anchor_state.acceleration;
+    anchor.position = semantic_anchor.position;
+    previous_anchor_velocity = semantic_anchor.velocity;
+    previous_anchor_acceleration = semantic_anchor.acceleration;
     anchor.pre_contact_distance =
         compiled_semantics.approach_distance > 1.0e-6
             ? compiled_semantics.approach_distance
@@ -266,32 +420,14 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
                            .dot(semantics.surface_z));
     anchor_source = "task_semantics";
   }
-  else if (!problem.phase_specs.empty() &&
-           problem.phase_specs.front().has_cached_goal_state &&
-           problem.phase_specs.front().cached_goal_state.valid)
-  {
-    const core::StateDefinition &phase_goal_state =
-        problem.phase_specs.front().cached_goal_state;
-    anchor.position = phase_goal_state.position;
-    anchor.velocity = phase_goal_state.velocity;
-    anchor.acceleration = phase_goal_state.acceleration;
-    anchor.pre_contact_distance =
-        compiled_semantics.approach_distance > 1.0e-6
-            ? compiled_semantics.approach_distance
-            : std::max(0.0,
-                       (predicted.contact_position - anchor.position)
-                           .dot(semantics.surface_z));
-    anchor_source = "phase_ir";
-  }
   else
   {
     anchor.pre_contact_distance = semantics.pre_contact_distance;
     anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
-    anchor.velocity =
-        semantics.plate_velocity -
-        kDefaultApproachVelocityAlpha * semantics.v_plus * semantics.surface_z;
-    anchor.acceleration = Eigen::Vector3d::Zero();
+    ROS_WARN("[PerchingInit] approach anchor source=fallback_recompute reason=invalid_task_semantics_anchor");
   }
+  anchor.velocity = softened_anchor_velocity;
+  anchor.acceleration = Eigen::Vector3d::Zero();
   anchor.valid = anchor.position.allFinite() &&
                  anchor.velocity.allFinite() &&
                  anchor.acceleration.allFinite();
@@ -300,6 +436,18 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
     artifact.message = "pre-contact anchor state is not finite";
     return false;
   }
+  ROS_INFO("[PerchingInit] soften approach anchor source=%s alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f] prev_anchor_acc=[%.2f %.2f %.2f] new_anchor_acc=[0.00 0.00 0.00]",
+           anchor_source.c_str(),
+           kDefaultApproachVelocityAlpha,
+           previous_anchor_velocity.x(),
+           previous_anchor_velocity.y(),
+           previous_anchor_velocity.z(),
+           anchor.velocity.x(),
+           anchor.velocity.y(),
+           anchor.velocity.z(),
+           previous_anchor_acceleration.x(),
+           previous_anchor_acceleration.y(),
+           previous_anchor_acceleration.z());
   ROS_INFO("[PerchingInit] approach anchor source=%s pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] distance=%.2f",
            anchor_source.c_str(),
            anchor.position.x(),

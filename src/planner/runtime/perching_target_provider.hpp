@@ -10,11 +10,16 @@ namespace ego_planner::runtime
 struct PerchingTerminalState
 {
   bool valid{false};
+  // Runtime uses current plate state as the reference source and lets the
+  // terminal mapping advance that state with optimized final time T. The
+  // requested preview horizon may still be used for gating/logging, but the
+  // solver-facing reference time is intentionally anchored at "now".
   double prediction_time{0.0};
   double approach_distance{0.0};
   Eigen::Vector3d plate_position_now{Eigen::Vector3d::Zero()};
-  // Plate state sampled at prediction_time in the future. This is the primary
-  // perching reference state used by the task/manifold layer.
+  // Solver-facing reference state for the moving platform. This is kept at the
+  // current plate state so the final manifold behaves like Fast-Perching's
+  // car_p + car_v * T rather than chasing a pre-sampled future point.
   Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
   Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
   Eigen::Quaterniond landing_orientation{Eigen::Quaterniond::Identity()};

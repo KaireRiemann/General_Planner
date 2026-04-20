@@ -328,10 +328,10 @@ namespace ego_planner
           {
             goto force_return;
           }
-          task_runtime_stage_ = TaskRuntimeStage::TRACKING_FOLLOW;
+          transitionTaskRuntimeStage(TaskRuntimeStage::TRACKING_FOLLOW,
+                                     "perching_contact_hold_released");
           perching_stage_entry_stable_since_ = -1.0;
           clearFrozenPerchingCommitReference();
-          ROS_INFO("[FSM] perching contact hold released, resume tracking_follow.");
         }
 
         if (!have_tracking_ref_ || !have_odom_) goto force_return;
@@ -452,20 +452,14 @@ namespace ego_planner
         runtime::PerchingTerminalState entry_terminal;
         if (shouldEnterPerchingApproachStage(entry_terminal))
         {
-          task_runtime_stage_ = TaskRuntimeStage::PERCHING_APPROACH;
           perching_round_active_ = false;
           active_perching_terminal_ = entry_terminal;
           have_active_perching_terminal_ = entry_terminal.valid;
           perching_contact_latched_ = false;
           clearFrozenPerchingCommitReference();
-          ROS_INFO("[FSM] switching task runtime stage: tracking_follow -> perching_approach, approach_anchor=[%.2f %.2f %.2f], contact=[%.2f %.2f %.2f], prediction_t=%.2f",
-                   entry_terminal.approach_anchor_position.x(),
-                   entry_terminal.approach_anchor_position.y(),
-                   entry_terminal.approach_anchor_position.z(),
-                   entry_terminal.terminal_position.x(),
-                   entry_terminal.terminal_position.y(),
-                   entry_terminal.terminal_position.z(),
-                   entry_terminal.prediction_time);
+          transitionTaskRuntimeStage(TaskRuntimeStage::PERCHING_APPROACH,
+                                     "tracking_handoff_gate_stable",
+                                     &entry_terminal);
           changeFSMExecState(REPLAN_TRAJ, "PERCHING_STAGE_ENTRY");
           break;
         }
@@ -520,12 +514,8 @@ namespace ego_planner
       {
         runtime::PerchingTerminalState execution_terminal;
         bool have_execution_terminal = false;
-        const bool perching_commit_active =
-            task_runtime_stage_ == TaskRuntimeStage::PERCHING_COMMIT ||
-            task_runtime_stage_ == TaskRuntimeStage::PERCHING_CONTACT;
-        if (perching_commit_active &&
-            have_frozen_perching_terminal_ &&
-            frozen_perching_terminal_.valid)
+        const bool perching_commit_active = perchingCommitRuntimeActive();
+        if (perching_commit_active && frozenPerchingTerminalReady())
         {
           execution_terminal = frozen_perching_terminal_;
           have_execution_terminal = true;
@@ -545,26 +535,37 @@ namespace ego_planner
 
         const Eigen::Vector3d planned_contact =
             have_planned_local_target_ ? planned_local_target_pt_ : local_target_pt_;
+        const Eigen::Vector3d committed_tail_contact = info->traj.getPos(info->duration);
+        const Eigen::Vector3d committed_tail_velocity = info->traj.getVel(info->duration);
         runtime::PerchingTerminalState live_terminal;
         const bool have_live_terminal =
             perching_target_provider_ &&
             perching_target_provider_->buildTerminalStateAtPrediction(0.0, live_terminal);
         const Eigen::Vector3d active_contact =
-            have_execution_terminal ? execution_terminal.terminal_position
+            perching_commit_active ? committed_tail_contact
+                                   : (have_execution_terminal ? execution_terminal.terminal_position
                                     : (have_live_terminal ? live_terminal.terminal_position
-                                                         : planned_contact);
+                                                         : planned_contact));
         const Eigen::Vector3d active_contact_vel =
-            have_execution_terminal ? execution_terminal.terminal_velocity
+            perching_commit_active ? committed_tail_velocity
+                                   : (have_execution_terminal ? execution_terminal.terminal_velocity
                                     : (have_live_terminal ? live_terminal.terminal_velocity
-                                                         : Eigen::Vector3d::Zero());
+                                                         : Eigen::Vector3d::Zero()));
         const double dist_to_contact = (active_contact - odom_pos_).norm();
         const double rel_contact_speed = (odom_vel_ - active_contact_vel).norm();
         const double remaining_time = std::max(0.0, info->duration - t_cur);
         const bool min_exec_satisfied = t_cur >= perching_min_execute_time_;
+        const double commit_finish_window =
+            std::max(0.10, 0.15 * info->duration);
         const bool near_contact =
             min_exec_satisfied &&
-            dist_to_contact <= perching_arrive_pos_thresh_ &&
-            rel_contact_speed <= perching_arrive_vel_thresh_;
+            (!perching_commit_active || remaining_time <= commit_finish_window) &&
+            dist_to_contact <= (perching_commit_active
+                                    ? std::max(0.08, 0.75 * perching_arrive_pos_thresh_)
+                                    : perching_arrive_pos_thresh_) &&
+            rel_contact_speed <= (perching_commit_active
+                                      ? std::max(0.10, 0.75 * perching_arrive_vel_thresh_)
+                                      : perching_arrive_vel_thresh_);
         runtime::PerchingTerminalState commit_candidate_terminal;
         double dist_to_anchor = std::numeric_limits<double>::infinity();
         double rel_anchor_speed = std::numeric_limits<double>::infinity();
@@ -579,16 +580,17 @@ namespace ego_planner
                                         &rel_anchor_speed);
 
         ROS_INFO_THROTTLE(0.8,
-                          "[FSM] perching_exec stage=%s dist_to_anchor=%.2f rel_anchor_vel=%.2f dist_to_contact=%.2f rel_contact_vel=%.2f remaining_t=%.2f trigger_pending=%s round_active=%s terminal_ref=%s",
+                          "[FSM] perching_exec stage=%s dist_to_anchor=%.2f rel_anchor_vel=%.2f dist_to_contact=%.2f rel_contact_vel=%.2f remaining_t=%.2f commit_finish_window=%.2f trigger_pending=%s round_active=%s terminal_ref=%s",
                           taskRuntimeStageString(task_runtime_stage_),
                           dist_to_anchor,
                           rel_anchor_speed,
                           dist_to_contact,
                           rel_contact_speed,
                           remaining_time,
+                          commit_finish_window,
                           perching_triggered_ ? "yes" : "no",
                           perching_round_active_ ? "yes" : "no",
-                          perching_commit_active ? "frozen_commit"
+                          perching_commit_active ? "committed_tail"
                                                  : (have_live_terminal ? "live" : (have_execution_terminal ? "cached" : "none")));
 
         if (!perching_commit_active && (commit_gate || near_contact))
@@ -597,9 +599,12 @@ namespace ego_planner
           freezePerchingCommitReference(have_commit_candidate ? commit_candidate_terminal
                                                               : execution_terminal,
                                         reason);
-          task_runtime_stage_ = TaskRuntimeStage::PERCHING_COMMIT;
           perching_round_active_ = false;
-          ROS_INFO("[FSM] switching task runtime stage: perching_approach -> perching_commit");
+          transitionTaskRuntimeStage(TaskRuntimeStage::PERCHING_COMMIT,
+                                     reason,
+                                     frozenPerchingTerminalReady() ? &frozen_perching_terminal_
+                                                                   : (have_commit_candidate ? &commit_candidate_terminal
+                                                                                            : &execution_terminal));
           changeFSMExecState(REPLAN_TRAJ, "PERCHING_COMMIT_ENTRY");
           break;
         }
@@ -609,7 +614,11 @@ namespace ego_planner
           perching_round_active_ = false;
           perching_stage_entry_stable_since_ = -1.0;
           perching_contact_latched_ = true;
-          task_runtime_stage_ = TaskRuntimeStage::PERCHING_CONTACT;
+          transitionTaskRuntimeStage(TaskRuntimeStage::PERCHING_CONTACT,
+                                     perching_commit_active ? "committed_terminal_reached"
+                                                            : "contact_reached",
+                                     frozenPerchingTerminalReady() ? &frozen_perching_terminal_
+                                                                   : &execution_terminal);
           if (!integratedTrackingPerchingMode())
           {
             have_trigger_ = perching_triggered_;
@@ -626,14 +635,26 @@ namespace ego_planner
           break;
         }
 
+        const double successor_trigger_time =
+            std::max(0.25, 0.35 * info->duration);
         if (!perching_commit_active &&
             replan_allowed &&
             min_exec_satisfied &&
-            remaining_time <= std::max(0.25, 0.35 * info->duration))
+            remaining_time <= successor_trigger_time)
         {
           ROS_INFO("[FSM] perching successor replan (approach): remaining_t=%.2f", remaining_time);
           changeFSMExecState(REPLAN_TRAJ, "PERCHING_SUCCESSOR");
           break;
+        }
+        if (perching_commit_active &&
+            replan_allowed &&
+            min_exec_satisfied &&
+            remaining_time <= successor_trigger_time)
+        {
+          logPerchingCommitSuppressedReplan("frozen_commit_reference",
+                                            remaining_time,
+                                            dist_to_contact,
+                                            rel_contact_speed);
         }
 
         if (perching_replan_if_unsafe_ &&
@@ -770,14 +791,17 @@ namespace ego_planner
       resetPlannedTaskTargets();
       if (preserve_perching_contact_hold)
       {
-        task_runtime_stage_ = TaskRuntimeStage::PERCHING_CONTACT;
-        perching_contact_latched_ = true;
         have_frozen_perching_terminal_ = preserved_have_frozen_terminal;
         frozen_perching_terminal_ = preserved_frozen_terminal;
         frozen_perching_reference_time_ = preserved_frozen_reference_time;
         frozen_surface_tangent_x_ = preserved_frozen_surface_tangent_x;
         frozen_surface_tangent_y_ = preserved_frozen_surface_tangent_y;
         frozen_surface_normal_ = preserved_frozen_surface_normal;
+        transitionTaskRuntimeStage(TaskRuntimeStage::PERCHING_CONTACT,
+                                   "preserve_contact_hold",
+                                   preserved_have_frozen_terminal ? &preserved_frozen_terminal
+                                                                  : nullptr);
+        perching_contact_latched_ = true;
       }
     }
 
@@ -1644,23 +1668,38 @@ namespace ego_planner
 
     const double dist_to_anchor =
         (terminal.approach_anchor_position - odom_pos_).norm();
-    const double rel_anchor_speed =
-        (odom_vel_ - terminal.approach_anchor_velocity).norm();
+    const Eigen::Vector3d rel_surface_velocity =
+        odom_vel_ - terminal.plate_velocity;
+    const double rel_tangent_speed =
+        std::hypot(rel_surface_velocity.dot(terminal.landing_tangent_x),
+                   rel_surface_velocity.dot(terminal.landing_tangent_y));
     if (distance_to_anchor != nullptr)
     {
       *distance_to_anchor = dist_to_anchor;
     }
     if (relative_anchor_speed != nullptr)
     {
-      *relative_anchor_speed = rel_anchor_speed;
+      *relative_anchor_speed = rel_tangent_speed;
     }
 
-    const double pos_window =
+    const double dist_to_contact =
+        (terminal.terminal_position - odom_pos_).norm();
+    // Fast-Perching starts solving directly from the current relative state
+    // instead of waiting for a separate tracking anchor to be hit exactly.
+    // Our integrated handoff should therefore open once tracking has stabilized
+    // the relative motion inside a broader contact-envelope capture window,
+    // while commit remains the strict frozen-reference stage near the true
+    // approach anchor.
+    const double anchor_window =
         std::max(0.35, 1.25 * perching_arrive_pos_thresh_);
+    const double contact_capture_window =
+        std::max(std::max(0.90, terminal.approach_distance + 0.35),
+                 2.0 * perching_arrive_pos_thresh_);
     const double vel_window =
-        std::max(0.20, perching_arrive_vel_thresh_);
-    return dist_to_anchor <= pos_window &&
-           rel_anchor_speed <= vel_window;
+        std::max(0.15, 0.45 * perching_arrive_vel_thresh_);
+    return (dist_to_anchor <= anchor_window ||
+            dist_to_contact <= contact_capture_window) &&
+           rel_tangent_speed <= vel_window;
   }
 
   bool EGOReplanFSM::shouldEnterPerchingApproachStage(runtime::PerchingTerminalState &terminal)
@@ -1676,31 +1715,62 @@ namespace ego_planner
     }
 
     double dist_to_anchor = 0.0;
-    double rel_anchor_speed = 0.0;
+    double rel_tangent_speed = 0.0;
+    const double dist_to_contact =
+        (terminal.terminal_position - odom_pos_).norm();
+    const Eigen::Vector3d rel_surface_velocity =
+        odom_vel_ - terminal.plate_velocity;
+    const double rel_normal_speed =
+        rel_surface_velocity.dot(terminal.landing_normal);
+    const double contact_capture_window =
+        std::max(std::max(0.90, terminal.approach_distance + 0.35),
+                 2.0 * perching_arrive_pos_thresh_);
+    const bool inside_contact_capture =
+        dist_to_contact <= contact_capture_window;
     const bool gate_ok =
-        perchingEntryGateSatisfied(terminal, &dist_to_anchor, &rel_anchor_speed);
+        perchingEntryGateSatisfied(terminal, &dist_to_anchor, &rel_tangent_speed);
 
-    if (!gate_ok)
+    if (!gate_ok && !inside_contact_capture)
     {
       perching_stage_entry_stable_since_ = -1.0;
       ROS_INFO_THROTTLE(0.8,
-                        "[FSM] perching entry gate pending: dist_to_anchor=%.2f rel_anchor_vel=%.2f stage=%s",
+                        "[FSM] perching entry gate pending: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f rel_normal_vel=%.2f stage=%s",
                         dist_to_anchor,
-                        rel_anchor_speed,
+                        dist_to_contact,
+                        contact_capture_window,
+                        rel_tangent_speed,
+                        rel_normal_speed,
                         taskRuntimeStageString(task_runtime_stage_));
       return false;
     }
 
     const double now = ros::Time::now().toSec();
+    if (inside_contact_capture)
+    {
+      perching_stage_entry_stable_since_ = now;
+      ROS_INFO_THROTTLE(0.8,
+                        "[FSM] perching handoff captured: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f rel_normal_vel=%.2f mode=%s hold=instant",
+                        dist_to_anchor,
+                        dist_to_contact,
+                        contact_capture_window,
+                        rel_tangent_speed,
+                        rel_normal_speed,
+                        gate_ok ? "stable" : "capture_bypass");
+      return true;
+    }
+
     if (perching_stage_entry_stable_since_ < 0.0)
     {
       perching_stage_entry_stable_since_ = now;
     }
 
     ROS_INFO_THROTTLE(0.8,
-                      "[FSM] perching handoff gate stable: dist_to_anchor=%.2f rel_anchor_vel=%.2f hold=%.2f/%.2f",
+                      "[FSM] perching handoff gate stable: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f rel_normal_vel=%.2f hold=%.2f/%.2f",
                       dist_to_anchor,
-                      rel_anchor_speed,
+                      dist_to_contact,
+                      contact_capture_window,
+                      rel_tangent_speed,
+                      rel_normal_speed,
                       now - perching_stage_entry_stable_since_,
                       perching_stage_entry_hold_time_);
     return (now - perching_stage_entry_stable_since_) >= perching_stage_entry_hold_time_;
@@ -1729,6 +1799,68 @@ namespace ego_planner
            rel_anchor_speed <= commit_vel_window;
   }
 
+  bool EGOReplanFSM::perchingCommitRuntimeActive() const
+  {
+    return task_runtime_stage_ == TaskRuntimeStage::PERCHING_COMMIT ||
+           task_runtime_stage_ == TaskRuntimeStage::PERCHING_CONTACT;
+  }
+
+  bool EGOReplanFSM::frozenPerchingTerminalReady() const
+  {
+    return have_frozen_perching_terminal_ && frozen_perching_terminal_.valid;
+  }
+
+  void EGOReplanFSM::transitionTaskRuntimeStage(const TaskRuntimeStage new_stage,
+                                                const char *reason,
+                                                const runtime::PerchingTerminalState *terminal)
+  {
+    if (task_runtime_stage_ == new_stage)
+    {
+      return;
+    }
+
+    const TaskRuntimeStage previous_stage = task_runtime_stage_;
+    task_runtime_stage_ = new_stage;
+
+    if (terminal != nullptr && terminal->valid)
+    {
+      ROS_INFO("[FSM] task runtime stage: %s -> %s reason=%s ref_t=%.2f approach=[%.2f %.2f %.2f] contact=[%.2f %.2f %.2f] frozen_commit=%s",
+               taskRuntimeStageString(previous_stage),
+               taskRuntimeStageString(new_stage),
+               reason != nullptr ? reason : "none",
+               terminal->prediction_time,
+               terminal->approach_anchor_position.x(),
+               terminal->approach_anchor_position.y(),
+               terminal->approach_anchor_position.z(),
+               terminal->terminal_position.x(),
+               terminal->terminal_position.y(),
+               terminal->terminal_position.z(),
+               frozenPerchingTerminalReady() ? "yes" : "no");
+      return;
+    }
+
+    ROS_INFO("[FSM] task runtime stage: %s -> %s reason=%s frozen_commit=%s",
+             taskRuntimeStageString(previous_stage),
+             taskRuntimeStageString(new_stage),
+             reason != nullptr ? reason : "none",
+             frozenPerchingTerminalReady() ? "yes" : "no");
+  }
+
+  void EGOReplanFSM::logPerchingCommitSuppressedReplan(const char *reason,
+                                                       double remaining_time,
+                                                       double dist_to_contact,
+                                                       double rel_contact_speed) const
+  {
+    ROS_INFO_THROTTLE(0.8,
+                      "[FSM] suppress generic successor replan in %s: reason=%s remaining_t=%.2f dist_to_contact=%.2f rel_contact_vel=%.2f frozen_ref_t=%.2f",
+                      taskRuntimeStageString(task_runtime_stage_),
+                      reason != nullptr ? reason : "frozen_commit",
+                      remaining_time,
+                      dist_to_contact,
+                      rel_contact_speed,
+                      frozen_perching_reference_time_);
+  }
+
   void EGOReplanFSM::freezePerchingCommitReference(const runtime::PerchingTerminalState &terminal,
                                                    const char *reason)
   {
@@ -1743,7 +1875,7 @@ namespace ego_planner
     frozen_surface_tangent_x_ = terminal.landing_tangent_x;
     frozen_surface_tangent_y_ = terminal.landing_tangent_y;
     frozen_surface_normal_ = terminal.landing_normal;
-    ROS_INFO("[FSM] freeze perching commit reference (%s): ref_t=%.2f approach=[%.2f %.2f %.2f] contact=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
+    ROS_INFO("[FSM] freeze perching commit reference (%s): ref_t=%.2f approach=[%.2f %.2f %.2f] contact=[%.2f %.2f %.2f] tx=[%.2f %.2f %.2f] ty=[%.2f %.2f %.2f] normal=[%.2f %.2f %.2f]",
              reason != nullptr ? reason : "commit",
              frozen_perching_reference_time_,
              frozen_perching_terminal_.approach_anchor_position.x(),
@@ -1752,6 +1884,12 @@ namespace ego_planner
              frozen_perching_terminal_.terminal_position.x(),
              frozen_perching_terminal_.terminal_position.y(),
              frozen_perching_terminal_.terminal_position.z(),
+             frozen_surface_tangent_x_.x(),
+             frozen_surface_tangent_x_.y(),
+             frozen_surface_tangent_x_.z(),
+             frozen_surface_tangent_y_.x(),
+             frozen_surface_tangent_y_.y(),
+             frozen_surface_tangent_y_.z(),
              frozen_surface_normal_.x(),
              frozen_surface_normal_.y(),
              frozen_surface_normal_.z());
@@ -1925,10 +2063,8 @@ namespace ego_planner
     else if (perching_active)
     {
       const bool use_frozen_commit_reference =
-          (task_runtime_stage_ == TaskRuntimeStage::PERCHING_COMMIT ||
-           task_runtime_stage_ == TaskRuntimeStage::PERCHING_CONTACT) &&
-          have_frozen_perching_terminal_ &&
-          frozen_perching_terminal_.valid;
+          perchingCommitRuntimeActive() &&
+          frozenPerchingTerminalReady();
       if (use_frozen_commit_reference)
       {
         perching_terminal = frozen_perching_terminal_;
@@ -2148,9 +2284,12 @@ namespace ego_planner
           perching_terminal.terminal_position,
           perching_terminal.terminal_velocity,
           perching_terminal.terminal_acceleration,
-          perching_terminal.plate_position,
+          // Keep the moving-platform reference anchored at the current plate
+          // state so terminal mapping advances it with optimized T, matching
+          // Fast-Perching's dynamic car_p + car_v * T semantics.
+          perching_terminal.plate_position_now,
           perching_terminal.plate_velocity,
-          perching_terminal.prediction_time,
+          0.0,
           perching_terminal.landing_tangent_x,
           perching_terminal.landing_tangent_y,
           perching_terminal.landing_normal,

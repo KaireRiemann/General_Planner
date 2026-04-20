@@ -349,9 +349,15 @@ public:
                                semantic_config_.v_plus * semantic_config_.surface_z;
     if (semantic_config_.use_dynamics_terminal_accel)
     {
+      const double terminal_thrust =
+          semantic_config_.thrust_nominal +
+          semantic_config_.thrust_range * std::sin(tau_f);
       mapped_tail_state.col(2) =
-          nominal_tail_state.col(2) +
-          semantic_config_.thrust_range * std::sin(tau_f) * semantic_config_.surface_z;
+          terminal_thrust * semantic_config_.surface_z + gravity_;
+    }
+    else if (S > 2)
+    {
+      mapped_tail_state.col(2) = nominal_tail_state.col(2);
     }
 
     for (int d = 3; d < S; ++d)

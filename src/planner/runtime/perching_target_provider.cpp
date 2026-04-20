@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include <ros/ros.h>
+
 namespace ego_planner::runtime
 {
 
@@ -114,12 +116,14 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   tangent_x.normalize();
 
   const double clamped_prediction_time = std::max(0.0, prediction_time);
+  const Eigen::Vector3d requested_preview_plate_position =
+      plate_position_ + plate_velocity_ * clamped_prediction_time;
   const double approach_distance = std::max(0.4, robot_l_ + 0.2);
   terminal.valid = true;
-  terminal.prediction_time = clamped_prediction_time;
+  terminal.prediction_time = 0.0;
   terminal.approach_distance = approach_distance;
   terminal.plate_position_now = plate_position_;
-  terminal.plate_position = plate_position_ + plate_velocity_ * clamped_prediction_time;
+  terminal.plate_position = plate_position_;
   terminal.plate_velocity = plate_velocity_;
   terminal.landing_orientation = landing_q;
   terminal.landing_tangent_x = tangent_x;
@@ -142,9 +146,28 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   }
   terminal.approach_anchor_position =
       terminal.terminal_position - terminal.approach_distance * normal;
-  terminal.approach_anchor_velocity =
+  const Eigen::Vector3d previous_anchor_velocity = terminal.terminal_velocity;
+  const Eigen::Vector3d softened_anchor_velocity =
       plate_velocity_ - approach_velocity_alpha_ * v_plus_ * normal;
+  terminal.approach_anchor_velocity = softened_anchor_velocity;
   terminal.approach_anchor_acceleration = Eigen::Vector3d::Zero();
+  ROS_INFO_THROTTLE(0.8,
+                    "[PerchingTarget] current-source perching reference requested_pred_t=%.2f preview_plate=[%.2f %.2f %.2f] ref_t=%.2f ref_plate=[%.2f %.2f %.2f] alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f]",
+                    clamped_prediction_time,
+                    requested_preview_plate_position.x(),
+                    requested_preview_plate_position.y(),
+                    requested_preview_plate_position.z(),
+                    terminal.prediction_time,
+                    terminal.plate_position.x(),
+                    terminal.plate_position.y(),
+                    terminal.plate_position.z(),
+                    approach_velocity_alpha_,
+                    previous_anchor_velocity.x(),
+                    previous_anchor_velocity.y(),
+                    previous_anchor_velocity.z(),
+                    softened_anchor_velocity.x(),
+                    softened_anchor_velocity.y(),
+                    softened_anchor_velocity.z());
   return terminal.terminal_position.allFinite() &&
          terminal.approach_anchor_position.allFinite() &&
          terminal.approach_anchor_velocity.allFinite() &&

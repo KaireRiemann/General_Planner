@@ -141,7 +141,10 @@ namespace ego_planner
     Eigen::Map<Eigen::VectorXd> grad_vec(grad, n);
 
     opt->iter_num_++;
-    opt->time_cost_.weight = opt->wei_time_;
+    opt->time_cost_.weight =
+        (opt->perching_acceptance_active_
+             ? std::max(opt->wei_time_, opt->wei_perching_time_)
+             : opt->wei_time_);
 
     double total_cost = 0.0;
     if (opt->optimize_mode_ == MODE_CORRIDOR)

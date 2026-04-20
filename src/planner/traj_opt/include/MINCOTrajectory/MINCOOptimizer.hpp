@@ -207,6 +207,79 @@ public:
     return has_warm_start_guess_;
   }
 
+  const Eigen::VectorXd &warmStartGuess() const
+  {
+    return warm_start_guess_;
+  }
+
+  Eigen::VectorXd encodeDecisionVector(
+      const std::vector<double> &physical_times,
+      const WaypointsType &physical_waypoints,
+      const TerminalMappingBase<DIM, S> *terminal_mapping = nullptr,
+      const Eigen::VectorXd *extra_vars = nullptr) const
+  {
+    if (static_cast<int>(physical_times.size()) != piece_num_ ||
+        physical_waypoints.rows() != piece_num_ + 1 ||
+        physical_waypoints.cols() != DIM)
+    {
+      return Eigen::VectorXd{};
+    }
+
+    const int dim_T = piece_num_;
+    const int extra_dim =
+        (terminal_mapping != nullptr && terminal_mapping->enabled())
+            ? terminal_mapping->extraVariableDim()
+            : 0;
+    const int total_dim = getCoreDecisionDim() + extra_dim;
+
+    Eigen::VectorXd x(total_dim);
+    for (int i = 0; i < piece_num_; ++i)
+    {
+      if (!std::isfinite(physical_times[static_cast<std::size_t>(i)]) ||
+          physical_times[static_cast<std::size_t>(i)] <= 0.0)
+      {
+        return Eigen::VectorXd{};
+      }
+      x(i) = active_time_map_->toTau(physical_times[static_cast<std::size_t>(i)]);
+    }
+
+    int offset = dim_T;
+    for (int i = 1; i < piece_num_; ++i)
+    {
+      const int dof = active_spatial_map_->getUnconstrainedDim(i);
+      const auto waypoint = physical_waypoints.row(i).transpose();
+      if (!waypoint.allFinite())
+      {
+        return Eigen::VectorXd{};
+      }
+      x.segment(offset, dof) =
+          active_spatial_map_->toUnconstrained(waypoint, i);
+      offset += dof;
+    }
+
+    if (extra_dim > 0)
+    {
+      Eigen::Ref<Eigen::VectorXd> extra_segment =
+          x.segment(offset, extra_dim);
+      if (extra_vars != nullptr &&
+          extra_vars->size() == extra_dim &&
+          extra_vars->allFinite())
+      {
+        extra_segment = *extra_vars;
+      }
+      else if (terminal_mapping != nullptr)
+      {
+        terminal_mapping->setInitialExtraVariables(extra_segment);
+      }
+      else
+      {
+        extra_segment.setZero();
+      }
+    }
+
+    return x;
+  }
+
   Eigen::VectorXd generateInitialGuess() const
   {
     return generateInitialGuess(nullptr);
@@ -214,7 +287,6 @@ public:
 
   Eigen::VectorXd generateInitialGuess(const TerminalMappingBase<DIM, S> *terminal_mapping) const
   {
-    const int dim_T = piece_num_;
     const int total_dim =
         getCoreDecisionDim() +
         ((terminal_mapping != nullptr && terminal_mapping->enabled())
@@ -228,28 +300,7 @@ public:
       return warm_start_guess_;
     }
 
-    Eigen::VectorXd x(total_dim);
-    for (int i = 0; i < piece_num_; ++i)
-    {
-      x(i) = active_time_map_->toTau(ref_times_[i]);
-    }
-
-    int offset = dim_T;
-    for (int i = 1; i < piece_num_; ++i)
-    {
-      const int dof = active_spatial_map_->getUnconstrainedDim(i);
-      x.segment(offset, dof) =
-          active_spatial_map_->toUnconstrained(ref_waypoints_.row(i).transpose(), i);
-      offset += dof;
-    }
-
-    if (terminal_mapping != nullptr && terminal_mapping->enabled())
-    {
-      terminal_mapping->setInitialExtraVariables(
-          x.segment(offset, terminal_mapping->extraVariableDim()));
-    }
-
-    return x;
+    return encodeDecisionVector(ref_times_, ref_waypoints_, terminal_mapping, nullptr);
   }
 
   template <typename TimeCostFunc, typename CostManager>

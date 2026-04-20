@@ -78,6 +78,7 @@ namespace ego_planner
     double wei_feas_;
     double wei_sqrvar_;
     double wei_time_;
+    double wei_perching_time_;
     double wei_corridor_;
     double wei_corridor_ref_;
     double wei_dist_;
