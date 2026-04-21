@@ -126,6 +126,8 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = task_definition.task_name.empty() ? "phase" : task_definition.task_name;
     populatePhaseGoalCache(task_definition.goal, phase_problem);
+    phase_problem.objective_mask = task_definition.objective_constraint_policy.objective_mask;
+    phase_problem.constraint_mask = task_definition.objective_constraint_policy.constraint_mask;
     problem.phase_specs.push_back(phase_problem);
     return true;
   }

@@ -48,7 +48,7 @@
     <arg name="perching_max_prediction_time" default="1.8"/>
     <arg name="perching_terminal_thrust" default="9.81"/>
     <arg name="perching_terminal_thrust_range" default="2.0"/>
-    <arg name="perching_use_dynamics_terminal_accel" default="true"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
     <arg name="perching_replan_if_unsafe" default="true"/>
     <arg name="perching_arrive_pos_thresh" default="0.45"/>
     <arg name="perching_arrive_vel_thresh" default="0.85"/>

@@ -6,6 +6,8 @@
 
 #include <core/planning_problem.hpp>
 
+#include <cstddef>
+
 namespace ego_planner::frontend
 {
 
@@ -47,15 +49,38 @@ struct PerchingPreContactAnchorState
   Eigen::Vector3d acceleration{Eigen::Vector3d::Zero()};
 };
 
+struct PerchingHandoffDebugSummary
+{
+  bool guide_path_preserved{false};
+  bool guide_times_preserved{false};
+  bool feasible_sets_preserved{false};
+  bool seed_hint_preserved{false};
+  bool guide_path_trimmed_to_anchor{false};
+  bool seed_trimmed_to_anchor{false};
+  std::size_t guide_points_before{0};
+  std::size_t guide_points_after{0};
+  std::size_t guide_times_before{0};
+  std::size_t guide_times_after{0};
+  std::size_t feasible_sets_before{0};
+  std::size_t feasible_sets_after{0};
+  bool seed_valid_before{false};
+  bool seed_valid_after{false};
+  std::size_t seed_anchor_points_before{0};
+  std::size_t seed_anchor_points_after{0};
+};
+
 struct PerchingInitArtifact
 {
   bool valid{false};
   core::ActiveSpaceModel selected_mode{core::ActiveSpaceModel::PLAIN};
   std::string message;
+  std::string approach_anchor_source{"unknown"};
+  std::string final_manifold_source{"unknown"};
 
   PerchingDecodedContactSemantics decoded_contact_semantics;
   PerchingPredictedContactState predicted_contact_state;
   PerchingPreContactAnchorState pre_contact_anchor_state;
+  PerchingHandoffDebugSummary handoff_debug;
   InitArtifact transit_init;
 };
 
@@ -75,7 +100,8 @@ public:
 
   bool decodeContactSemantics(const core::PlanningProblem &problem,
                               PerchingDecodedContactSemantics &semantics,
-                              std::string *reason = nullptr) const;
+                              std::string *reason = nullptr,
+                              std::string *source = nullptr) const;
 
   bool initialize(const TransitInitRuntimeConfig &config,
                   const core::PlanningProblem &problem,

@@ -109,3 +109,23 @@ add_executable(perching_semantics_regression
   )
 target_link_libraries(perching_semantics_regression ${catkin_LIBRARIES})
 add_dependencies(perching_semantics_regression ${catkin_EXPORTED_TARGETS})
+
+add_executable(perching_debug_probe
+  src/perching_debug_probe.cpp
+  ../tasks/task_factory.cpp
+  ../tasks/state_to_state_task.cpp
+  ../tasks/tracking_task.cpp
+  ../tasks/perching_task.cpp
+  ../compiler/problem_compiler.cpp
+  ../compiler/reference_builder.cpp
+  ../compiler/feasible_set_builder.cpp
+  ../compiler/seed_builder.cpp
+  ../frontend/guide_path_service.cpp
+  ../frontend/corridor_service.cpp
+  ../frontend/transit_init_service.cpp
+  ../frontend/perching_init_service.cpp
+  ../frontend/warm_start_service.cpp
+  ../runtime/perching_target_provider.cpp
+  )
+target_link_libraries(perching_debug_probe ${catkin_LIBRARIES})
+add_dependencies(perching_debug_probe ${catkin_EXPORTED_TARGETS})

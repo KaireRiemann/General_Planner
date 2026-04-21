@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <set>
 
 namespace
@@ -117,6 +118,17 @@ const char *managerDefaultModeString(const bool use_corridor, const bool use_esd
     return "ESDF";
   }
   return "PLAIN";
+}
+
+bool perchingOnlyDebugEnabled()
+{
+  if (const char *env = std::getenv("PERCHING_ONLY_DEBUG"))
+  {
+    return env[0] != '\0' && env[0] != '0';
+  }
+  bool enabled = false;
+  ros::param::get("/debug/perching_only", enabled);
+  return enabled;
 }
 
 MINCOBoundaryState3D makeBoundaryState(const Eigen::Vector3d &pos,
@@ -844,8 +856,22 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   const frontend::InitArtifact &solver_input = init_artifact;
   solution.active_space_model = perching_init.selected_mode;
 
+  const bool have_phase0_goal =
+      problem.phase_specs.size() > 0 &&
+      problem.phase_specs.front().terminal_is_set &&
+      problem.phase_specs.front().goal_state.valid;
+  const bool have_phase1_manifold =
+      problem.phase_specs.size() > 1 &&
+      problem.phase_specs[1].terminal_is_manifold &&
+      problem.phase_specs[1].manifold_params.size() > 0;
+  ROS_INFO("[CompiledPerchingPhase] phase0_goal_source=%s phase1_manifold_source=%s approach_anchor_source=%s final_mapping_source=%s",
+           have_phase0_goal ? "phase_ir_phase0" : "fallback",
+           have_phase1_manifold ? "phase_ir_phase1" : "fallback",
+           perching_init.approach_anchor_source.c_str(),
+           perching_init.final_manifold_source.c_str());
+
   const MINCOBoundaryState3D &headState = solver_input.head_state;
-  const MINCOBoundaryState3D &tailState = solver_input.tail_state;
+  MINCOBoundaryState3D tailState = solver_input.tail_state;
   const Eigen::MatrixXd &innerPts = solver_input.inner_points;
   const Eigen::VectorXd &durations = solver_input.durations;
   const MINCOTraj3D &initTraj = solver_input.init_traj;
@@ -868,6 +894,11 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   const auto &decoded = perching_init.decoded_contact_semantics;
   const auto &predicted_contact = perching_init.predicted_contact_state;
   const auto &anchor = perching_init.pre_contact_anchor_state;
+  // Phase-aware single perching solve:
+  //   phase 0 -> approach_anchor drives transit/perching init
+  //   phase 1 -> contact_final manifold drives terminal mapping
+  // This PR keeps a single optimize call, but makes the two semantic roles
+  // explicit in the initialization and final-terminal configuration below.
   typename minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S>::PerchingSemanticConfig
       perching_semantics;
   perching_semantics.plate_position = decoded.plate_position_ref;
@@ -916,6 +947,9 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            decoded.surface_z.x(),
            decoded.surface_z.y(),
            decoded.surface_z.z());
+  ROS_INFO("[CompiledPerchingInit] phase0_approach_source=%s phase1_manifold_source=%s",
+           perching_init.approach_anchor_source.c_str(),
+           perching_init.final_manifold_source.c_str());
   ROS_INFO("[CompiledPerchingInit] pre_contact_anchor pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] distance=%.2f",
            anchor.position.x(),
            anchor.position.y(),
@@ -928,10 +962,14 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            anchor.acceleration.z(),
            anchor.pre_contact_distance);
 
+  const Eigen::Vector3d optimizer_init_tail_acceleration =
+      decoded.use_dynamics_terminal_accel
+          ? Eigen::Vector3d::Zero()
+          : predicted_contact.contact_acceleration;
   tailState = makeBoundaryState(predicted_contact.contact_position,
                                 predicted_contact.contact_velocity,
-                                predicted_contact.contact_acceleration);
-  ROS_INFO("[CompiledPerchingInit] optimizer_nominal_contact_tail pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f]",
+                                optimizer_init_tail_acceleration);
+  ROS_INFO("[CompiledPerchingInit] optimizer_nominal_contact_tail pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] source=%s",
            tailState.col(0).x(),
            tailState.col(0).y(),
            tailState.col(0).z(),
@@ -940,7 +978,45 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            tailState.col(1).z(),
            tailState.col(2).x(),
            tailState.col(2).y(),
-           tailState.col(2).z());
+           tailState.col(2).z(),
+           decoded.use_dynamics_terminal_accel ? "phase0_soft_init_tail" : "predicted_contact");
+  if (perchingOnlyDebugEnabled())
+  {
+    ROS_INFO("[PerchingOnlyDebug][Engine] compiled_mode=%s selected_mode=%s phase0_source=%s phase1_source=%s init_source=%s guide_preserved=%s feasible_preserved=%s seed_preserved=%s guide_pts=%zu->%zu feasible_sets=%zu->%zu seed_pts=%zu->%zu",
+             compiled_active_mode,
+             selected_mode_str,
+             perching_init.approach_anchor_source.c_str(),
+             perching_init.final_manifold_source.c_str(),
+             solver_input.source.c_str(),
+             perching_init.handoff_debug.guide_path_preserved ? "yes" : "no",
+             perching_init.handoff_debug.feasible_sets_preserved ? "yes" : "no",
+             perching_init.handoff_debug.seed_hint_preserved ? "yes" : "no",
+             perching_init.handoff_debug.guide_points_before,
+             perching_init.handoff_debug.guide_points_after,
+             perching_init.handoff_debug.feasible_sets_before,
+             perching_init.handoff_debug.feasible_sets_after,
+             perching_init.handoff_debug.seed_anchor_points_before,
+             perching_init.handoff_debug.seed_anchor_points_after);
+    ROS_INFO("[PerchingOnlyDebug][Engine] solve_input head=[%.2f %.2f %.2f] anchor=[%.2f %.2f %.2f] contact=[%.2f %.2f %.2f] plate_ref=[%.2f %.2f %.2f] plate_vel=[%.2f %.2f %.2f] nu_seed=[%.2f %.2f] tau_f=%.2f",
+             headState.col(0).x(),
+             headState.col(0).y(),
+             headState.col(0).z(),
+             anchor.position.x(),
+             anchor.position.y(),
+             anchor.position.z(),
+             predicted_contact.contact_position.x(),
+             predicted_contact.contact_position.y(),
+             predicted_contact.contact_position.z(),
+             decoded.plate_position_ref.x(),
+             decoded.plate_position_ref.y(),
+             decoded.plate_position_ref.z(),
+             decoded.plate_velocity.x(),
+             decoded.plate_velocity.y(),
+             decoded.plate_velocity.z(),
+             decoded.nu_seed.x(),
+             decoded.nu_seed.y(),
+             decoded.tau_f_seed);
+  }
 
   optimizer->setIfTouchGoal(true);
 

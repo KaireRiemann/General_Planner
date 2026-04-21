@@ -640,6 +640,19 @@ namespace ego_planner
 
     mincoOpt_.setEnergyWeight(rho_energy_);
     mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    if (perching_acceptance_active_ &&
+        plain_warm_start_origin_ != WarmStartOrigin::PERCHING)
+    {
+      if (mincoOpt_.hasWarmStartGuess())
+      {
+        const char *origin =
+            plain_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
+        ROS_INFO("[PerchingInitGuess] mode=plain cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
+                 origin);
+      }
+      mincoOpt_.clearWarmStartGuess();
+      plain_warm_start_origin_ = WarmStartOrigin::NONE;
+    }
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose(); 
@@ -936,6 +949,9 @@ namespace ego_planner
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
       mincoOpt_.setWarmStartGuess(x_final);
+      plain_warm_start_origin_ =
+          perching_acceptance_active_ ? WarmStartOrigin::PERCHING
+                                      : WarmStartOrigin::GENERIC;
       if (perching_acceptance_active_ &&
           terminal_mapping_ != nullptr &&
           terminal_mapping_->enabled() &&
@@ -1029,6 +1045,19 @@ namespace ego_planner
 
     distanceFieldMincoOpt_.setEnergyWeight(rho_energy_);
     distanceFieldMincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    if (perching_acceptance_active_ &&
+        esdf_warm_start_origin_ != WarmStartOrigin::PERCHING)
+    {
+      if (distanceFieldMincoOpt_.hasWarmStartGuess())
+      {
+        const char *origin =
+            esdf_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
+        ROS_INFO("[PerchingInitGuess] mode=esdf cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
+                 origin);
+      }
+      distanceFieldMincoOpt_.clearWarmStartGuess();
+      esdf_warm_start_origin_ = WarmStartOrigin::NONE;
+    }
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose();
@@ -1402,6 +1431,9 @@ namespace ego_planner
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
       distanceFieldMincoOpt_.setWarmStartGuess(x_final);
+      esdf_warm_start_origin_ =
+          perching_acceptance_active_ ? WarmStartOrigin::PERCHING
+                                      : WarmStartOrigin::GENERIC;
       if (perching_acceptance_active_ &&
           terminal_mapping_ != nullptr &&
           terminal_mapping_->enabled() &&
@@ -1494,6 +1526,19 @@ namespace ego_planner
     corridorMincoOpt_.setEnergyWeight(rho_energy_);
     const int corridor_samples_per_piece = std::max(cps_num_prePiece_ * 4, 16);
     corridorMincoOpt_.setSamplesPerPiece(corridor_samples_per_piece);
+    if (perching_acceptance_active_ &&
+        corridor_warm_start_origin_ != WarmStartOrigin::PERCHING)
+    {
+      if (corridorMincoOpt_.hasWarmStartGuess())
+      {
+        const char *origin =
+            corridor_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
+        ROS_INFO("[PerchingInitGuess] mode=corridor cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
+                 origin);
+      }
+      corridorMincoOpt_.clearWarmStartGuess();
+      corridor_warm_start_origin_ = WarmStartOrigin::NONE;
+    }
 
     Eigen::MatrixXd waypoints(piece_num_ + 1, 3);
     waypoints.row(0) = iniState.col(0).transpose();
@@ -1974,6 +2019,9 @@ namespace ego_planner
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
       corridorMincoOpt_.setWarmStartGuess(x_final);
+      corridor_warm_start_origin_ =
+          perching_acceptance_active_ ? WarmStartOrigin::PERCHING
+                                      : WarmStartOrigin::GENERIC;
       if (perching_acceptance_active_ &&
           terminal_mapping_ != nullptr &&
           terminal_mapping_->enabled() &&

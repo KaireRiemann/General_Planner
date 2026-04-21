@@ -318,7 +318,17 @@ namespace ego_planner
     using Ptr = std::unique_ptr<PolyTrajOptimizer>;
     //typedef std::unique_ptr<PolyTrajOptimizer> Ptr;
   private:
+    enum class WarmStartOrigin
+    {
+      NONE = 0,
+      GENERIC,
+      PERCHING
+    };
+
     PerchingCheckConfig perching_check_config_;
+    WarmStartOrigin plain_warm_start_origin_{WarmStartOrigin::NONE};
+    WarmStartOrigin esdf_warm_start_origin_{WarmStartOrigin::NONE};
+    WarmStartOrigin corridor_warm_start_origin_{WarmStartOrigin::NONE};
     bool perching_acceptance_active_{false};
     bool has_last_perching_extra_vars_{false};
     Eigen::VectorXd last_perching_extra_vars_;

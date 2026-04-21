@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 
 #include <ros/ros.h>
@@ -15,6 +16,73 @@ namespace
 constexpr double kDefaultPreContactDistance = 0.4;
 constexpr double kGravity = 9.81;
 constexpr double kDefaultApproachVelocityAlpha = 0.35;
+
+bool perchingOnlyDebugEnabled()
+{
+  if (const char *env = std::getenv("PERCHING_ONLY_DEBUG"))
+  {
+    return env[0] != '\0' && env[0] != '0';
+  }
+  bool enabled = false;
+  ros::param::get("/debug/perching_only", enabled);
+  return enabled;
+}
+
+const char *activeSpaceModelString(const core::ActiveSpaceModel mode)
+{
+  switch (mode)
+  {
+  case core::ActiveSpaceModel::ESDF:
+    return "ESDF";
+  case core::ActiveSpaceModel::CORRIDOR:
+    return "CORRIDOR";
+  case core::ActiveSpaceModel::VISIBLE_REGION:
+    return "VISIBLE_REGION";
+  case core::ActiveSpaceModel::TERMINAL_MANIFOLD:
+    return "TERMINAL_MANIFOLD";
+  case core::ActiveSpaceModel::PLAIN:
+  default:
+    return "PLAIN";
+  }
+}
+
+const core::PhaseProblemSpec *findPhase0ApproachGoal(const core::PlanningProblem &problem)
+{
+  if (problem.phase_specs.empty())
+  {
+    return nullptr;
+  }
+
+  const core::PhaseProblemSpec &phase0 = problem.phase_specs.front();
+  if (!phase0.terminal_is_set || !phase0.goal_state.valid)
+  {
+    return nullptr;
+  }
+
+  return &phase0;
+}
+
+const core::PhaseProblemSpec *findPhase1ContactManifold(const core::PlanningProblem &problem)
+{
+  if (problem.phase_specs.size() > 1)
+  {
+    const core::PhaseProblemSpec &phase1 = problem.phase_specs[1];
+    if (phase1.terminal_is_manifold && phase1.manifold_params.size() > 0)
+    {
+      return &phase1;
+    }
+  }
+
+  for (const auto &phase : problem.phase_specs)
+  {
+    if (phase.terminal_is_manifold && phase.manifold_params.size() > 0)
+    {
+      return &phase;
+    }
+  }
+
+  return nullptr;
+}
 
 bool isFiniteStateDefinition(const core::StateDefinition &state)
 {
@@ -98,6 +166,20 @@ bool keepGuidePrefixTowardAnchor(const std::vector<Eigen::Vector3d> &input_path,
   return true;
 }
 
+std::vector<Eigen::Vector3d> filterFiniteAnchors(const std::vector<Eigen::Vector3d> &anchors)
+{
+  std::vector<Eigen::Vector3d> filtered;
+  filtered.reserve(anchors.size());
+  for (const auto &pt : anchors)
+  {
+    if (pt.allFinite())
+    {
+      filtered.push_back(pt);
+    }
+  }
+  return filtered;
+}
+
 void orthonormalizeContactFrame(PerchingDecodedContactSemantics &semantics)
 {
   semantics.surface_z = normalizedOrFallback(semantics.surface_z, Eigen::Vector3d::UnitZ());
@@ -117,7 +199,8 @@ void orthonormalizeContactFrame(PerchingDecodedContactSemantics &semantics)
 }
 
 core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
-                                          const PerchingPreContactAnchorState &anchor_state)
+                                          const PerchingPreContactAnchorState &anchor_state,
+                                          PerchingHandoffDebugSummary *handoff_debug)
 {
   core::PlanningProblem approach_problem = problem;
   approach_problem.problem_name = problem.problem_name + "_perching_approach";
@@ -249,6 +332,28 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
   const bool guide_times_preserved =
       guide_times_before == 0 || !approach_problem.references.guide_times.empty();
 
+  if (handoff_debug != nullptr)
+  {
+    handoff_debug->guide_path_preserved = guide_path_preserved;
+    handoff_debug->guide_times_preserved = guide_times_preserved;
+    handoff_debug->feasible_sets_preserved = feasible_sets_preserved;
+    handoff_debug->seed_hint_preserved = seed_hint_preserved;
+    handoff_debug->guide_path_trimmed_to_anchor =
+        (approach_problem.references.guide_path.size() < guide_pts_before) ||
+        guide_path_trimmed_to_anchor;
+    handoff_debug->seed_trimmed_to_anchor = seed_trimmed_to_anchor;
+    handoff_debug->guide_points_before = guide_pts_before;
+    handoff_debug->guide_points_after = approach_problem.references.guide_path.size();
+    handoff_debug->guide_times_before = guide_times_before;
+    handoff_debug->guide_times_after = approach_problem.references.guide_times.size();
+    handoff_debug->feasible_sets_before = feasible_before;
+    handoff_debug->feasible_sets_after = approach_problem.feasible_sets.size();
+    handoff_debug->seed_valid_before = seed_valid_before;
+    handoff_debug->seed_valid_after = approach_problem.seed.valid;
+    handoff_debug->seed_anchor_points_before = seed_anchor_before;
+    handoff_debug->seed_anchor_points_after = approach_problem.seed.anchor_points.size();
+  }
+
   ROS_INFO("[PerchingInit] guide_path_preserved=%s guide_path_trimmed=%s guide_pts=%zu->%zu guide_times_preserved=%s guide_times=%zu->%zu",
            guide_path_preserved ? "yes" : "no",
            (approach_problem.references.guide_path.size() < guide_pts_before ||
@@ -278,9 +383,14 @@ core::PlanningProblem makeApproachProblem(const core::PlanningProblem &problem,
 
 bool PerchingInitService::decodeContactSemantics(const core::PlanningProblem &problem,
                                                  PerchingDecodedContactSemantics &semantics,
-                                                 std::string *reason) const
+                                                 std::string *reason,
+                                                 std::string *source) const
 {
   semantics = PerchingDecodedContactSemantics{};
+  if (source != nullptr)
+  {
+    *source = "unknown";
+  }
 
   if (!problem.task_semantics.perching.valid)
   {
@@ -291,7 +401,16 @@ bool PerchingInitService::decodeContactSemantics(const core::PlanningProblem &pr
     return false;
   }
 
-  const Eigen::VectorXd &params = problem.task_semantics.perching.terminal_manifold_params;
+  const core::PhaseProblemSpec *phase1_manifold = findPhase1ContactManifold(problem);
+  const Eigen::VectorXd *params_ptr =
+      phase1_manifold != nullptr
+          ? &phase1_manifold->manifold_params
+          : &problem.task_semantics.perching.terminal_manifold_params;
+  const Eigen::VectorXd &params = *params_ptr;
+  if (source != nullptr)
+  {
+    *source = phase1_manifold != nullptr ? "phase_ir_phase1" : "task_semantics";
+  }
   if (params.size() >= 29)
   {
     semantics.plate_position_ref = params.segment<3>(6);
@@ -360,11 +479,16 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   artifact.selected_mode = problem.active_space_model;
 
   std::string decode_reason;
-  if (!decodeContactSemantics(problem, artifact.decoded_contact_semantics, &decode_reason))
+  std::string manifold_source;
+  if (!decodeContactSemantics(problem,
+                              artifact.decoded_contact_semantics,
+                              &decode_reason,
+                              &manifold_source))
   {
     artifact.message = "failed to decode perching semantics: " + decode_reason;
     return false;
   }
+  artifact.final_manifold_source = manifold_source;
 
   PerchingPredictedContactState &predicted = artifact.predicted_contact_state;
   const PerchingDecodedContactSemantics &semantics = artifact.decoded_contact_semantics;
@@ -397,9 +521,10 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
 
   PerchingPreContactAnchorState &anchor = artifact.pre_contact_anchor_state;
   const core::PerchingSemanticArtifact &compiled_semantics = problem.task_semantics.perching;
+  const core::PhaseProblemSpec *phase0_anchor = findPhase0ApproachGoal(problem);
   const core::StateDefinition &semantic_anchor =
       compiled_semantics.approach_anchor_state;
-  std::string anchor_source = "fallback_recompute";
+  std::string anchor_source = "decoded_contact_fallback";
   Eigen::Vector3d previous_anchor_velocity = predicted.contact_velocity;
   Eigen::Vector3d previous_anchor_acceleration = predicted.contact_acceleration;
   const Eigen::Vector3d softened_anchor_velocity =
@@ -407,7 +532,23 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
                                      semantics.v_plus,
                                      semantics.surface_z,
                                      kDefaultApproachVelocityAlpha);
-  if (isFiniteStateDefinition(semantic_anchor))
+  if (phase0_anchor != nullptr &&
+      phase0_anchor->goal_state.position.allFinite() &&
+      phase0_anchor->goal_state.velocity.allFinite() &&
+      phase0_anchor->goal_state.acceleration.allFinite())
+  {
+    anchor.position = phase0_anchor->goal_state.position;
+    previous_anchor_velocity = phase0_anchor->goal_state.velocity;
+    previous_anchor_acceleration = phase0_anchor->goal_state.acceleration;
+    anchor.pre_contact_distance =
+        compiled_semantics.approach_distance > 1.0e-6
+            ? compiled_semantics.approach_distance
+            : std::max(0.0,
+                       (predicted.contact_position - anchor.position)
+                           .dot(semantics.surface_z));
+    anchor_source = "phase_ir_phase0";
+  }
+  else if (isFiniteStateDefinition(semantic_anchor))
   {
     anchor.position = semantic_anchor.position;
     previous_anchor_velocity = semantic_anchor.velocity;
@@ -424,7 +565,7 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   {
     anchor.pre_contact_distance = semantics.pre_contact_distance;
     anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
-    ROS_WARN("[PerchingInit] approach anchor source=fallback_recompute reason=invalid_task_semantics_anchor");
+    ROS_WARN("[PerchingInit] approach anchor source=decoded_contact_fallback reason=invalid_phase0_and_task_semantics_anchor");
   }
   anchor.velocity = softened_anchor_velocity;
   anchor.acceleration = Eigen::Vector3d::Zero();
@@ -436,6 +577,11 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
     artifact.message = "pre-contact anchor state is not finite";
     return false;
   }
+  artifact.approach_anchor_source = anchor_source;
+  ROS_INFO("[PerchingInit] phase-aware source summary: phase0_goal=%s final_manifold=%s chosen_anchor=%s",
+           phase0_anchor != nullptr ? "phase_ir_phase0" : "unavailable",
+           artifact.final_manifold_source.c_str(),
+           artifact.approach_anchor_source.c_str());
   ROS_INFO("[PerchingInit] soften approach anchor source=%s alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f] prev_anchor_acc=[%.2f %.2f %.2f] new_anchor_acc=[0.00 0.00 0.00]",
            anchor_source.c_str(),
            kDefaultApproachVelocityAlpha,
@@ -461,13 +607,77 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
            anchor.acceleration.z(),
            anchor.pre_contact_distance);
 
-  const core::PlanningProblem approach_problem = makeApproachProblem(problem, anchor);
+  const core::PlanningProblem approach_problem =
+      makeApproachProblem(problem, anchor, &artifact.handoff_debug);
   TransitInitResult transit_result;
   transit_result.selected_mode = problem.active_space_model;
   TransitInitService transit_service;
 
+  const auto tryHandoffAnchorInit =
+      [&](const std::vector<Eigen::Vector3d> &raw_anchors,
+          const char *source_label) -> bool
+  {
+    if (config.plan_params == nullptr)
+    {
+      return false;
+    }
+
+    std::vector<Eigen::Vector3d> anchors = filterFiniteAnchors(raw_anchors);
+    if (anchors.size() < 2)
+    {
+      return false;
+    }
+
+    InitArtifact handoff_init;
+    if (!transit_service.buildFromAnchors(problem.start_boundary.position,
+                                          problem.start_boundary.velocity,
+                                          problem.start_boundary.acceleration,
+                                          anchor.position,
+                                          anchor.velocity,
+                                          anchors,
+                                          config.plan_params->polyTraj_piece_length,
+                                          config.plan_params->max_vel_,
+                                          handoff_init,
+                                          source_label))
+    {
+      return false;
+    }
+
+    transit_result.selected_mode = problem.active_space_model;
+    transit_result.success = handoff_init.valid;
+    transit_result.init_artifact = handoff_init;
+    return handoff_init.valid;
+  };
+
   bool init_ok = false;
-  switch (problem.active_space_model)
+  const bool committed_dynamic_stage =
+      artifact.decoded_contact_semantics.use_dynamics_terminal_accel &&
+      !problem.task_definition.runtime_policy.enable_successor_planning;
+  if (problem.active_space_model == core::ActiveSpaceModel::PLAIN ||
+      problem.active_space_model == core::ActiveSpaceModel::VISIBLE_REGION ||
+      problem.active_space_model == core::ActiveSpaceModel::TERMINAL_MANIFOLD)
+  {
+    if (committed_dynamic_stage)
+    {
+      ROS_INFO("[PerchingInit] skip handoff anchors for committed perching init; fallback to perching-specific local initializer.");
+    }
+    else if (approach_problem.seed.valid &&
+             tryHandoffAnchorInit(approach_problem.seed.anchor_points, "handoff_seed"))
+    {
+      ROS_INFO("[PerchingInit] consumed handoff seed anchors for approach init: pts=%zu",
+               approach_problem.seed.anchor_points.size());
+      init_ok = true;
+    }
+    else if (!approach_problem.references.guide_path.empty() &&
+             tryHandoffAnchorInit(approach_problem.references.guide_path, "handoff_guide"))
+    {
+      ROS_INFO("[PerchingInit] consumed handoff guide anchors for approach init: pts=%zu",
+               approach_problem.references.guide_path.size());
+      init_ok = true;
+    }
+  }
+
+  if (!init_ok) switch (problem.active_space_model)
   {
   case core::ActiveSpaceModel::CORRIDOR:
     init_ok = transit_service.initializeCorridor(config, approach_problem, transit_result);
@@ -492,6 +702,23 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   artifact.valid = init_ok && artifact.transit_init.valid;
   artifact.message = init_ok ? "perching init ready via " + artifact.transit_init.source
                              : transit_result.failure_reason;
+  if (perchingOnlyDebugEnabled())
+  {
+    ROS_INFO("[PerchingOnlyDebug][Init] selected_mode=%s init_valid=%s init_source=%s phase0_source=%s phase1_source=%s guide_preserved=%s feasible_preserved=%s seed_preserved=%s guide_pts=%zu->%zu seed_pts=%zu->%zu corridor_polys=%zu",
+             activeSpaceModelString(artifact.selected_mode),
+             artifact.valid ? "yes" : "no",
+             artifact.transit_init.source.c_str(),
+             artifact.approach_anchor_source.c_str(),
+             artifact.final_manifold_source.c_str(),
+             artifact.handoff_debug.guide_path_preserved ? "yes" : "no",
+             artifact.handoff_debug.feasible_sets_preserved ? "yes" : "no",
+             artifact.handoff_debug.seed_hint_preserved ? "yes" : "no",
+             artifact.handoff_debug.guide_points_before,
+             artifact.handoff_debug.guide_points_after,
+             artifact.handoff_debug.seed_anchor_points_before,
+             artifact.handoff_debug.seed_anchor_points_after,
+             artifact.transit_init.corridor_hpolys.size());
+  }
   return artifact.valid;
 }
 

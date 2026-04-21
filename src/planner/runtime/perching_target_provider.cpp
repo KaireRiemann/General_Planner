@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include <ros/ros.h>
 
@@ -10,6 +11,17 @@ namespace ego_planner::runtime
 
 namespace
 {
+
+bool perchingOnlyDebugEnabled()
+{
+  if (const char *env = std::getenv("PERCHING_ONLY_DEBUG"))
+  {
+    return env[0] != '\0' && env[0] != '0';
+  }
+  bool enabled = false;
+  ros::param::get("/debug/perching_only", enabled);
+  return enabled;
+}
 
 Eigen::Quaterniond normalizedOrIdentity(Eigen::Quaterniond q)
 {
@@ -168,6 +180,25 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
                     softened_anchor_velocity.x(),
                     softened_anchor_velocity.y(),
                     softened_anchor_velocity.z());
+  if (perchingOnlyDebugEnabled())
+  {
+    ROS_INFO_THROTTLE(0.5,
+                      "[PerchingOnlyDebug][Provider] valid=%s terminal_pos=[%.2f %.2f %.2f] terminal_vel=[%.2f %.2f %.2f] anchor_pos=[%.2f %.2f %.2f] anchor_vel=[%.2f %.2f %.2f] active_source=current_plate_state warm_hint=%s",
+                      terminal.valid ? "yes" : "no",
+                      terminal.terminal_position.x(),
+                      terminal.terminal_position.y(),
+                      terminal.terminal_position.z(),
+                      terminal.terminal_velocity.x(),
+                      terminal.terminal_velocity.y(),
+                      terminal.terminal_velocity.z(),
+                      terminal.approach_anchor_position.x(),
+                      terminal.approach_anchor_position.y(),
+                      terminal.approach_anchor_position.z(),
+                      terminal.approach_anchor_velocity.x(),
+                      terminal.approach_anchor_velocity.y(),
+                      terminal.approach_anchor_velocity.z(),
+                      has_terminal_warm_start_hint_ ? "yes" : "no");
+  }
   return terminal.terminal_position.allFinite() &&
          terminal.approach_anchor_position.allFinite() &&
          terminal.approach_anchor_velocity.allFinite() &&
