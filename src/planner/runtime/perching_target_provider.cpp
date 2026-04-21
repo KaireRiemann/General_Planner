@@ -132,10 +132,10 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
       plate_position_ + plate_velocity_ * clamped_prediction_time;
   const double approach_distance = std::max(0.4, robot_l_ + 0.2);
   terminal.valid = true;
-  terminal.prediction_time = 0.0;
+  terminal.prediction_time = clamped_prediction_time;
   terminal.approach_distance = approach_distance;
   terminal.plate_position_now = plate_position_;
-  terminal.plate_position = plate_position_;
+  terminal.plate_position = requested_preview_plate_position;
   terminal.plate_velocity = plate_velocity_;
   terminal.landing_orientation = landing_q;
   terminal.landing_tangent_x = tangent_x;
@@ -164,7 +164,7 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   terminal.approach_anchor_velocity = softened_anchor_velocity;
   terminal.approach_anchor_acceleration = Eigen::Vector3d::Zero();
   ROS_INFO_THROTTLE(0.8,
-                    "[PerchingTarget] current-source perching reference requested_pred_t=%.2f preview_plate=[%.2f %.2f %.2f] ref_t=%.2f ref_plate=[%.2f %.2f %.2f] alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f]",
+                    "[PerchingTarget] predicted perching reference requested_pred_t=%.2f preview_plate=[%.2f %.2f %.2f] ref_t=%.2f ref_plate=[%.2f %.2f %.2f] current_plate=[%.2f %.2f %.2f] alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f]",
                     clamped_prediction_time,
                     requested_preview_plate_position.x(),
                     requested_preview_plate_position.y(),
@@ -173,6 +173,9 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
                     terminal.plate_position.x(),
                     terminal.plate_position.y(),
                     terminal.plate_position.z(),
+                    terminal.plate_position_now.x(),
+                    terminal.plate_position_now.y(),
+                    terminal.plate_position_now.z(),
                     approach_velocity_alpha_,
                     previous_anchor_velocity.x(),
                     previous_anchor_velocity.y(),
@@ -183,8 +186,9 @@ bool PerchingTargetProvider::buildTerminalStateAtPrediction(const double predict
   if (perchingOnlyDebugEnabled())
   {
     ROS_INFO_THROTTLE(0.5,
-                      "[PerchingOnlyDebug][Provider] valid=%s terminal_pos=[%.2f %.2f %.2f] terminal_vel=[%.2f %.2f %.2f] anchor_pos=[%.2f %.2f %.2f] anchor_vel=[%.2f %.2f %.2f] active_source=current_plate_state warm_hint=%s",
+                      "[PerchingOnlyDebug][Provider] valid=%s ref_t=%.2f terminal_pos=[%.2f %.2f %.2f] terminal_vel=[%.2f %.2f %.2f] anchor_pos=[%.2f %.2f %.2f] anchor_vel=[%.2f %.2f %.2f] active_source=predicted_plate_state warm_hint=%s",
                       terminal.valid ? "yes" : "no",
+                      terminal.prediction_time,
                       terminal.terminal_position.x(),
                       terminal.terminal_position.y(),
                       terminal.terminal_position.z(),

@@ -127,7 +127,7 @@ int main(int argc, char **argv)
       terminal.terminal_position,
       terminal.terminal_velocity,
       terminal.terminal_acceleration,
-      terminal.plate_position_now,
+      terminal.plate_position,
       terminal.plate_velocity,
       terminal.prediction_time,
       terminal.landing_tangent_x,

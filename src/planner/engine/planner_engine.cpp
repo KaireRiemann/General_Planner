@@ -1113,7 +1113,7 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   const Eigen::Vector3d final_acc = opt_traj.evaluate(total_T, 2);
   const Eigen::Vector3d predicted_plate_at_touch =
       decoded.plate_position_ref +
-      decoded.plate_velocity * std::max(0.0, total_T - decoded.reference_time);
+      decoded.plate_velocity * (total_T - decoded.reference_time);
   ROS_INFO("[CompiledPerching] solved T=%.2f final_pos=[%.2f %.2f %.2f] final_vel=[%.2f %.2f %.2f] final_acc=[%.2f %.2f %.2f] predicted_plate=[%.2f %.2f %.2f] ref_t=%.2f",
            total_T,
            final_pos.x(),

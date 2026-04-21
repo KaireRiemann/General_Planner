@@ -114,8 +114,9 @@ void runProviderRegression()
 {
   const auto terminal = buildReferenceTerminal();
   const Eigen::Vector3d expected_normal = Eigen::Vector3d::UnitZ();
-  const Eigen::Vector3d expected_plate_position(1.0, -0.5, 2.0);
-  const Eigen::Vector3d expected_contact = expected_plate_position + 0.25 * expected_normal;
+  const Eigen::Vector3d expected_plate_position_now(1.0, -0.5, 2.0);
+  const Eigen::Vector3d expected_plate_position_ref(1.4, -0.6, 2.2);
+  const Eigen::Vector3d expected_contact = expected_plate_position_ref + 0.25 * expected_normal;
   const double expected_approach_distance = 0.45;
   const Eigen::Vector3d expected_anchor =
       expected_contact - expected_approach_distance * expected_normal;
@@ -124,14 +125,14 @@ void runProviderRegression()
   const Eigen::Vector3d expected_terminal_acceleration(0.0, 0.0, 0.19);
 
   require(terminal.valid, "terminal bundle should be valid");
-  require(approxScalar(terminal.prediction_time, 0.0),
-          "solver-facing prediction time should be anchored at now");
+  require(approxScalar(terminal.prediction_time, 1.0),
+          "prediction time should preserve the requested contact reference horizon");
   require(approxScalar(terminal.approach_distance, expected_approach_distance),
           "approach distance mismatch");
-  require(approxVector(terminal.plate_position_now, expected_plate_position),
+  require(approxVector(terminal.plate_position_now, expected_plate_position_now),
           "current plate state mismatch");
-  require(approxVector(terminal.plate_position, expected_plate_position),
-          "solver-facing plate reference should stay at current plate state");
+  require(approxVector(terminal.plate_position, expected_plate_position_ref),
+          "solver-facing plate reference should be sampled at prediction time");
   require(approxVector(terminal.terminal_position, expected_contact),
           "contact point mismatch");
   require(approxVector(terminal.approach_anchor_position, expected_anchor),
@@ -172,9 +173,9 @@ void runCompilerRegression()
       terminal.terminal_position,
       terminal.terminal_velocity,
       terminal.terminal_acceleration,
-      terminal.plate_position_now,
+      terminal.plate_position,
       terminal.plate_velocity,
-      0.0,
+      terminal.prediction_time,
       terminal.landing_tangent_x,
       terminal.landing_tangent_y,
       terminal.landing_normal,

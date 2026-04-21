@@ -146,10 +146,10 @@ namespace ego_planner
     struct PerchingCheckConfig
     {
       bool enabled{false};
-      double terminal_relax_time{0.35};
-      double contact_position_tolerance{0.18};
-      double relative_tangential_speed_tolerance{0.45};
-      double relative_normal_speed_tolerance{0.80};
+      double terminal_relax_time{0.25};
+      double contact_position_tolerance{0.08};
+      double relative_tangential_speed_tolerance{0.15};
+      double relative_normal_speed_tolerance{0.55};
     };
 
     struct PerchingTerminalMetrics

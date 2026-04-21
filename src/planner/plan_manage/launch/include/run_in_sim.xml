@@ -32,12 +32,33 @@
     <arg name="perching_min_prediction_time" default="0.8"/>
     <arg name="perching_max_prediction_time" default="1.8"/>
     <arg name="perching_terminal_thrust" default="9.81"/>
-    <arg name="perching_terminal_thrust_range" default="0.0"/>
-    <arg name="perching_use_dynamics_terminal_accel" default="false"/>
+    <arg name="perching_terminal_thrust_range" default="2.0"/>
+    <arg name="perching_use_dynamics_terminal_accel" default="true"/>
     <arg name="perching_replan_if_unsafe" default="true"/>
-    <arg name="perching_arrive_pos_thresh" default="0.45"/>
-    <arg name="perching_arrive_vel_thresh" default="0.85"/>
+    <arg name="perching_arrive_pos_thresh" default="0.20"/>
+    <arg name="perching_arrive_vel_thresh" default="0.45"/>
+    <arg name="perching_entry_tangent_vel_thresh" default="0.25"/>
     <arg name="perching_min_execute_time" default="0.30"/>
+    <arg name="perching_commit_distance_thresh" default="0.45"/>
+    <arg name="perching_commit_rel_vel_thresh" default="0.25"/>
+    <arg name="perching_commit_tangent_vel_thresh" default="0.15"/>
+    <arg name="perching_commit_normal_speed_min" default="0.03"/>
+    <arg name="perching_commit_normal_speed_max" default="0.65"/>
+    <arg name="perching_commit_hold_time" default="0.20"/>
+    <arg name="perching_weight_floor" default="100000.0"/>
+    <arg name="perching_weight_thrust" default="10000.0"/>
+    <arg name="perching_weight_omega" default="20000.0"/>
+    <arg name="perching_weight_collision" default="1000000.0"/>
+    <arg name="perching_floor_height" default="0.10"/>
+    <arg name="perching_thrust_min" default="4.0"/>
+    <arg name="perching_thrust_max" default="18.0"/>
+    <arg name="perching_omega_max" default="3.0"/>
+    <arg name="perching_robot_radius" default="0.18"/>
+    <arg name="perching_platform_radius" default="1.00"/>
+    <arg name="perching_terminal_relax_time" default="0.25"/>
+    <arg name="perching_contact_position_tolerance" default="0.08"/>
+    <arg name="perching_relative_tangential_speed_tolerance" default="0.15"/>
+    <arg name="perching_relative_normal_speed_tolerance" default="0.55"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
     <arg name="sfc_progress" default="0.75"/>
@@ -117,7 +138,28 @@
         <arg name="perching_replan_if_unsafe" value="$(arg perching_replan_if_unsafe)" />
         <arg name="perching_arrive_pos_thresh" value="$(arg perching_arrive_pos_thresh)" />
         <arg name="perching_arrive_vel_thresh" value="$(arg perching_arrive_vel_thresh)" />
+        <arg name="perching_entry_tangent_vel_thresh" value="$(arg perching_entry_tangent_vel_thresh)" />
         <arg name="perching_min_execute_time" value="$(arg perching_min_execute_time)" />
+        <arg name="perching_commit_distance_thresh" value="$(arg perching_commit_distance_thresh)" />
+        <arg name="perching_commit_rel_vel_thresh" value="$(arg perching_commit_rel_vel_thresh)" />
+        <arg name="perching_commit_tangent_vel_thresh" value="$(arg perching_commit_tangent_vel_thresh)" />
+        <arg name="perching_commit_normal_speed_min" value="$(arg perching_commit_normal_speed_min)" />
+        <arg name="perching_commit_normal_speed_max" value="$(arg perching_commit_normal_speed_max)" />
+        <arg name="perching_commit_hold_time" value="$(arg perching_commit_hold_time)" />
+        <arg name="perching_weight_floor" value="$(arg perching_weight_floor)" />
+        <arg name="perching_weight_thrust" value="$(arg perching_weight_thrust)" />
+        <arg name="perching_weight_omega" value="$(arg perching_weight_omega)" />
+        <arg name="perching_weight_collision" value="$(arg perching_weight_collision)" />
+        <arg name="perching_floor_height" value="$(arg perching_floor_height)" />
+        <arg name="perching_thrust_min" value="$(arg perching_thrust_min)" />
+        <arg name="perching_thrust_max" value="$(arg perching_thrust_max)" />
+        <arg name="perching_omega_max" value="$(arg perching_omega_max)" />
+        <arg name="perching_robot_radius" value="$(arg perching_robot_radius)" />
+        <arg name="perching_platform_radius" value="$(arg perching_platform_radius)" />
+        <arg name="perching_terminal_relax_time" value="$(arg perching_terminal_relax_time)" />
+        <arg name="perching_contact_position_tolerance" value="$(arg perching_contact_position_tolerance)" />
+        <arg name="perching_relative_tangential_speed_tolerance" value="$(arg perching_relative_tangential_speed_tolerance)" />
+        <arg name="perching_relative_normal_speed_tolerance" value="$(arg perching_relative_normal_speed_tolerance)" />
         <arg name="enable_esdf" value="$(arg enable_esdf)" />
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)" />
         <arg name="sfc_progress" value="$(arg sfc_progress)" />

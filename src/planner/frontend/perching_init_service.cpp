@@ -538,8 +538,10 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
       phase0_anchor->goal_state.acceleration.allFinite())
   {
     anchor.position = phase0_anchor->goal_state.position;
-    previous_anchor_velocity = phase0_anchor->goal_state.velocity;
-    previous_anchor_acceleration = phase0_anchor->goal_state.acceleration;
+    anchor.velocity = phase0_anchor->goal_state.velocity;
+    anchor.acceleration = phase0_anchor->goal_state.acceleration;
+    previous_anchor_velocity = anchor.velocity;
+    previous_anchor_acceleration = anchor.acceleration;
     anchor.pre_contact_distance =
         compiled_semantics.approach_distance > 1.0e-6
             ? compiled_semantics.approach_distance
@@ -551,8 +553,10 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   else if (isFiniteStateDefinition(semantic_anchor))
   {
     anchor.position = semantic_anchor.position;
-    previous_anchor_velocity = semantic_anchor.velocity;
-    previous_anchor_acceleration = semantic_anchor.acceleration;
+    anchor.velocity = semantic_anchor.velocity;
+    anchor.acceleration = semantic_anchor.acceleration;
+    previous_anchor_velocity = anchor.velocity;
+    previous_anchor_acceleration = anchor.acceleration;
     anchor.pre_contact_distance =
         compiled_semantics.approach_distance > 1.0e-6
             ? compiled_semantics.approach_distance
@@ -565,10 +569,10 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
   {
     anchor.pre_contact_distance = semantics.pre_contact_distance;
     anchor.position = predicted.contact_position - anchor.pre_contact_distance * semantics.surface_z;
+    anchor.velocity = softened_anchor_velocity;
+    anchor.acceleration = Eigen::Vector3d::Zero();
     ROS_WARN("[PerchingInit] approach anchor source=decoded_contact_fallback reason=invalid_phase0_and_task_semantics_anchor");
   }
-  anchor.velocity = softened_anchor_velocity;
-  anchor.acceleration = Eigen::Vector3d::Zero();
   anchor.valid = anchor.position.allFinite() &&
                  anchor.velocity.allFinite() &&
                  anchor.acceleration.allFinite();
@@ -582,7 +586,7 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
            phase0_anchor != nullptr ? "phase_ir_phase0" : "unavailable",
            artifact.final_manifold_source.c_str(),
            artifact.approach_anchor_source.c_str());
-  ROS_INFO("[PerchingInit] soften approach anchor source=%s alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] new_anchor_vel=[%.2f %.2f %.2f] prev_anchor_acc=[%.2f %.2f %.2f] new_anchor_acc=[0.00 0.00 0.00]",
+  ROS_INFO("[PerchingInit] approach anchor velocity source=%s fallback_alpha=%.2f prev_anchor_vel=[%.2f %.2f %.2f] chosen_anchor_vel=[%.2f %.2f %.2f] prev_anchor_acc=[%.2f %.2f %.2f] chosen_anchor_acc=[%.2f %.2f %.2f]",
            anchor_source.c_str(),
            kDefaultApproachVelocityAlpha,
            previous_anchor_velocity.x(),
@@ -593,7 +597,10 @@ bool PerchingInitService::initialize(const TransitInitRuntimeConfig &config,
            anchor.velocity.z(),
            previous_anchor_acceleration.x(),
            previous_anchor_acceleration.y(),
-           previous_anchor_acceleration.z());
+           previous_anchor_acceleration.z(),
+           anchor.acceleration.x(),
+           anchor.acceleration.y(),
+           anchor.acceleration.z());
   ROS_INFO("[PerchingInit] approach anchor source=%s pos=[%.2f %.2f %.2f] vel=[%.2f %.2f %.2f] acc=[%.2f %.2f %.2f] distance=%.2f",
            anchor_source.c_str(),
            anchor.position.x(),
