@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <random>
 #include <string>
 
 #include <nav_msgs/Odometry.h>
@@ -16,16 +18,16 @@ public:
     pnh_.param("map_size_z", map_size_z_, 5.0);
     pnh_.param("odom_topic", odom_topic_, std::string("/uav/odom"));
     pnh_.param("goal_topic", goal_topic_, std::string("/benchmark/goal"));
-    pnh_.param("publish_rate", publish_rate_, 1.0);
+    pnh_.param("max_speed", max_speed_, 1.0);
+    pnh_.param("max_cnt", max_cnt_, 10);
 
     odom_sub_ = nh_.subscribe(odom_topic_, 1, &BenchmarkNode::odomCallback, this);
     goal_pub_ = nh_.advertise<quadrotor_msgs::GoalSet>(goal_topic_, 1, true);
+    max_speed_ = std::max(0.01, max_speed_);
 
-    const double rate_hz = std::max(0.2, publish_rate_);
-    publish_timer_ = nh_.createTimer(ros::Duration(1.0 / rate_hz), &BenchmarkNode::publishGoalTimer, this);
-
-    ROS_INFO("benchmark_node ready: map_size=[%.2f, %.2f, %.2f], odom_topic=%s, goal_topic=%s",
-             map_size_x_, map_size_y_, map_size_z_, odom_topic_.c_str(), goal_topic_.c_str());
+    ros::Duration(1.0).sleep(); // wait for publishers and subscribers to be ready
+    ROS_INFO("benchmark_node ready: map_size=[%.2f, %.2f, %.2f], max_speed=%.2f, odom_topic=%s, goal_topic=%s",
+             map_size_x_, map_size_y_, map_size_z_, max_speed_, odom_topic_.c_str(), goal_topic_.c_str());
   }
 
 private:
@@ -34,64 +36,91 @@ private:
     current_position_[0] = msg->pose.pose.position.x;
     current_position_[1] = msg->pose.pose.position.y;
     current_position_[2] = msg->pose.pose.position.z;
+    if (have_odom_)
+    {
+      const double dx = current_position_[0] - last_position_[0];
+      const double dy = current_position_[1] - last_position_[1];
+      const double dz = current_position_[2] - last_position_[2];
+      path_length_ += std::sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    last_position_ = current_position_;
     have_odom_ = true;
+
+    if (!have_published_)
+    {
+      publishGoal();
+      have_published_ = true;
+    }
+
+    if (!have_arrived_)
+    {
+      const double dx = current_goal_[0] - current_position_[0];
+      const double dy = current_goal_[1] - current_position_[1];
+      const double dz = current_goal_[2] - current_position_[2];
+      const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+      double arrival_time = (ros::Time::now() - start_time_).toSec();
+      if (dist < 1)
+      {
+        have_arrived_ = true;
+        ROS_INFO("arrived at goal: [%.2f, %.2f, %.2f], dist=%.2f m, path_length=%.2f m, time=%.2f s",
+                 current_goal_[0], current_goal_[1], current_goal_[2], goal_length_, path_length_, arrival_time);
+        if (cur_cnt_ < max_cnt_)
+        {
+          ros::Duration(0.5).sleep(); // add some delay
+          publishGoal();
+        }
+        else
+        {
+          ROS_INFO("benchmark finished: total_cnt=%d", cur_cnt_);
+          ros::shutdown();
+        }
+      }
+      else if (arrival_time > min_arrival_time_)
+      {
+        ROS_WARN("goal timeout: [%.2f, %.2f, %.2f], dist=%.2f m, path_length=%.2f m, time=%.2f s",
+                 current_goal_[0], current_goal_[1], current_goal_[2], goal_length_, path_length_, arrival_time);
+      }
+    }
   }
 
   std::array<double, 3> pickGoal() const
   {
     const double half_x = 0.5 * map_size_x_;
     const double half_y = 0.5 * map_size_y_;
-    const double half_z = 0.5 * map_size_z_;
 
-    const double margin_x = std::min(2.0, std::max(0.5, 0.15 * map_size_x_));
-    const double margin_y = std::min(2.0, std::max(0.5, 0.15 * map_size_y_));
-    const double margin_z = std::min(1.0, std::max(0.3, 0.10 * map_size_z_));
+    std::uniform_real_distribution<double> dist_x(-half_x, half_x);
+    std::uniform_real_distribution<double> dist_y(-half_y, half_y);
+    std::uniform_real_distribution<double> dist_z(0.5, std::max(2.0, map_size_z_));
 
-    const double goal_x = std::max(0.0, half_x - margin_x);
-    const double goal_y = std::max(0.0, half_y - margin_y);
-    const double goal_z = std::max(1.0, half_z - margin_z);
-
-    const std::array<std::array<double, 3>, 4> candidates = {{
-        {{-goal_x, -goal_y, goal_z}},
-        {{-goal_x, goal_y, goal_z}},
-        {{goal_x, -goal_y, goal_z}},
-        {{goal_x, goal_y, goal_z}},
-    }};
-
-    std::array<double, 3> best_goal = candidates.front();
-    double best_dist_sq = -1.0;
-    for (const auto &candidate : candidates)
-    {
-      const double dx = candidate[0] - current_position_[0];
-      const double dy = candidate[1] - current_position_[1];
-      const double dz = candidate[2] - current_position_[2];
-      const double dist_sq = dx * dx + dy * dy + dz * dz;
-      if (dist_sq > best_dist_sq)
-      {
-        best_dist_sq = dist_sq;
-        best_goal = candidate;
-      }
-    }
-
-    return best_goal;
+    return {{dist_x(rng_), dist_y(rng_), dist_z(rng_)}};
   }
 
-  void publishGoalTimer(const ros::TimerEvent &)
+  void publishGoal(void)
   {
-    if (!have_odom_)
+    if (!have_odom_ || !have_arrived_)
     {
       return;
     }
-
-    const std::array<double, 3> goal = pickGoal();
-
+    current_goal_ = pickGoal();
+    const double dx = current_goal_[0] - current_position_[0];
+    const double dy = current_goal_[1] - current_position_[1];
+    const double dz = current_goal_[2] - current_position_[2];
+    goal_length_ = std::sqrt(dx * dx + dy * dy + dz * dz);
+    min_arrival_time_ = goal_length_ / max_speed_ * 2.0; // add some margin
+    
     quadrotor_msgs::GoalSet goal_msg;
     goal_msg.drone_id = 0;
-    goal_msg.goal[0] = static_cast<float>(goal[0]);
-    goal_msg.goal[1] = static_cast<float>(goal[1]);
-    goal_msg.goal[2] = static_cast<float>(goal[2]);
-
+    goal_msg.goal[0] = static_cast<float>(current_goal_[0]);
+    goal_msg.goal[1] = static_cast<float>(current_goal_[1]);
+    goal_msg.goal[2] = static_cast<float>(current_goal_[2]);
+    
     goal_pub_.publish(goal_msg);
+    cur_cnt_ += 1;
+    path_length_ = 0.0;
+    have_arrived_ = false;
+    start_time_ = ros::Time::now();
+    ROS_INFO("publish goal: [%.2f, %.2f, %.2f], dist=%.2f m, t_min=%.2f s, cur_cnt: %d, (v_max=%.2f m/s)",
+             current_goal_[0], current_goal_[1], current_goal_[2], goal_length_, min_arrival_time_, cur_cnt_, max_speed_);
   }
 
   ros::NodeHandle nh_;
@@ -103,11 +132,22 @@ private:
   double map_size_x_{20.0};
   double map_size_y_{20.0};
   double map_size_z_{5.0};
-  double publish_rate_{1.0};
+  double max_speed_{1.0};
+  double min_arrival_time_{0.0};
+  double path_length_{0.0};
+  double goal_length_{0.0};
+  std::array<double, 3> last_position_{{0.0, 0.0, 0.0}};
+  int max_cnt_{10};
+  int cur_cnt_{0};
+  ros::Time start_time_;
   std::string odom_topic_;
   std::string goal_topic_;
   std::array<double, 3> current_position_{{0.0, 0.0, 0.0}};
+  std::array<double, 3> current_goal_{{0.0, 0.0, 0.0}};
+  mutable std::mt19937 rng_{std::random_device{}()};
   bool have_odom_{false};
+  bool have_arrived_{true};
+  bool have_published_{false};
 };
 
 int main(int argc, char **argv)

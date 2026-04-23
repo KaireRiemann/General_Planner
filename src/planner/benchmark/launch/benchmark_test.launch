@@ -1,14 +1,18 @@
 <launch>
 	<arg name="map_size_x" default="20.0" />
 	<arg name="map_size_y" default="20.0" />
-	<arg name="map_size_z" default="5.0" />
-	<arg name="odom_topic" default="/uav/odom" />
-	<arg name="goal_topic" default="/benchmark/goal" />
+	<arg name="map_size_z" default="2.0" />
+	<arg name="max_speed" default="1.5" />
+	<arg name="max_cnt" default="10" />
+	<arg name="odom_topic" default="/drone_0_visual_slam/odom" />
+	<arg name="goal_topic" default="/goal_with_id" />
 
 	<node pkg="benchmark" type="benchmark_node" name="benchmark_node" output="screen">
 		<param name="map_size_x" value="$(arg map_size_x)" />
 		<param name="map_size_y" value="$(arg map_size_y)" />
 		<param name="map_size_z" value="$(arg map_size_z)" />
+		<param name="max_speed" value="$(arg max_speed)" />
+		<param name="max_cnt" value="$(arg max_cnt)" />
 		<param name="odom_topic" value="$(arg odom_topic)" />
 		<param name="goal_topic" value="$(arg goal_topic)" />
 
