@@ -56,6 +56,7 @@
         <param name="fsm/planning_horizon" value="$(arg planning_horizon)" type="double"/>
         <!--always set to 1.5 times grater than sensing horizen-->
         <param name="fsm/emergency_time" value="1.0" type="double"/>
+        <param name="fsm/esdf_runtime_clearance" value="0.0" type="double"/>
         <param name="fsm/realworld_experiment" value="false"/>
         <param name="fsm/fail_safe" value="true"/>
         <param name="fsm/waypoint_num" value="$(arg point_num)" type="int"/>
@@ -128,6 +129,7 @@
         <param name="optimization/weight_time" value="10.0" type="double"/>
         <param name="optimization/obstacle_clearance" value="0.1" type="double"/>
         <param name="optimization/obstacle_clearance_soft" value="0.5" type="double"/>
+        <param name="optimization/esdf_acceptance_clearance" value="0.0" type="double"/>
         <param name="optimization/swarm_clearance" value="0.5" type="double"/>
         <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
         <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>

@@ -301,6 +301,7 @@ str = "\
         <param name=\"fsm/planning_horizon\" value=\"$(arg planning_horizon)\" type=\"double\"/>\n\
         <!--always set to 1.5 times grater than sensing horizen-->\n\
         <param name=\"fsm/emergency_time\" value=\"1.0\" type=\"double\"/>\n\
+        <param name=\"fsm/esdf_runtime_clearance\" value=\"0.0\" type=\"double\"/>\n\
         <param name=\"fsm/realworld_experiment\" value=\"false\"/>\n\
         <param name=\"fsm/fail_safe\" value=\"true\"/>\n\
         <param name=\"fsm/waypoint_num\" value=\"$(arg point_num)\" type=\"int\"/>\n"
@@ -374,6 +375,7 @@ str = "\
         <param name=\"optimization/weight_time\" value=\"10.0\" type=\"double\"/>\n\
         <param name=\"optimization/obstacle_clearance\" value=\"0.1\" type=\"double\"/>\n\
         <param name=\"optimization/obstacle_clearance_soft\" value=\"0.5\" type=\"double\"/>\n\
+        <param name=\"optimization/esdf_acceptance_clearance\" value=\"0.0\" type=\"double\"/>\n\
         <param name=\"optimization/swarm_clearance\" value=\"{sc}\" type=\"double\"/> <!-- heterogeneous support: my required clearance -->\n\
         <param name=\"optimization/max_vel\" value=\"$(arg max_vel)\" type=\"double\"/>\n\
         <param name=\"optimization/max_acc\" value=\"$(arg max_acc)\" type=\"double\"/>\n\

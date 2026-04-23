@@ -115,6 +115,7 @@ namespace ego_planner
     double wei_perching_yaw_acc_;
     double wei_perching_yaw_energy_;
     double safety_margin_;
+    double esdf_acceptance_clearance_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
     double max_vel_, max_acc_, max_jer_;
@@ -212,11 +213,11 @@ namespace ego_planner
     inline double get_swarm_clearance_(void) { return swarm_clearance_; }
     inline double getDistanceFieldCollisionTolerance(void) const
     {
-      return std::max(0.02, 0.5 * obs_clearance_);
+      return std::max(0.0, esdf_acceptance_clearance_);
     }
     inline double getDistanceFieldSoftMargin(void) const
     {
-      return std::max(0.0, 0.5 * obs_clearance_);
+      return std::max(getDistanceFieldCollisionTolerance(), safety_margin_);
     }
 
     // --- Numerical computation (implemented in traj_numerics.cpp) ---

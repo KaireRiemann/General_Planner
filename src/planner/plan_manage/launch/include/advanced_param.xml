@@ -142,6 +142,7 @@
         <param name="fsm/min_replan_interval" value="0.15" type="double"/>
         <param name="fsm/safety_replan_min_interval" value="0.20" type="double"/>
         <param name="fsm/safety_replan_emergency_bypass_time" value="0.10" type="double"/>
+        <param name="fsm/esdf_runtime_clearance" value="0.0" type="double"/>
         <param name="fsm/esdf_runtime_collision_hysteresis" value="0.03" type="double"/>
         <param name="fsm/esdf_runtime_unsafe_consecutive_samples" value="2" type="int"/>
         <param name="fsm/corridor_plain_fallback_enabled" value="false" type="bool"/>
@@ -352,6 +353,7 @@
         <param name="optimization/obstacle_clearance" value="0.1" type="double"/>
         <param name="optimization/obstacle_clearance_soft" value="0.5" type="double"/>
         <param name="optimization/safety_margin" value="0.3" type="double"/>
+        <param name="optimization/esdf_acceptance_clearance" value="0.0" type="double"/>
         <param name="optimization/swarm_clearance" value="0.15000000000000002" type="double"/> <!-- heterogeneous support: my required clearance -->
         <param name="optimization/max_vel" value="$(arg max_vel)" type="double"/>
         <param name="optimization/max_acc" value="$(arg max_acc)" type="double"/>

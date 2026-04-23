@@ -823,14 +823,35 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
   const GuidePathRuntimeConfig guide_config = makeGuideRuntimeConfig(config);
 
   Eigen::Vector3d safe_goal = goal_pt;
+  if (!guide_service.sanitizeLocalTarget(guide_config, goal_pt, safe_goal))
+  {
+    result.failure_type = TransitInitFailureType::LOCAL_TARGET_INVALID;
+    result.failure_reason = "unable to sanitize ESDF local target";
+    return false;
+  }
+
+  bool have_valid_hint = false;
   if (problem.references.guide_path.size() >= 2)
   {
     artifact.source = "compiled_hint";
     artifact.dense_path = problem.references.guide_path;
     artifact.dense_path.front() = start_pt;
     artifact.dense_path.back() = safe_goal;
+    have_valid_hint = guide_service.pathHasClearance(
+        guide_config,
+        artifact.dense_path,
+        0.0);
+    if (!have_valid_hint)
+    {
+      ROS_WARN("[CompiledS2SInit] ESDF compiler hint rejected: guide path or sanitized target is in collision; retry local A*.");
+      artifact.dense_path.clear();
+      artifact.guide_path.clear();
+      artifact.source.clear();
+    }
   }
-  else if (!guide_service.prepareLocalAStarPath(guide_config, start_pt, goal_pt, artifact.dense_path, safe_goal))
+
+  if (!have_valid_hint &&
+      !guide_service.prepareLocalAStarPath(guide_config, start_pt, safe_goal, artifact.dense_path, safe_goal))
   {
     result.failure_reason = "failed to prepare local A* path for ESDF init";
     return false;
@@ -919,7 +940,9 @@ bool TransitInitService::initializeEsdf(const TransitInitRuntimeConfig &config,
   }
 
   artifact.min_sdf = computeTrajectoryMinSdf(config, artifact.init_traj);
-  const double esdf_tol = config.grid_map ? -std::max(0.02, 0.5 * config.grid_map->getResolution()) : 0.0;
+  const double esdf_tol = config.optimizer != nullptr
+                              ? config.optimizer->getDistanceFieldCollisionTolerance()
+                              : (config.grid_map ? std::max(0.02, 0.5 * config.grid_map->getResolution()) : 0.0);
   artifact.collision_free = artifact.min_sdf >= esdf_tol;
   if (warm_start_used && artifact.source.empty())
   {

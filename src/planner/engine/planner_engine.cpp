@@ -908,11 +908,11 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     {
       const MINCOTraj3D opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
-      const double esdf_tol =
-          planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0;
-      ROS_INFO("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+      const double esdf_tol = optimizer->getDistanceFieldCollisionTolerance();
+      ROS_INFO("OPT_TRAJ_CHECK: clearance_ok=%s min_sdf=%.3f required_clearance=%.3f",
                min_sdf >= esdf_tol ? "yes" : "no",
-               min_sdf);
+               min_sdf,
+               esdf_tol);
       planner_manager_->setLocalTrajFromOpt(opt_traj, touch_goal);
       planner_manager_->clearActiveTrackingArtifacts();
       cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
@@ -925,11 +925,11 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     {
       const MINCOTraj3D &opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
-      const double esdf_tol =
-          planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0;
-      ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+      const double esdf_tol = optimizer->getDistanceFieldCollisionTolerance();
+      ROS_WARN("OPT_TRAJ_CHECK: clearance_ok=%s min_sdf=%.3f required_clearance=%.3f",
                min_sdf >= esdf_tol ? "yes" : "no",
-               min_sdf);
+               min_sdf,
+               esdf_tol);
     }
   }
   else if (planner_manager_->pp_.use_multitopology_trajs)

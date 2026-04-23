@@ -56,6 +56,10 @@ public:
                          const std::vector<Eigen::Vector3d> &dense_path,
                          std::vector<Eigen::Vector3d> &sparse_path) const;
 
+  bool pathHasClearance(const GuidePathRuntimeConfig &config,
+                        const std::vector<Eigen::Vector3d> &path,
+                        double min_clearance = -1.0) const;
+
   bool searchStateToStateDensePath(const core::PlanningContext &context,
                                    const core::TaskDefinition &task_definition,
                                    std::vector<Eigen::Vector3d> &path) const;

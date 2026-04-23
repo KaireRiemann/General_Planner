@@ -134,6 +134,7 @@ namespace ego_planner
     double min_replan_interval_{0.15};
     double safety_replan_min_interval_{0.20};
     double safety_replan_emergency_bypass_time_{0.10};
+    double esdf_runtime_clearance_{0.0};
     double esdf_runtime_collision_hysteresis_{0.03};
     int esdf_runtime_unsafe_consecutive_samples_{2};
     double corridor_fail_cooldown_{0.25};
@@ -246,6 +247,7 @@ namespace ego_planner
     Eigen::Vector3d frozen_surface_normal_{Eigen::Vector3d::UnitZ()};
     runtime::LocalTargetSelection pending_state2state_target_selection_;
     bool have_pending_state2state_target_selection_{false};
+    bool state2state_replan_from_odom_once_{false};
     core::RuntimePolicy active_state2state_runtime_policy_;
     bool have_active_state2state_runtime_policy_{false};
 

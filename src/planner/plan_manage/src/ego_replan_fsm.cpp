@@ -138,6 +138,7 @@ namespace ego_planner
     nh.param("fsm/min_replan_interval", min_replan_interval_, 0.15);
     nh.param("fsm/safety_replan_min_interval", safety_replan_min_interval_, 0.20);
     nh.param("fsm/safety_replan_emergency_bypass_time", safety_replan_emergency_bypass_time_, 0.10);
+    nh.param("fsm/esdf_runtime_clearance", esdf_runtime_clearance_, 0.0);
     nh.param("fsm/esdf_runtime_collision_hysteresis", esdf_runtime_collision_hysteresis_, 0.03);
     nh.param("fsm/esdf_runtime_unsafe_consecutive_samples", esdf_runtime_unsafe_consecutive_samples_, 2);
     nh.param("fsm/corridor_fail_cooldown", corridor_fail_cooldown_, 0.25);
@@ -229,6 +230,7 @@ namespace ego_planner
     state2state_successor_near_goal_hold_radius_ = std::max(0.1, state2state_successor_near_goal_hold_radius_);
     safety_replan_min_interval_ = std::max(0.05, safety_replan_min_interval_);
     safety_replan_emergency_bypass_time_ = std::max(0.02, safety_replan_emergency_bypass_time_);
+    esdf_runtime_clearance_ = std::max(0.0, esdf_runtime_clearance_);
     esdf_runtime_collision_hysteresis_ = std::max(0.0, esdf_runtime_collision_hysteresis_);
     esdf_runtime_unsafe_consecutive_samples_ = std::max(1, esdf_runtime_unsafe_consecutive_samples_);
     perching_arrive_pos_thresh_ = std::max(0.03, perching_arrive_pos_thresh_);
@@ -561,7 +563,24 @@ namespace ego_planner
 
     case REPLAN_TRAJ:
     {
-      if (planFromLocalTraj(1))
+      bool success = false;
+      if (state2state_replan_from_odom_once_ &&
+          !use_tracking_task_ &&
+          !use_perching_task_)
+      {
+        ROS_INFO("[FSM] new state-to-state target: replan from odom instead of old local trajectory.");
+        success = planFromGlobalTraj(1);
+        if (success)
+        {
+          state2state_replan_from_odom_once_ = false;
+        }
+      }
+      else
+      {
+        success = planFromLocalTraj(1);
+      }
+
+      if (success)
       {
         changeFSMExecState(EXEC_TRAJ, "FSM");
       }
@@ -1162,7 +1181,7 @@ namespace ego_planner
         if (!emergency_bypass && !replan_allowed)
         {
           ROS_WARN_THROTTLE(0.8,
-                            "[SAFETY] collision predicted in %.3fs but replan is throttled (min_interval=%.2f, safety_interval=%.2f).",
+                            "[SAFETY] unsafe clearance predicted in %.3fs but replan is throttled (min_interval=%.2f, safety_interval=%.2f).",
                             time_to_collision,
                             min_replan_interval_,
                             safety_replan_min_interval_);
@@ -1172,7 +1191,7 @@ namespace ego_planner
         last_safety_replan_attempt_time_ = now;
         if (planFromLocalTraj(1))
         {
-          ROS_INFO("Plan success when detect collision at future t=%f", t);
+          ROS_INFO("Plan success when detecting unsafe future sample at t=%f", t);
           changeFSMExecState(EXEC_TRAJ, "SAFETY");
         }
         else
@@ -1293,7 +1312,21 @@ namespace ego_planner
     {
       return 0.0;
     }
-    return -std::max(0.10, 0.5 * map->getResolution());
+    const bool use_esdf_runtime =
+        planner_manager_ &&
+        planner_manager_->esdfModeEnabled() &&
+        map->esdfEnabled();
+    if (!use_esdf_runtime)
+    {
+      return -std::max(0.10, 0.5 * map->getResolution());
+    }
+
+    double optimizer_clearance = 0.0;
+    if (planner_manager_->getOptimizer() != nullptr)
+    {
+      optimizer_clearance = planner_manager_->getOptimizer()->getDistanceFieldCollisionTolerance();
+    }
+    return std::max(esdf_runtime_clearance_, optimizer_clearance);
   }
 
   bool EGOReplanFSM::runtimePointUnsafe(const GridMap::Ptr &map,
@@ -2294,6 +2327,7 @@ namespace ego_planner
     have_planned_local_target_ = false;
     have_planned_final_goal_ = false;
     have_pending_state2state_target_selection_ = false;
+    state2state_replan_from_odom_once_ = false;
     have_active_state2state_runtime_policy_ = false;
     active_state2state_runtime_policy_ = core::RuntimePolicy{};
     pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
@@ -2964,6 +2998,7 @@ namespace ego_planner
 
       if (exec_state_ != WAIT_TARGET)
       {
+        state2state_replan_from_odom_once_ = true;
         while (exec_state_ != EXEC_TRAJ)
         {
           ros::spinOnce();

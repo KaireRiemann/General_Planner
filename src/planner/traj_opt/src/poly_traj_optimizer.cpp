@@ -1616,8 +1616,13 @@ namespace ego_planner
     };
 
     const double sdf_collision_tol =
-        -std::max(0.10, 0.5 * grid_map_->getResolution());
-    const double sdf_soft_margin = std::max(0.0, 0.5 * obs_clearance_);
+        perching_acceptance_active_
+            ? -std::max(0.10, 0.5 * grid_map_->getResolution())
+            : getDistanceFieldCollisionTolerance();
+    const double sdf_soft_margin =
+        perching_acceptance_active_
+            ? std::max(0.0, 0.5 * obs_clearance_)
+            : getDistanceFieldSoftMargin();
     const double init_min_sdf =
         perching_acceptance_active_ ? computeMinSdf(init_snap_traj) : computeMinSdf(init_traj);
     const bool init_esdf_free = init_min_sdf >= sdf_collision_tol;
@@ -1706,7 +1711,7 @@ namespace ego_planner
           flag_success = true;
           if (!flag_margin_safe)
           {
-            ROS_WARN("ESDF optimize accepted with small clearance: min_sdf=%.3f soft_margin=%.3f tol=%.3f",
+            ROS_WARN("ESDF optimize accepted below soft margin: min_sdf=%.3f soft_margin=%.3f required_clearance=%.3f",
                      min_sdf, sdf_soft_margin, sdf_collision_tol);
           }
         }
@@ -1715,7 +1720,7 @@ namespace ego_planner
           if (perching_acceptance_active_)
           {
             ROS_WARN("Perching ESDF optimize rejected: approach_collision_free=%s terminal_ok=%s swarm_safe=%s "
-                     "min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f "
+                     "min_sdf=%.3f safe_margin=%.3f required_clearance=%.3f "
                      "contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f approach_until=%.3f cost=%.3f",
                      flag_collision_free ? "yes" : "no",
                      perching_metrics_ok ? (perching_terminal_ok ? "yes" : "no") : "invalid",
@@ -1731,7 +1736,7 @@ namespace ego_planner
           }
           else
           {
-            ROS_WARN("ESDF optimize rejected: collision_free=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f collision_tol=%.3f cost=%.3f",
+            ROS_WARN("ESDF optimize rejected: clearance_ok=%s swarm_safe=%s min_sdf=%.3f safe_margin=%.3f required_clearance=%.3f cost=%.3f",
                      flag_collision_free ? "yes" : "no",
                      flag_swarm_too_close ? "no" : "yes",
                      min_sdf,
@@ -1790,7 +1795,7 @@ namespace ego_planner
           distanceFieldSnapOpt_.setWarmStartGuess(x0);
           last_perching_extra_vars_ = extra_vars;
           has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
-          ROS_WARN("Perching ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f).",
+          ROS_WARN("Perching ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f required_clearance=%.3f contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f).",
                    init_min_sdf,
                    sdf_collision_tol,
                    metrics.contact_position_error,
@@ -1803,7 +1808,7 @@ namespace ego_planner
       {
         Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
         final_cost = distanceFieldMincoOpt_.evaluate(x0, grad_dummy, time_cost_, distance_field_cost_manager_);
-        ROS_WARN("ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f).",
+        ROS_WARN("ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f required_clearance=%.3f).",
                  init_min_sdf,
                  sdf_collision_tol);
         return true;
@@ -3803,6 +3808,7 @@ namespace ego_planner
     nh.param("optimization/weight_time", wei_time_, -1.0);
     nh.param("optimization/weight_energy", rho_energy_, 1.0);
     nh.param("optimization/safety_margin", safety_margin_, -1.0);
+    nh.param("optimization/esdf_acceptance_clearance", esdf_acceptance_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance", obs_clearance_, -1.0);
     nh.param("optimization/obstacle_clearance_soft", obs_clearance_soft_, -1.0);
     nh.param("optimization/corridor_clearance", corridor_clearance_, 0.0);
@@ -3816,6 +3822,14 @@ namespace ego_planner
     {
       wei_dist_ = wei_obs_;
     }
+    safety_margin_ = std::max(0.0, safety_margin_);
+    obs_clearance_ = std::max(0.0, obs_clearance_);
+    obs_clearance_soft_ = std::max(obs_clearance_, obs_clearance_soft_);
+    if (esdf_acceptance_clearance_ < 0.0)
+    {
+      esdf_acceptance_clearance_ = 0.0;
+    }
+    esdf_acceptance_clearance_ = std::max(0.0, esdf_acceptance_clearance_);
     tracking_distance_min_ = std::max(0.0, tracking_distance_min_);
     tracking_distance_max_ = std::max(tracking_distance_min_ + 0.1, tracking_distance_max_);
     tracking_height_tolerance_ = std::max(0.0, tracking_height_tolerance_);

@@ -25,6 +25,41 @@ bool mapWindowReady(const GridMap::Ptr &map)
   return ((high - low).array() > 6.0 * res).all();
 }
 
+bool pointInsideUpdatedBox(const GridMap::Ptr &map, const Eigen::Vector3d &pt)
+{
+  if (!map || !mapWindowReady(map))
+  {
+    return true;
+  }
+  const Eigen::Vector3d low = map->getUpdatedBoxLow();
+  const Eigen::Vector3d high = map->getUpdatedBoxHigh();
+  return (pt.array() >= low.array()).all() && (pt.array() <= high.array()).all();
+}
+
+bool pointHasClearance(const GridMap::Ptr &map,
+                       const Eigen::Vector3d &pt,
+                       const double min_clearance)
+{
+  if (!map || !mapWindowReady(map))
+  {
+    return true;
+  }
+  if (!pointInsideUpdatedBox(map, pt))
+  {
+    return false;
+  }
+  if (map->getInflateOccupancy(pt) != 0)
+  {
+    return false;
+  }
+  if (!map->esdfEnabled())
+  {
+    return true;
+  }
+  const double sdf = map->getDistance(pt);
+  return std::isfinite(sdf) && sdf >= std::max(0.0, min_clearance);
+}
+
 double estimateObstacleClearance(const GridMap::Ptr &map,
                                  const Eigen::Vector3d &pt,
                                  const double search_radius,
@@ -157,6 +192,62 @@ bool lineOfSightFree(const ego_planner::core::PlanningContext &context,
   return context.grid_map->getInflateOccupancy(to) == 0;
 }
 
+bool segmentHasClearance(const GridMap::Ptr &map,
+                         const Eigen::Vector3d &from,
+                         const Eigen::Vector3d &to,
+                         const double min_clearance)
+{
+  if (!map || !mapWindowReady(map))
+  {
+    return true;
+  }
+
+  const Eigen::Vector3d delta = to - from;
+  const double dist = delta.norm();
+  const double resolution = std::max(map->getResolution(), 1.0e-3);
+  const double sample_step = std::max(0.5 * resolution, 0.02);
+  const int sample_num = std::max(1, static_cast<int>(std::ceil(dist / sample_step)));
+  const bool use_esdf = map->esdfEnabled();
+  const double clearance = std::max(0.0, min_clearance);
+
+  for (int i = 0; i <= sample_num; ++i)
+  {
+    const double ratio = static_cast<double>(i) / static_cast<double>(sample_num);
+    const Eigen::Vector3d pt = from + ratio * delta;
+    if (use_esdf)
+    {
+      if (!pointHasClearance(map, pt, clearance))
+      {
+        return false;
+      }
+    }
+    else if (map->getInflateOccupancy(pt) != 0)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool polylineHasClearance(const GridMap::Ptr &map,
+                          const std::vector<Eigen::Vector3d> &path,
+                          const double min_clearance)
+{
+  if (path.size() < 2)
+  {
+    return false;
+  }
+
+  for (std::size_t i = 1; i < path.size(); ++i)
+  {
+    if (!segmentHasClearance(map, path[i - 1], path[i], min_clearance))
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool sparsifyGuidePathForContext(const ego_planner::core::PlanningContext &context,
                                  const std::vector<Eigen::Vector3d> &dense_path,
                                  std::vector<Eigen::Vector3d> &sparse_path)
@@ -250,6 +341,11 @@ bool sparsifyGuidePathForContext(const ego_planner::core::PlanningContext &conte
     sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
   }
   sparse_path.push_back(dense_path.back());
+
+  if (!polylineHasClearance(context.grid_map, sparse_path, context.guide_min_clearance))
+  {
+    sparse_path = dense_path;
+  }
   return sparse_path.size() >= 2;
 }
 
@@ -281,7 +377,7 @@ bool GuidePathService::sanitizeLocalTarget(const GuidePathRuntimeConfig &config,
   const Eigen::Vector3d clamp_low = map_low + Eigen::Vector3d::Constant(2.0 * resolution);
   const Eigen::Vector3d clamp_high = map_high - Eigen::Vector3d::Constant(2.0 * resolution);
   safe_target = raw_target.cwiseMax(clamp_low).cwiseMin(clamp_high);
-  if (config.grid_map->getInflateOccupancy(safe_target) == 0)
+  if (pointHasClearance(config.grid_map, safe_target, 0.0))
   {
     return true;
   }
@@ -306,7 +402,7 @@ bool GuidePathService::sanitizeLocalTarget(const GuidePathRuntimeConfig &config,
           }
           const Eigen::Vector3d candidate =
               (safe_target + Eigen::Vector3d(dx, dy, dz) * resolution).cwiseMax(clamp_low).cwiseMin(clamp_high);
-          if (config.grid_map->getInflateOccupancy(candidate) != 0)
+          if (!pointHasClearance(config.grid_map, candidate, 0.0))
           {
             continue;
           }
@@ -464,7 +560,20 @@ bool GuidePathService::sparsifyGuidePath(const GuidePathRuntimeConfig &config,
     sparse_path.push_back(dense_path[static_cast<std::size_t>(idx)]);
   }
   sparse_path.push_back(dense_path.back());
+
+  if (!polylineHasClearance(config.grid_map, sparse_path, config.guide_min_clearance))
+  {
+    sparse_path = dense_path;
+  }
   return sparse_path.size() >= 2;
+}
+
+bool GuidePathService::pathHasClearance(const GuidePathRuntimeConfig &config,
+                                        const std::vector<Eigen::Vector3d> &path,
+                                        const double min_clearance) const
+{
+  const double clearance = min_clearance >= 0.0 ? min_clearance : config.guide_min_clearance;
+  return polylineHasClearance(config.grid_map, path, clearance);
 }
 
 bool GuidePathService::searchStateToStateDensePath(const core::PlanningContext &context,
