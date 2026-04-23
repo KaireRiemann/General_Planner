@@ -19,6 +19,8 @@
     <arg name="tracking_relative_offset_x" default="0.0"/>
     <arg name="tracking_relative_offset_y" default="0.0"/>
     <arg name="tracking_relative_offset_z" default="0.0"/>
+    <arg name="tracking_distance_min" default="1.5"/>
+    <arg name="tracking_distance_max" default="4.0"/>
     <arg name="perching_target_odom_topic" default="/perching/target_odom"/>
     <arg name="perching_lock_topic" default="/perching/lock"/>
     <arg name="perching_auto_start" default="false"/>
@@ -49,12 +51,24 @@
     <arg name="perching_weight_thrust" default="10000.0"/>
     <arg name="perching_weight_omega" default="20000.0"/>
     <arg name="perching_weight_collision" default="1000000.0"/>
+    <arg name="perching_weight_height" default="20000.0"/>
+    <arg name="perching_weight_yaw_projection" default="80.0"/>
+    <arg name="perching_weight_yaw_rate" default="20.0"/>
+    <arg name="perching_weight_yaw_acc" default="5.0"/>
+    <arg name="perching_weight_yaw_energy" default="1.0"/>
     <arg name="perching_floor_height" default="0.10"/>
     <arg name="perching_thrust_min" default="4.0"/>
     <arg name="perching_thrust_max" default="18.0"/>
     <arg name="perching_omega_max" default="3.0"/>
     <arg name="perching_robot_radius" default="0.18"/>
     <arg name="perching_platform_radius" default="1.00"/>
+    <arg name="perching_relative_height_min" default="0.03"/>
+    <arg name="perching_relative_height_max" default="3.00"/>
+    <arg name="perching_yaw_max_rate" default="1.2"/>
+    <arg name="perching_yaw_max_acc" default="3.0"/>
+    <arg name="perching_projection_margin_ratio" default="0.08"/>
+    <arg name="perching_projection_min_depth" default="0.20"/>
+    <arg name="perching_mask_platform_from_esdf" default="true"/>
     <arg name="perching_terminal_relax_time" default="0.25"/>
     <arg name="perching_contact_position_tolerance" default="0.08"/>
     <arg name="perching_relative_tangential_speed_tolerance" default="0.15"/>
@@ -120,6 +134,8 @@
         <arg name="tracking_relative_offset_x" value="$(arg tracking_relative_offset_x)" />
         <arg name="tracking_relative_offset_y" value="$(arg tracking_relative_offset_y)" />
         <arg name="tracking_relative_offset_z" value="$(arg tracking_relative_offset_z)" />
+        <arg name="tracking_distance_min" value="$(arg tracking_distance_min)" />
+        <arg name="tracking_distance_max" value="$(arg tracking_distance_max)" />
         <arg name="perching_target_odom_topic" value="$(arg perching_target_odom_topic)" />
         <arg name="perching_lock_topic" value="$(arg perching_lock_topic)" />
         <arg name="perching_auto_start" value="$(arg perching_auto_start)" />
@@ -150,12 +166,24 @@
         <arg name="perching_weight_thrust" value="$(arg perching_weight_thrust)" />
         <arg name="perching_weight_omega" value="$(arg perching_weight_omega)" />
         <arg name="perching_weight_collision" value="$(arg perching_weight_collision)" />
+        <arg name="perching_weight_height" value="$(arg perching_weight_height)" />
+        <arg name="perching_weight_yaw_projection" value="$(arg perching_weight_yaw_projection)" />
+        <arg name="perching_weight_yaw_rate" value="$(arg perching_weight_yaw_rate)" />
+        <arg name="perching_weight_yaw_acc" value="$(arg perching_weight_yaw_acc)" />
+        <arg name="perching_weight_yaw_energy" value="$(arg perching_weight_yaw_energy)" />
         <arg name="perching_floor_height" value="$(arg perching_floor_height)" />
         <arg name="perching_thrust_min" value="$(arg perching_thrust_min)" />
         <arg name="perching_thrust_max" value="$(arg perching_thrust_max)" />
         <arg name="perching_omega_max" value="$(arg perching_omega_max)" />
         <arg name="perching_robot_radius" value="$(arg perching_robot_radius)" />
         <arg name="perching_platform_radius" value="$(arg perching_platform_radius)" />
+        <arg name="perching_relative_height_min" value="$(arg perching_relative_height_min)" />
+        <arg name="perching_relative_height_max" value="$(arg perching_relative_height_max)" />
+        <arg name="perching_yaw_max_rate" value="$(arg perching_yaw_max_rate)" />
+        <arg name="perching_yaw_max_acc" value="$(arg perching_yaw_max_acc)" />
+        <arg name="perching_projection_margin_ratio" value="$(arg perching_projection_margin_ratio)" />
+        <arg name="perching_projection_min_depth" value="$(arg perching_projection_min_depth)" />
+        <arg name="perching_mask_platform_from_esdf" value="$(arg perching_mask_platform_from_esdf)" />
         <arg name="perching_terminal_relax_time" value="$(arg perching_terminal_relax_time)" />
         <arg name="perching_contact_position_tolerance" value="$(arg perching_contact_position_tolerance)" />
         <arg name="perching_relative_tangential_speed_tolerance" value="$(arg perching_relative_tangential_speed_tolerance)" />
@@ -191,6 +219,7 @@
     <node pkg="ego_planner" name="drone_$(arg drone_id)_traj_server" type="traj_server" output="screen">
         <remap from="position_cmd" to="drone_$(arg drone_id)_planning/pos_cmd"/>
         <remap from="~planning/trajectory" to="drone_$(arg drone_id)_planning/trajectory"/>
+        <remap from="~planning/perching_trajectory" to="drone_$(arg drone_id)_planning/perching_trajectory"/>
         <param name="traj_server/time_forward" value="1.0" type="double"/>
     </node>
     <!-- use simulator -->

@@ -25,6 +25,8 @@ struct PlanningSolution
 
   bool touch_goal{false};
   MINCOTraj3D trajectory;
+  bool has_snap_trajectory{false};
+  SnapTraj3D snap_trajectory;
 
   std::vector<double> yaw_time;
   std::vector<double> yaw_ref;

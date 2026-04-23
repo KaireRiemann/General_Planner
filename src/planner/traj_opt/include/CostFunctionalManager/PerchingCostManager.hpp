@@ -26,8 +26,7 @@ public:
     using Types = cost_functional::PlanningTypesAdapter;
     using PolyhedraH = spatial_map::PolyhedraH;
     using ReferencePoints = Eigen::Matrix<double, 3, Eigen::Dynamic>;
-    using PerchingMapping = minco::PerchingTerminalMapping<3, 3>;
-    using PerchingSemanticConfig = typename PerchingMapping::PerchingSemanticConfig;
+    using PerchingSemanticConfig = minco::PerchingSemanticConfig;
 
     enum SpatialMode
     {
@@ -47,12 +46,14 @@ public:
     SpatialMode spatial_mode;
     double wei_obs, wei_obs_soft, wei_dist, wei_corridor, wei_corridor_ref;
     double wei_swarm, wei_feas, wei_sqrvar;
-    double wei_perch_floor, wei_perch_thrust, wei_perch_omega, wei_perch_collision;
+    double wei_perch_floor, wei_perch_thrust, wei_perch_omega, wei_perch_collision, wei_perch_height;
     double obs_clearance, obs_clearance_soft, safe_margin;
     double corridor_clearance, corridor_smoothing, swarm_clearance;
     double max_vel, max_acc, max_jer;
     double thrust_min, thrust_max, omega_max;
     double robot_radius, platform_radius, floor_height;
+    double relative_height_min, relative_height_max;
+    bool mask_platform_from_esdf;
     int drone_id;
     double t_now;
     bool touch_goal;
@@ -65,12 +66,13 @@ public:
           spatial_mode(SPATIAL_PLAIN),
           wei_obs(0.0), wei_obs_soft(0.0), wei_dist(0.0), wei_corridor(0.0), wei_corridor_ref(0.0),
           wei_swarm(0.0), wei_feas(0.0), wei_sqrvar(0.0),
-          wei_perch_floor(0.0), wei_perch_thrust(0.0), wei_perch_omega(0.0), wei_perch_collision(0.0),
+          wei_perch_floor(0.0), wei_perch_thrust(0.0), wei_perch_omega(0.0), wei_perch_collision(0.0), wei_perch_height(0.0),
           obs_clearance(0.0), obs_clearance_soft(0.0), safe_margin(0.0),
           corridor_clearance(0.0), corridor_smoothing(0.05), swarm_clearance(0.0),
           max_vel(0.0), max_acc(0.0), max_jer(0.0),
           thrust_min(0.0), thrust_max(0.0), omega_max(0.0),
           robot_radius(0.15), platform_radius(0.50), floor_height(0.1),
+          relative_height_min(0.05), relative_height_max(3.0), mask_platform_from_esdf(true),
           drone_id(-1), t_now(0.0), touch_goal(false), min_ellip_dist2_ptr(nullptr)
     {
         accumulated_costs.resize(9);
@@ -134,10 +136,13 @@ public:
         case SPATIAL_ESDF:
             if (grid_map != nullptr && grid_map->esdfEnabled())
             {
-                Types::Vec3 sdf_grad = Types::Vec3::Zero();
-                const double sdf_value = grid_map->getDistWithGradTrilinear(position, sdf_grad);
-                cost_space += cost_functional::accumulateDistanceFieldObstaclePenalty(
-                    position, sdf_value, sdf_grad, safe_margin, wei_dist, grad_position);
+                if (!shouldMaskPerchingPlatformObstacle(t_global, position))
+                {
+                    Types::Vec3 sdf_grad = Types::Vec3::Zero();
+                    const double sdf_value = grid_map->getDistWithGradTrilinear(position, sdf_grad);
+                    cost_space += cost_functional::accumulateDistanceFieldObstaclePenalty(
+                        position, sdf_value, sdf_grad, safe_margin, wei_dist, grad_position);
+                }
             }
             break;
         case SPATIAL_PLAIN:
@@ -398,6 +403,29 @@ private:
         return semantic_config->plate_position + semantic_config->plate_velocity * dt;
     }
 
+    bool shouldMaskPerchingPlatformObstacle(const double t_global,
+                                            const Eigen::Vector3d &position) const
+    {
+        if (!perchingEnabled() || !mask_platform_from_esdf)
+        {
+            return false;
+        }
+
+        const Eigen::Vector3d plate_pos = platePositionAtTime(t_global);
+        const Eigen::Vector3d surface_z =
+            normalizedOrFallback(semantic_config->surface_z, Eigen::Vector3d::UnitZ());
+        const Eigen::Vector3d rel = position - plate_pos;
+        const double normal_offset = rel.dot(surface_z);
+        const Eigen::Vector3d tangential = rel - normal_offset * surface_z;
+        const double mask_radius =
+            std::max(0.05, platform_radius + robot_radius + 0.20);
+        const double mask_height =
+            std::max(0.05, semantic_config->robot_l + robot_radius + 0.20);
+
+        return tangential.norm() <= mask_radius &&
+               std::abs(normal_offset) <= mask_height;
+    }
+
     double accumulateFloorCost(const Eigen::Vector3d &position,
                                Eigen::Vector3d &grad_position) const
     {
@@ -414,6 +442,41 @@ private:
         }
         grad_position.z() -= wei_perch_floor * penalty_grad;
         return wei_perch_floor * penalty;
+    }
+
+    double accumulateRelativeHeightCost(const double t_global,
+                                        const Eigen::Vector3d &position,
+                                        Eigen::Vector3d &grad_position,
+                                        double &grad_time) const
+    {
+        if (!perchingEnabled() || wei_perch_height <= 0.0)
+        {
+            return 0.0;
+        }
+
+        const Eigen::Vector3d plate_pos = platePositionAtTime(t_global);
+        const Eigen::Vector3d world_z = Eigen::Vector3d::UnitZ();
+        const double delta_z = world_z.dot(position - plate_pos);
+
+        double cost = 0.0;
+        double penalty = 0.0;
+        double penalty_grad = 0.0;
+        if (cost_functional::smoothedL1(relative_height_min - delta_z, 0.01, penalty, penalty_grad))
+        {
+            cost += wei_perch_height * penalty;
+            grad_position -= wei_perch_height * penalty_grad * world_z;
+            grad_time += wei_perch_height * penalty_grad * world_z.dot(semantic_config->plate_velocity);
+        }
+
+        penalty = 0.0;
+        penalty_grad = 0.0;
+        if (cost_functional::smoothedL1(delta_z - relative_height_max, 0.01, penalty, penalty_grad))
+        {
+            cost += wei_perch_height * penalty;
+            grad_position += wei_perch_height * penalty_grad * world_z;
+            grad_time -= wei_perch_height * penalty_grad * world_z.dot(semantic_config->plate_velocity);
+        }
+        return cost;
     }
 
     double accumulateThrustCost(const Eigen::Vector3d &acceleration,
@@ -591,6 +654,7 @@ private:
 
         double cost = 0.0;
         cost += accumulateFloorCost(position, grad_position);
+        cost += accumulateRelativeHeightCost(t_global, position, grad_position, grad_time);
         cost += accumulateThrustCost(acceleration, grad_acceleration);
         cost += accumulateOmegaCost(acceleration, jerk, grad_acceleration, grad_jerk);
         cost += accumulatePerchingCollisionCost(t_global,

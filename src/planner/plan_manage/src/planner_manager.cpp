@@ -605,7 +605,7 @@ namespace ego_planner
           break;
         }
 
-        const Eigen::Vector3d pt = traj_.local_traj.traj.evaluate(t_sample, 0);
+        const Eigen::Vector3d pt = traj_.local_traj.evaluate(t_sample, 0);
         const double semantic_t = std::max(0.0, t_sample - t_local_now);
         cost_functional::VisibleFanRegion region;
         if (!cost_functional::semantic_guide::sampleVisibleFanRegion(semantic_guide, semantic_t, region) ||
@@ -2122,12 +2122,11 @@ namespace ego_planner
       {
         MINCOTraj3D opt_traj = ploy_traj_opt_->getTrajectory();
         const double min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(opt_traj);
-        const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
-        const bool esdf_free = min_sdf >= esdf_tol;
-        ROS_INFO("OPT_TRAJ_CHECK: collision_free=yes min_sdf=%.3f",
+        const double esdf_tol =
+            grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+        ROS_INFO("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
+                 min_sdf >= esdf_tol ? "yes" : "no",
                  min_sdf);
-        ROS_DEBUG("OPT_TRAJ_CHECK_DETAIL: esdf_free=%s tol=%.3f",
-                  esdf_free ? "yes" : "no", esdf_tol);
         setLocalTrajFromOpt(opt_traj, touch_goal);
         if (is_tracking_task && has_tracking_semantic_guide)
         {
@@ -2149,9 +2148,10 @@ namespace ego_planner
       {
         const MINCOTraj3D &opt_traj = ploy_traj_opt_->getTrajectory();
         const double min_sdf = state_to_state_initializer.computeTrajectoryMinSdf(opt_traj);
-        const double esdf_tol = grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
+        const double esdf_tol =
+            grid_map_ ? -std::max(0.02, 0.5 * grid_map_->getResolution()) : 0.0;
         ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-                 (min_sdf >= esdf_tol) ? "yes" : "no",
+                 min_sdf >= esdf_tol ? "yes" : "no",
                  min_sdf);
       }
     }
@@ -2305,6 +2305,13 @@ namespace ego_planner
     return true;
   }
 
+  bool EGOPlannerManager::setLocalTrajFromOpt(const SnapTraj3D &traj, const bool touch_goal)
+  {
+    (void)touch_goal;
+    traj_.setLocalTraj(traj, ros::Time::now().toSec());
+    return true;
+  }
+
   bool EGOPlannerManager::trackingSemanticHorizonValid(double t_cur, double horizon) const
   {
     if (!have_active_tracking_semantic_guide_ ||
@@ -2319,7 +2326,7 @@ namespace ego_planner
     for (double t = t_cur; t <= end_t + 1.0e-6; t += dt)
     {
       const double sample_t = std::min(t, traj_.local_traj.duration);
-      const Eigen::Vector3d pt = traj_.local_traj.traj.evaluate(sample_t, 0);
+      const Eigen::Vector3d pt = traj_.local_traj.evaluate(sample_t, 0);
       if (grid_map_ && grid_map_->getInflateOccupancy(pt) != 0)
       {
         return false;
@@ -2383,8 +2390,8 @@ namespace ego_planner
 
     for (double t = t_start; t < t_end; t += 0.03)
     {
-      Eigen::Vector3d my_pos = traj_.local_traj.traj.evaluate(t - my_traj_start_time, 0);
-      Eigen::Vector3d other_pos = traj_.swarm_traj[drone_id].traj.evaluate(t - other_traj_start_time, 0);
+      Eigen::Vector3d my_pos = traj_.local_traj.evaluate(t - my_traj_start_time, 0);
+      Eigen::Vector3d other_pos = traj_.swarm_traj[drone_id].evaluate(t - other_traj_start_time, 0);
       
       if ((my_pos - other_pos).norm() < (getSwarmClearance() + traj_.swarm_traj[drone_id].des_clearance))
       {

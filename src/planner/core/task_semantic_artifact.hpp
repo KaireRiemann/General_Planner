@@ -22,8 +22,8 @@ struct TransitSemanticArtifact
 struct PerchingSemanticArtifact
 {
   bool valid{false};
-  StateDefinition contact_state;
   StateDefinition approach_anchor_state;
+  StateDefinition contact_state;
   double approach_distance{0.0};
   Eigen::VectorXd terminal_manifold_params;
   bool touch_goal{true};

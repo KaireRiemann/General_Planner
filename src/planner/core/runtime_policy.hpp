@@ -11,6 +11,7 @@ struct RuntimePolicy
   bool allow_warm_start{true};
   bool flag_poly_init{false};
   bool flag_random_poly_traj{false};
+  bool use_fast_perching_init{false};
   bool preserve_legacy_compatibility{true};
 
   // Successor planning policy is task/runtime-level policy data.

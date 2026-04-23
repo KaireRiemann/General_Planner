@@ -218,6 +218,7 @@ str = "\
     <node pkg=\"ego_planner\" name=\"drone_$(arg drone_id)_traj_server\" type=\"traj_server\" output=\"screen\">\n\
         <remap from=\"position_cmd\" to=\"drone_$(arg drone_id)_planning/pos_cmd\"/>\n\
         <remap from=\"~planning/trajectory\" to=\"drone_$(arg drone_id)_planning/trajectory\"/>\n\
+        <remap from=\"~planning/perching_trajectory\" to=\"drone_$(arg drone_id)_planning/perching_trajectory\"/>\n\
         <param name=\"traj_server/time_forward\" value=\"1.0\" type=\"double\"/>\n\
     </node>\n\
     <!-- use simulator -->\n\
@@ -284,6 +285,7 @@ str = "\
         <remap from=\"~odom_world\" to=\"/drone_$(arg drone_id)_$(arg odometry_topic)\"/>\n\
         <remap from=\"~mandatory_stop\" to=\"/mandatory_stop_to_planner\"/>\n\
         <remap from=\"~planning/trajectory\" to = \"/drone_$(arg drone_id)_planning/trajectory\"/>\n\
+        <remap from=\"~planning/perching_trajectory\" to = \"/drone_$(arg drone_id)_planning/perching_trajectory\"/>\n\
         <remap from=\"~planning/data_display\" to = \"/drone_$(arg drone_id)_planning/data_display\"/>\n\
         <remap from=\"~planning/broadcast_traj_send\" to = \"/broadcast_traj_from_planner\"/>\n\
         <remap from=\"~planning/broadcast_traj_recv\" to = \"/broadcast_traj_to_planner\"/>\n\

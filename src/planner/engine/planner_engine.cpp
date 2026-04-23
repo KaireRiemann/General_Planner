@@ -4,6 +4,7 @@
 #include <plan_manage/tracking_yaw_planner.hpp>
 #include <MINCOTrajectory/terminal_mapping.hpp>
 #include <frontend/perching_init_service.hpp>
+#include <frontend/transit_init_service.hpp>
 #include <optimization/backend_plugin_input.hpp>
 #include <runtime/context_builder.hpp>
 #include <SFCGenerator/geo_utils.hpp>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <set>
 
 namespace
@@ -22,6 +24,9 @@ namespace
 using ego_planner::EGOPlannerManager;
 using ego_planner::MINCOBoundaryState3D;
 using ego_planner::MINCOTraj3D;
+using ego_planner::SnapBoundaryState3D;
+using ego_planner::SnapTraj3D;
+using ego_planner::YawTraj1D;
 
 struct EdgeLess
 {
@@ -89,7 +94,8 @@ void buildCorridorVisualization(const spatial_map::PolyhedraH &corridor_hpolys,
   }
 }
 
-Eigen::MatrixXd sampleTrajectoryForDisplay(const MINCOTraj3D &traj,
+template <typename TrajT>
+Eigen::MatrixXd sampleTrajectoryForDisplay(const TrajT &traj,
                                            const double dt)
 {
   const double total_t = traj.getTotalDuration();
@@ -105,6 +111,33 @@ Eigen::MatrixXd sampleTrajectoryForDisplay(const MINCOTraj3D &traj,
     pts.col(i) = traj.evaluate(ratio * total_t, 0);
   }
   return pts;
+}
+
+void sampleYawTrajectoryForReference(const YawTraj1D &traj,
+                                     const double dt,
+                                     std::vector<double> &t_ref,
+                                     std::vector<double> &yaw_ref)
+{
+  t_ref.clear();
+  yaw_ref.clear();
+  const double total_t = traj.getTotalDuration();
+  if (total_t <= 1.0e-6)
+  {
+    return;
+  }
+  const double clamped_dt = std::max(dt, 1.0e-3);
+  const int sample_num =
+      std::max(2, static_cast<int>(std::ceil(total_t / clamped_dt)) + 1);
+  t_ref.reserve(static_cast<std::size_t>(sample_num));
+  yaw_ref.reserve(static_cast<std::size_t>(sample_num));
+  for (int i = 0; i < sample_num; ++i)
+  {
+    const double ratio = (sample_num <= 1) ? 0.0
+                                           : static_cast<double>(i) / static_cast<double>(sample_num - 1);
+    const double t = ratio * total_t;
+    t_ref.push_back(t);
+    yaw_ref.push_back(traj.evaluate(t, 0)(0));
+  }
 }
 
 const char *managerDefaultModeString(const bool use_corridor, const bool use_esdf)
@@ -149,6 +182,209 @@ MINCOBoundaryState3D makeBoundaryState(const Eigen::Vector3d &pos,
     state.col(2) = acc;
   }
   return state;
+}
+
+SnapBoundaryState3D makeSnapBoundaryState(const Eigen::Vector3d &pos,
+                                          const Eigen::Vector3d &vel,
+                                          const Eigen::Vector3d &acc,
+                                          const Eigen::Vector3d &jer)
+{
+  SnapBoundaryState3D state = SnapBoundaryState3D::Zero();
+  if constexpr (SnapTraj3D::BOUNDARY_DERIVATIVE_NUM > 0)
+  {
+    state.col(0) = pos;
+  }
+  if constexpr (SnapTraj3D::BOUNDARY_DERIVATIVE_NUM > 1)
+  {
+    state.col(1) = vel;
+  }
+  if constexpr (SnapTraj3D::BOUNDARY_DERIVATIVE_NUM > 2)
+  {
+    state.col(2) = acc;
+  }
+  if constexpr (SnapTraj3D::BOUNDARY_DERIVATIVE_NUM > 3)
+  {
+    state.col(3) = jer;
+  }
+  return state;
+}
+
+double estimateMaxPerchingBodyRate(const SnapTraj3D &traj)
+{
+  const Eigen::Vector3d gravity(0.0, 0.0, -9.81);
+  const double total_t = traj.getTotalDuration();
+  if (total_t <= 1.0e-6)
+  {
+    return 0.0;
+  }
+
+  double max_omega = 0.0;
+  const double dt = 0.01;
+  const int samples = std::max(2, static_cast<int>(std::ceil(total_t / dt)) + 1);
+  for (int i = 0; i < samples; ++i)
+  {
+    const double t = total_t * static_cast<double>(i) /
+                     static_cast<double>(std::max(1, samples - 1));
+    const Eigen::Vector3d acc = traj.evaluate(t, 2);
+    const Eigen::Vector3d jerk = traj.evaluate(t, 3);
+    const Eigen::Vector3d thrust = acc - gravity;
+    const double thrust_norm = thrust.norm();
+    if (thrust_norm < 1.0e-5)
+    {
+      return std::numeric_limits<double>::infinity();
+    }
+    const Eigen::Matrix3d d_normalized =
+        (Eigen::Matrix3d::Identity() -
+         thrust * thrust.transpose() / thrust.squaredNorm()) /
+        thrust_norm;
+    max_omega = std::max(max_omega, (d_normalized * jerk).norm());
+  }
+  return max_omega;
+}
+
+bool buildFastPerchingInitArtifact(
+    const ego_planner::frontend::TransitInitRuntimeConfig &config,
+    const ego_planner::core::PlanningProblem &problem,
+    const ego_planner::frontend::PerchingInitArtifact &perching_init,
+    ego_planner::frontend::InitArtifact &artifact)
+{
+  artifact = ego_planner::frontend::InitArtifact{};
+  const auto &decoded = perching_init.decoded_contact_semantics;
+  if (!decoded.valid || !problem.start_boundary.valid)
+  {
+    return false;
+  }
+
+  const double max_vel =
+      config.plan_params != nullptr
+          ? std::max(0.2, config.plan_params->max_vel_)
+          : 1.5;
+  int piece_num = 10;
+  ros::param::param("/debug/perching_fast_piece_num", piece_num, piece_num);
+  piece_num = std::max(3, std::min(20, piece_num));
+
+  const Eigen::Vector3d gravity(0.0, 0.0, -9.81);
+  const Eigen::Vector3d start_pos = problem.start_boundary.position;
+  const Eigen::Vector3d start_vel = problem.start_boundary.velocity;
+  const Eigen::Vector3d start_acc = problem.start_boundary.acceleration;
+  const Eigen::Vector3d start_jerk = Eigen::Vector3d::Zero();
+
+  const auto tailAt = [&](const double total_t,
+                          MINCOBoundaryState3D &tail_state,
+                          SnapBoundaryState3D &snap_tail_state)
+  {
+    const double dt_from_ref = total_t - decoded.reference_time;
+    const Eigen::Vector3d tail_pos =
+        decoded.plate_position_ref +
+        decoded.plate_velocity * dt_from_ref +
+        decoded.robot_l * decoded.surface_z;
+    const Eigen::Vector3d tail_vel =
+        decoded.plate_velocity -
+        decoded.v_plus * decoded.surface_z;
+    const double terminal_thrust =
+        decoded.use_dynamics_terminal_accel
+            ? decoded.thrust_nominal +
+                  decoded.thrust_range * std::sin(decoded.tau_f_seed)
+            : 0.0;
+    const Eigen::Vector3d tail_acc =
+        decoded.use_dynamics_terminal_accel
+            ? terminal_thrust * decoded.surface_z + gravity
+            : perching_init.predicted_contact_state.contact_acceleration;
+    tail_state = makeBoundaryState(tail_pos, tail_vel, tail_acc);
+    snap_tail_state =
+        makeSnapBoundaryState(tail_pos, tail_vel, tail_acc, Eigen::Vector3d::Zero());
+  };
+
+  const Eigen::Vector3d nominal_contact =
+      perching_init.predicted_contact_state.valid
+          ? perching_init.predicted_contact_state.contact_position
+          : decoded.plate_position_ref + decoded.robot_l * decoded.surface_z;
+  double total_t = std::max(decoded.reference_time,
+                            (nominal_contact - start_pos).norm() / max_vel);
+  total_t = std::max(total_t, 0.15 * static_cast<double>(piece_num));
+
+  const SnapBoundaryState3D snap_head =
+      makeSnapBoundaryState(start_pos, start_vel, start_acc, start_jerk);
+  const Eigen::MatrixXd no_inner(3, 0);
+  Eigen::VectorXd one_piece_time(1);
+  SnapTraj3D one_piece_bvp;
+  MINCOBoundaryState3D tail_state = MINCOBoundaryState3D::Zero();
+  SnapBoundaryState3D snap_tail_state = SnapBoundaryState3D::Zero();
+
+  double max_omega = std::numeric_limits<double>::infinity();
+  bool have_bvp = false;
+  constexpr double kFastPerchingOmegaLimit = 4.5;
+  for (int attempt = 0; attempt < 10; ++attempt)
+  {
+    tailAt(total_t, tail_state, snap_tail_state);
+    one_piece_time(0) = total_t;
+    if (one_piece_bvp.generate(no_inner, snap_head, snap_tail_state, one_piece_time))
+    {
+      max_omega = estimateMaxPerchingBodyRate(one_piece_bvp);
+      have_bvp = std::isfinite(max_omega) && max_omega <= kFastPerchingOmegaLimit;
+      if (have_bvp)
+      {
+        break;
+      }
+    }
+    total_t += 0.5;
+  }
+  if (!have_bvp)
+  {
+    tailAt(total_t, tail_state, snap_tail_state);
+    one_piece_time(0) = total_t;
+    have_bvp = one_piece_bvp.generate(no_inner, snap_head, snap_tail_state, one_piece_time);
+    max_omega = have_bvp ? estimateMaxPerchingBodyRate(one_piece_bvp)
+                         : std::numeric_limits<double>::infinity();
+  }
+  if (!have_bvp)
+  {
+    return false;
+  }
+
+  artifact.head_state = makeBoundaryState(start_pos, start_vel, start_acc);
+  artifact.tail_state = tail_state;
+  artifact.durations = Eigen::VectorXd::Constant(piece_num,
+                                                 total_t / static_cast<double>(piece_num));
+  artifact.inner_points.resize(3, piece_num - 1);
+  artifact.guide_path.clear();
+  artifact.guide_path.reserve(static_cast<std::size_t>(piece_num + 1));
+  artifact.guide_path.push_back(start_pos);
+  for (int i = 1; i < piece_num; ++i)
+  {
+    const double t = total_t * static_cast<double>(i) /
+                     static_cast<double>(piece_num);
+    artifact.inner_points.col(i - 1) = one_piece_bvp.evaluate(t, 0);
+    artifact.guide_path.push_back(artifact.inner_points.col(i - 1));
+  }
+  artifact.guide_path.push_back(tail_state.col(0));
+  artifact.dense_path = artifact.guide_path;
+
+  if (!artifact.init_traj.generate(artifact.inner_points,
+                                   artifact.head_state,
+                                   artifact.tail_state,
+                                   artifact.durations))
+  {
+    return false;
+  }
+
+  artifact.source = "fast_perching_bvp_direct";
+  artifact.valid = artifact.init_traj.getTotalDuration() > 1.0e-6;
+  artifact.collision_free = true;
+  artifact.inside_corridor = true;
+  ROS_INFO("[FastPerchingInit] direct BVP seed pieces=%d T=%.2f dT=%.2f max_omega_seed=%.2f ref_t=%.2f start=[%.2f %.2f %.2f] tail=[%.2f %.2f %.2f]",
+           piece_num,
+           total_t,
+           total_t / static_cast<double>(piece_num),
+           max_omega,
+           decoded.reference_time,
+           start_pos.x(),
+           start_pos.y(),
+           start_pos.z(),
+           tail_state.col(0).x(),
+           tail_state.col(0).y(),
+           tail_state.col(0).z());
+  return artifact.valid;
 }
 
 const char *activeSpaceModelString(const ego_planner::core::ActiveSpaceModel mode)
@@ -471,7 +707,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
       !problem.start_boundary.valid ||
       !problem.terminal_boundary.valid)
   {
-    return fillCompiledFailure("compiled problem is missing valid MINCO boundaries");
+  return fillCompiledFailure("compiled problem is missing valid MINCO boundaries");
   }
 
   state_to_state_initializer_.setResources(planner_manager_->makeStateToStateInitResources());
@@ -521,7 +757,7 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
       solver_input.dense_path.empty() ? solver_input.guide_path : solver_input.dense_path;
   const std::string &solver_init_source = solver_input.source;
   const char *selected_mode_str = activeSpaceModelString(init_result.selected_mode);
-  const bool touch_goal =
+  bool touch_goal =
       plugin_input.task_semantics != nullptr
           ? plugin_input.task_semantics->transit.touch_goal
           : task_definition.runtime_policy.touch_goal;
@@ -689,8 +925,10 @@ bool PlannerEngine::solveStateToStateCompiledProblem(const core::PlanningProblem
     {
       const MINCOTraj3D &opt_traj = optimizer->getTrajectory();
       const double min_sdf = state_to_state_initializer_.computeTrajectoryMinSdf(opt_traj);
+      const double esdf_tol =
+          planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0;
       ROS_WARN("OPT_TRAJ_CHECK: collision_free=%s min_sdf=%.3f",
-               min_sdf >= (planner_manager_->grid_map_ ? -std::max(0.02, 0.5 * planner_manager_->grid_map_->getResolution()) : 0.0) ? "yes" : "no",
+               min_sdf >= esdf_tol ? "yes" : "no",
                min_sdf);
     }
   }
@@ -851,6 +1089,27 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
     return false;
   }
 
+  if (problem.task_definition.runtime_policy.use_fast_perching_init)
+  {
+    frontend::InitArtifact fast_init;
+    if (buildFastPerchingInitArtifact(perching_init_config,
+                                      problem,
+                                      perching_init,
+                                      fast_init))
+    {
+      perching_init.transit_init = fast_init;
+      perching_init.selected_mode = core::ActiveSpaceModel::PLAIN;
+      perching_init.message = "fast perching direct BVP init ready";
+      ROS_INFO("[CompiledPerchingInit] use_fast_perching_init=yes source=%s force_selected_mode=PLAIN",
+               fast_init.source.c_str());
+    }
+    else
+    {
+      ROS_WARN("[CompiledPerchingInit] use_fast_perching_init requested but BVP seed failed; fallback to %s",
+               perching_init.transit_init.source.c_str());
+    }
+  }
+
   const frontend::InitArtifact &init_artifact = perching_init.transit_init;
   populateInitArtifacts(init_artifact, solution);
   const frontend::InitArtifact &solver_input = init_artifact;
@@ -890,7 +1149,7 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
     return false;
   }
 
-  minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S> perching_mapping;
+  minco::PerchingTerminalMapping<3, ego_planner::SNAP_TRAJ_S> perching_mapping;
   const auto &decoded = perching_init.decoded_contact_semantics;
   const auto &predicted_contact = perching_init.predicted_contact_state;
   const auto &anchor = perching_init.pre_contact_anchor_state;
@@ -899,7 +1158,7 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
   //   phase 1 -> contact_final manifold drives terminal mapping
   // This PR keeps a single optimize call, but makes the two semantic roles
   // explicit in the initialization and final-terminal configuration below.
-  typename minco::PerchingTerminalMapping<3, ego_planner::MINCO_TRAJ_S>::PerchingSemanticConfig
+  typename minco::PerchingTerminalMapping<3, ego_planner::SNAP_TRAJ_S>::PerchingSemanticConfig
       perching_semantics;
   perching_semantics.plate_position = decoded.plate_position_ref;
   perching_semantics.plate_velocity = decoded.plate_velocity;
@@ -1106,7 +1365,7 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
     return false;
   }
 
-  const MINCOTraj3D opt_traj = optimizer->getTrajectory();
+  const SnapTraj3D opt_traj = optimizer->getSnapTrajectory();
   const double total_T = opt_traj.getTotalDuration();
   const Eigen::Vector3d final_pos = opt_traj.evaluate(total_T, 0);
   const Eigen::Vector3d final_vel = opt_traj.evaluate(total_T, 1);
@@ -1130,14 +1389,64 @@ bool PlannerEngine::solvePerchingCompiledProblem(const core::PlanningProblem &pr
            predicted_plate_at_touch.z(),
            decoded.reference_time);
 
+  const double yaw0 = [&]() -> double
+  {
+    const auto &prev_local = planner_manager_->traj_.local_traj;
+    if (prev_local.has_yaw_ref)
+    {
+      const double t_local_now =
+          std::max(0.0, ros::Time::now().toSec() - prev_local.start_time);
+      return prev_local.sampleYaw(t_local_now);
+    }
+    if (problem.start_boundary.velocity.head<2>().norm() > 1.0e-3)
+    {
+      return std::atan2(problem.start_boundary.velocity.y(),
+                       problem.start_boundary.velocity.x());
+    }
+    const Eigen::Vector3d rel = decoded.plate_position_ref - problem.start_boundary.position;
+    if (rel.head<2>().norm() > 1.0e-3)
+    {
+      return std::atan2(rel.y(), rel.x());
+    }
+    return 0.0;
+  }();
+
   planner_manager_->setLocalTrajFromOpt(opt_traj, true);
+  double yaw_cost = 0.0;
+  if (optimizer->optimizePerchingYawProjectionTrajectory(
+          opt_traj,
+          perching_semantics,
+          yaw0,
+          yaw_cost))
+  {
+    YawTraj1D yaw_traj;
+    if (optimizer->getPerchingYawTrajectory(yaw_traj))
+    {
+      std::vector<double> yaw_time;
+      std::vector<double> yaw_ref;
+      sampleYawTrajectoryForReference(yaw_traj, 0.05, yaw_time, yaw_ref);
+      planner_manager_->traj_.setLocalYawTraj(yaw_traj);
+      planner_manager_->traj_.setLocalYawRef(yaw_time, yaw_ref);
+      ROS_INFO("[CompiledPerching] yaw_projection_ref samples=%zu cost=%.3f",
+               yaw_ref.size(),
+               yaw_cost);
+    }
+  }
+  else
+  {
+    ROS_WARN("[CompiledPerching] yaw projection optimization failed; local yaw_ref is not updated.");
+  }
   planner_manager_->clearActiveTrackingArtifacts();
   cstr_pts = sampleTrajectoryForDisplay(opt_traj, 0.02);
   if (visualization)
   {
     visualization->displayOptimalList(cstr_pts, 2);
   }
-  solution.trajectory = planner_manager_->traj_.local_traj.traj;
+  solution.has_snap_trajectory = true;
+  solution.snap_trajectory = opt_traj;
+  solution.has_yaw_ref = planner_manager_->traj_.local_traj.has_yaw_ref;
+  solution.yaw_time = planner_manager_->traj_.local_traj.yaw_time;
+  solution.yaw_ref = planner_manager_->traj_.local_traj.yaw_ref;
   return true;
 }
 

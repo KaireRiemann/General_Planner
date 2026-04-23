@@ -17,18 +17,31 @@ namespace ego_planner
   //  Type aliases for the MINCO-based trajectory system
   // =====================================================
   constexpr int TRAJ_DIM = MINCO_TRAJ_DIM;
-  constexpr int MINCO_S = MINCO_TRAJ_S;
-  constexpr int MINCO_ORDER = MINCO_TRAJ_ORDER;
+  constexpr int JERK_S = JERK_TRAJ_S;
+  constexpr int JERK_ORDER = JERK_TRAJ_ORDER;
   constexpr int SNAP_S = SNAP_TRAJ_S;
   constexpr int SNAP_ORDER = SNAP_TRAJ_ORDER;
-  using MINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
-  using ESDFMINCOOpt = MINCOOpt;
-  using CorridorMINCOOpt = minco::MINCOOptimizer<TRAJ_DIM, MINCO_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
+  constexpr int YAW_DIM = YAW_TRAJ_DIM;
+  constexpr int YAW_S = YAW_TRAJ_S;
+  constexpr int YAW_ORDER = YAW_TRAJ_ORDER;
+  using JerkOpt = minco::MINCOOptimizer<TRAJ_DIM, JERK_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
+  using ESDFJerkOpt = JerkOpt;
+  using CorridorJerkOpt = minco::MINCOOptimizer<TRAJ_DIM, JERK_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
   using SnapOpt = minco::MINCOOptimizer<TRAJ_DIM, SNAP_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<TRAJ_DIM>>;
   using ESDFSnapOpt = SnapOpt;
   using CorridorSnapOpt = minco::MINCOOptimizer<TRAJ_DIM, SNAP_S, temporal_map::QuadInvTimeMap, spatial_map::PolytopeSpatialMap>;
-  using MINCOTraj = MINCOTraj3D;
+  using YawOpt = minco::MINCOOptimizer<YAW_DIM, YAW_S, temporal_map::QuadInvTimeMap, spatial_map::IdentitySpatialMap<YAW_DIM>>;
+  using JerkTraj = JerkTraj3D;
   using SnapTraj = SnapTraj3D;
+  using YawTraj = YawTraj1D;
+
+  // Backward-compatible aliases for existing S=3 code paths.
+  constexpr int MINCO_S = JERK_S;
+  constexpr int MINCO_ORDER = JERK_ORDER;
+  using MINCOOpt = JerkOpt;
+  using ESDFMINCOOpt = ESDFJerkOpt;
+  using CorridorMINCOOpt = CorridorJerkOpt;
+  using MINCOTraj = JerkTraj;
   using Vec3 = Eigen::Vector3d;
   using WaypointsMat = Eigen::Matrix<double, Eigen::Dynamic, TRAJ_DIM>;
   

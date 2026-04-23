@@ -20,6 +20,7 @@ find_package(Eigen3 REQUIRED)
 add_message_files(
   FILES
   DataDisp.msg
+  PerchingTraj.msg
   PolyTraj.msg
   )
   

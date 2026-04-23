@@ -55,14 +55,14 @@ namespace cost_functional
             Types::Vec3 swarm_v;
             if (point_time < (*swarm_trajs)[id].duration)
             {
-                swarm_p = (*swarm_trajs)[id].traj.evaluate(0.0 + point_time,0);
-                swarm_v = (*swarm_trajs)[id].traj.evaluate(0.0 + point_time,1);
+                swarm_p = (*swarm_trajs)[id].evaluate(0.0 + point_time, 0);
+                swarm_v = (*swarm_trajs)[id].evaluate(0.0 + point_time, 1);
             }
             else
             {
                 const double end_t = 0.0 + (*swarm_trajs)[id].duration;
-                swarm_v = (*swarm_trajs)[id].traj.evaluate(end_t, 1);
-                swarm_p = (*swarm_trajs)[id].traj.evaluate(end_t, 0) +
+                swarm_v = (*swarm_trajs)[id].evaluate(end_t, 1);
+                swarm_p = (*swarm_trajs)[id].evaluate(end_t, 0) +
                         (point_time - (*swarm_trajs)[id].duration) * swarm_v;
             }
 

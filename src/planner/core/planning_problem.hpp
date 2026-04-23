@@ -99,18 +99,11 @@ struct VariableLayoutSpec
 struct PhaseProblemSpec
 {
   std::string name;
-  // Solver-facing phase goal IR. This preserves the concrete phase target even
-  // when later stages do not directly consume TaskDefinition anymore.
-  GoalDefinition goal;
-  // Cached terminal-set state for solver-side phase consumers that do not
-  // want to depend on GoalDefinition directly.
-  BoundaryConditionSpec goal_state;
-  // Cached terminal-manifold payload. Perching uses this for phase 1
-  // `contact_final`, while non-manifold tasks simply keep it empty.
-  Eigen::VectorXd manifold_params;
   bool terminal_is_set{false};
   bool terminal_is_manifold{false};
-  // Backward-compatible cached mirrors kept for older call sites.
+  GoalDefinition goal;
+  StateDefinition goal_state;
+  Eigen::VectorXd manifold_params;
   bool has_cached_goal_state{false};
   StateDefinition cached_goal_state;
   bool has_cached_manifold_params{false};

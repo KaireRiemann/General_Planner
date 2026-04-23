@@ -5,6 +5,7 @@
 #include "optimizer/traj_types.h"
 #include "CostFunctionalManager/EgoCostManager.hpp"
 #include "CostFunctionalManager/PerchingCostManager.hpp"
+#include "CostFunctionalManager/PerchingYawCostManager.hpp"
 #include "CostFunctionalManager/CorridorCostManager.hpp"
 #include "CostFunctionalManager/DistanceFieldCostManager.hpp"
 #include "CostFunctionalManager/TrackingCostManager.hpp"
@@ -17,6 +18,7 @@
 #include <path_searching/dyn_a_star.h>
 #include <ros/ros.h>
 #include "optimizer/lbfgs.hpp"
+#include <algorithm>
 #include <memory>
 #include <limits>
 
@@ -36,14 +38,20 @@ namespace ego_planner
     cost_functional::LinearTimeCost time_cost_;
     cost_functional::EgoCostFunctionalManager cost_manager_;
     cost_functional::PerchingCostFunctionalManager perching_cost_manager_;
+    cost_functional::PerchingYawCostFunctionalManager perching_yaw_cost_manager_;
     cost_functional::CorridorCostFunctionalManager corridor_cost_manager_;
     cost_functional::DistanceFieldCostFunctionalManager distance_field_cost_manager_;
     cost_functional::TrackingCostFunctionalManager tracking_cost_manager_;
     cost_functional::TrackingCorridorCostFunctionalManager tracking_corridor_cost_manager_;
 
-    MINCOOpt mincoOpt_;
-    ESDFMINCOOpt distanceFieldMincoOpt_;
-    CorridorMINCOOpt corridorMincoOpt_;
+    JerkOpt mincoOpt_;
+    ESDFJerkOpt distanceFieldMincoOpt_;
+    CorridorJerkOpt corridorMincoOpt_;
+    SnapOpt snapOpt_;
+    ESDFSnapOpt distanceFieldSnapOpt_;
+    CorridorSnapOpt corridorSnapOpt_;
+    YawOpt perchingYawOpt_;
+    YawTraj perching_yaw_traj_;
     spatial_map::PolytopeSpatialMap corridorSpatialMap_;
     spatial_map::PolyhedraV corridor_vpolys_;
     Eigen::VectorXi corridor_vpoly_idx_;
@@ -101,6 +109,11 @@ namespace ego_planner
     double wei_perching_thrust_;
     double wei_perching_omega_;
     double wei_perching_collision_;
+    double wei_perching_height_;
+    double wei_perching_yaw_projection_;
+    double wei_perching_yaw_rate_;
+    double wei_perching_yaw_acc_;
+    double wei_perching_yaw_energy_;
     double safety_margin_;
     double obs_clearance_, obs_clearance_soft_, swarm_clearance_;
     double corridor_clearance_, corridor_smoothing_;
@@ -111,6 +124,13 @@ namespace ego_planner
     double perching_omega_max_;
     double perching_robot_radius_;
     double perching_platform_radius_;
+    double perching_relative_height_min_;
+    double perching_relative_height_max_;
+    double perching_yaw_max_rate_;
+    double perching_yaw_max_acc_;
+    cost_functional::PerchingProjectionCamera perching_projection_camera_;
+    cost_functional::PerchingYawProjectionConfig perching_projection_config_;
+    bool perching_mask_platform_from_esdf_;
     double rho_energy_{1.0};
     enum OptimizeMode
     {
@@ -123,6 +143,7 @@ namespace ego_planner
     bool tracking_task_enabled_{false};
     bool tracking_semantic_enabled_{false};
     const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> *terminal_mapping_{nullptr};
+    const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> *snap_terminal_mapping_{nullptr};
     cost_functional::TrackingReference tracking_reference_;
     cost_functional::TrackingSemanticGuide tracking_semantic_guide_;
 
@@ -182,10 +203,21 @@ namespace ego_planner
 
     /* helper functions */
     inline const ConstraintPoints &getControlPoints(void) { return cps_; }
-    inline const MINCOOpt &getMINCOOpt(void) const { return mincoOpt_; }
+    inline const JerkOpt &getMINCOOpt(void) const { return mincoOpt_; }
+    inline const SnapOpt &getSnapOpt(void) const { return snapOpt_; }
     const MINCOTraj &getTrajectory(void) const;
+    const SnapTraj &getSnapTrajectory(void) const;
+    bool getPerchingYawTrajectory(YawTraj &traj) const;
     inline int get_cps_num_prePiece_(void) { return cps_num_prePiece_; }
     inline double get_swarm_clearance_(void) { return swarm_clearance_; }
+    inline double getDistanceFieldCollisionTolerance(void) const
+    {
+      return std::max(0.02, 0.5 * obs_clearance_);
+    }
+    inline double getDistanceFieldSoftMargin(void) const
+    {
+      return std::max(0.0, 0.5 * obs_clearance_);
+    }
 
     // --- Numerical computation (implemented in traj_numerics.cpp) ---
     MINCOTraj generateTrajectory(const Eigen::MatrixXd &initState, const Eigen::MatrixXd &finState,
@@ -213,20 +245,25 @@ namespace ego_planner
                             double &final_cost);
     bool optimizePerchingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
-                                    const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                    const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
                                     double &final_cost);
     bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                     const cost_functional::TrackingReference &tracking_ref,
                                     const cost_functional::TrackingSemanticGuide *tracking_semantic_guide,
                                     double &final_cost);
+    bool optimizePerchingYawProjectionTrajectory(
+        const SnapTraj &position_traj,
+        const minco::PerchingSemanticConfig &semantic_config,
+        double yaw0,
+        double &final_cost);
 
     bool optimizeTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                              const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                              double &final_cost);
     bool optimizePerchingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                                      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
-                                                     const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                                     const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
                                                      double &final_cost);
     bool optimizeTrackingTrajectoryWithDistanceField(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                                      const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -243,7 +280,7 @@ namespace ego_planner
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
                                     const spatial_map::PolyhedraH &corridor_hpolys,
                                     const Eigen::VectorXi *corridor_piece_idx,
-                                    const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+                                    const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
                                     double &final_cost);
     bool optimizeTrackingTrajectory(const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
                                     const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
@@ -270,12 +307,22 @@ namespace ego_planner
     bool isTrajectoryCollisionFree(const MINCOTraj &traj) const;
     bool isTrajectoryCollisionFreeUntil(const MINCOTraj &traj,
                                         double until_time) const;
+    bool isTrajectoryCollisionFree(const SnapTraj &traj) const;
+    bool isTrajectoryCollisionFreeUntil(const SnapTraj &traj,
+                                        double until_time) const;
 
 
     bool isTrajectoryInsideCorridor(const MINCOTraj &traj,
                                 const spatial_map::PolyhedraH &corridor_hpolys,
                                 double margin) const;
     bool isTrajectoryInsideCorridorUntil(const MINCOTraj &traj,
+                                         const spatial_map::PolyhedraH &corridor_hpolys,
+                                         double margin,
+                                         double until_time) const;
+    bool isTrajectoryInsideCorridor(const SnapTraj &traj,
+                                const spatial_map::PolyhedraH &corridor_hpolys,
+                                double margin) const;
+    bool isTrajectoryInsideCorridorUntil(const SnapTraj &traj,
                                          const spatial_map::PolyhedraH &corridor_hpolys,
                                          double margin,
                                          double until_time) const;
@@ -306,6 +353,14 @@ namespace ego_planner
         const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
         PerchingTerminalMetrics &metrics) const;
 
+    bool evaluatePerchingTerminalMetrics(
+        const SnapTraj &traj,
+        const SnapBoundaryState3D &iniState,
+        const SnapBoundaryState3D &nominalTailState,
+        const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
+        const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
+        PerchingTerminalMetrics &metrics) const;
+
     bool pointInsidePolytope(const Eigen::Vector3d &pt,
                             const spatial_map::PolyhedronH &hpoly,
                             double margin) const;
@@ -330,6 +385,7 @@ namespace ego_planner
     WarmStartOrigin esdf_warm_start_origin_{WarmStartOrigin::NONE};
     WarmStartOrigin corridor_warm_start_origin_{WarmStartOrigin::NONE};
     bool perching_acceptance_active_{false};
+    bool has_perching_yaw_traj_{false};
     bool has_last_perching_extra_vars_{false};
     Eigen::VectorXd last_perching_extra_vars_;
   };

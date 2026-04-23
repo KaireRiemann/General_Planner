@@ -11,13 +11,13 @@
     <arg name="init_z" default="1.0"/>
 
     <arg name="use_esdf" default="false"/>
-    <arg name="use_sfc_corridor" default="true"/>
+    <arg name="use_sfc_corridor" default="false"/>
     <arg name="enable_esdf" default="false"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="rviz" default="true"/>
 
     <arg name="use_static_map" default="true"/>
-    <arg name="map_name" default="$(find map_generator)/resource/LibraryLG_01cutoff_sor.pcd"/>
+    <arg name="map_name" default="$(find map_generator)/resource/big_field.pcd"/>
     <arg name="downsample_resolution" default="0.1"/>
     <arg name="map_offset_x" default="0.0"/>
     <arg name="map_offset_y" default="0.0"/>

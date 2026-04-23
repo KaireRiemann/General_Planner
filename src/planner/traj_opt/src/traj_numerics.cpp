@@ -34,6 +34,20 @@ namespace ego_planner
     }
   }
 
+  const SnapTraj &PolyTrajOptimizer::getSnapTrajectory() const
+  {
+    switch (optimize_mode_)
+    {
+    case MODE_CORRIDOR:
+      return corridorSnapOpt_.getTrajectory();
+    case MODE_ESDF:
+      return distanceFieldSnapOpt_.getTrajectory();
+    case MODE_PLAIN:
+    default:
+      return snapOpt_.getTrajectory();
+    }
+  }
+
   bool PolyTrajOptimizer::computePointsToCheck(
       const MINCOTraj &traj,
       int id_cps_end, PtsChk_t &pts_check)
@@ -172,14 +186,14 @@ namespace ego_planner
       }
       else if (opt->perching_acceptance_active_)
       {
-        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
-                         ? opt->corridorMincoOpt_.evaluateWithTerminalMapping(
+        total_cost = (opt->snap_terminal_mapping_ != nullptr && opt->snap_terminal_mapping_->enabled())
+                         ? opt->corridorSnapOpt_.evaluateWithTerminalMapping(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
                                opt->perching_cost_manager_,
-                               opt->terminal_mapping_)
-                         : opt->corridorMincoOpt_.evaluate(
+                               opt->snap_terminal_mapping_)
+                         : opt->corridorSnapOpt_.evaluate(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
@@ -226,14 +240,14 @@ namespace ego_planner
       }
       else if (opt->perching_acceptance_active_)
       {
-        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
-                         ? opt->distanceFieldMincoOpt_.evaluateWithTerminalMapping(
+        total_cost = (opt->snap_terminal_mapping_ != nullptr && opt->snap_terminal_mapping_->enabled())
+                         ? opt->distanceFieldSnapOpt_.evaluateWithTerminalMapping(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
                                opt->perching_cost_manager_,
-                               opt->terminal_mapping_)
-                         : opt->distanceFieldMincoOpt_.evaluate(
+                               opt->snap_terminal_mapping_)
+                         : opt->distanceFieldSnapOpt_.evaluate(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
@@ -256,7 +270,9 @@ namespace ego_planner
       }
 
       const Eigen::MatrixXd constraint_points =
-          opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+          (opt->perching_acceptance_active_
+               ? opt->distanceFieldSnapOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_)
+               : opt->distanceFieldMincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_));
       opt->syncConstraintPointStorage(constraint_points);
     }
     else
@@ -285,14 +301,14 @@ namespace ego_planner
       }
       else if (opt->perching_acceptance_active_)
       {
-        total_cost = (opt->terminal_mapping_ != nullptr && opt->terminal_mapping_->enabled())
-                         ? opt->mincoOpt_.evaluateWithTerminalMapping(
+        total_cost = (opt->snap_terminal_mapping_ != nullptr && opt->snap_terminal_mapping_->enabled())
+                         ? opt->snapOpt_.evaluateWithTerminalMapping(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
                                opt->perching_cost_manager_,
-                               opt->terminal_mapping_)
-                         : opt->mincoOpt_.evaluate(
+                               opt->snap_terminal_mapping_)
+                         : opt->snapOpt_.evaluate(
                                x_vec,
                                grad_vec,
                                time_cost_wrapper,
@@ -315,7 +331,9 @@ namespace ego_planner
       }
 
       const Eigen::MatrixXd constraint_points =
-          opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_);
+          (opt->perching_acceptance_active_
+               ? opt->snapOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_)
+               : opt->mincoOpt_.getTrajectory().getInitConstraintPoints(opt->cps_num_prePiece_));
       opt->syncConstraintPointStorage(constraint_points);
 
       if (opt->allowRebound())

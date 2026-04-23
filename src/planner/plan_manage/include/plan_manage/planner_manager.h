@@ -61,6 +61,7 @@ namespace ego_planner
     bool checkCollision(int drone_id);
     
     bool setLocalTrajFromOpt(const MINCOTraj3D &traj, const bool touch_goal);
+    bool setLocalTrajFromOpt(const SnapTraj3D &traj, const bool touch_goal);
     bool trackingSemanticHorizonValid(double t_cur, double horizon) const;
     
     inline double getSwarmClearance(void) { return ploy_traj_opt_->get_swarm_clearance_(); }

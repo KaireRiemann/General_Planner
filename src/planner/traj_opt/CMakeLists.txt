@@ -30,6 +30,7 @@ catkin_package(
 include_directories( 
     SYSTEM 
     include 
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${catkin_INCLUDE_DIRS}
     ${Eigen3_INCLUDE_DIRS} 
     ${PCL_INCLUDE_DIRS}

@@ -1,9 +1,10 @@
 #include "optimizer/poly_traj_optimizer.h"
 #include "SFCGenerator/geo_utils.hpp"
-
 #include <limits>
 #include <string>
 #include <vector>
+#include <cstring>
+#include <Eigen/Geometry>
 
 using namespace std;
 
@@ -21,6 +22,17 @@ namespace
            metrics.contact_position_error <= config.contact_position_tolerance &&
            metrics.relative_tangential_speed <= config.relative_tangential_speed_tolerance &&
            metrics.relative_normal_speed <= config.relative_normal_speed_tolerance;
+  }
+
+  ego_planner::SnapBoundaryState3D toSnapBoundaryState(const Eigen::MatrixXd &state)
+  {
+    ego_planner::SnapBoundaryState3D out = ego_planner::SnapBoundaryState3D::Zero();
+    const int cols = std::min<int>(out.cols(), state.cols());
+    if (state.rows() == out.rows() && cols > 0)
+    {
+      out.leftCols(cols) = state.leftCols(cols);
+    }
+    return out;
   }
 
   spatial_map::PolyhedronV makeSpatialVertexPoly(const Eigen::Matrix3Xd &vertices)
@@ -101,7 +113,8 @@ namespace
     double t_max_jer{0.0};
   };
 
-  DynamicsCheckDebug analyzeTrajectoryDynamics(const ego_planner::MINCOTraj &traj,
+  template <typename TrajT>
+  DynamicsCheckDebug analyzeTrajectoryDynamics(const TrajT &traj,
                                               const GridMap::Ptr &grid_map,
                                               const double vel_limit,
                                               const double acc_limit,
@@ -178,7 +191,8 @@ namespace
     return best_poly_violation;
   }
 
-  TrajectoryCheckDebug analyzeTrajectoryCheck(const ego_planner::MINCOTraj &traj,
+  template <typename TrajT>
+  TrajectoryCheckDebug analyzeTrajectoryCheck(const TrajT &traj,
                                              const GridMap::Ptr &grid_map,
                                              const spatial_map::PolyhedraH &corridor_hpolys,
                                              const double corridor_margin,
@@ -283,7 +297,7 @@ namespace
 
   template <typename OptimizerT>
   void seedPerchingExtraVars(const OptimizerT &optimizer,
-                             const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+                             const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::SNAP_S> &terminal_mapping,
                              Eigen::VectorXd &extra_vars)
   {
     extra_vars.resize(terminal_mapping.extraVariableDim());
@@ -308,7 +322,7 @@ namespace
   bool buildShiftedPerchingWarmStartGuess(
       const OptimizerT &optimizer,
       const Eigen::MatrixXd &iniState,
-      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::SNAP_S> &terminal_mapping,
       const int piece_num,
       Eigen::VectorXd &x0,
       PerchingInitialGuessDebug &debug)
@@ -398,7 +412,7 @@ namespace
       const OptimizerT &optimizer,
       const Eigen::MatrixXd &iniState,
       const Eigen::MatrixXd &nominal_tail_state,
-      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> &terminal_mapping,
+      const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::SNAP_S> &terminal_mapping,
       const int piece_num,
       const double max_vel,
       const double omega_max,
@@ -502,7 +516,7 @@ namespace
       const Eigen::MatrixXd &iniState,
       const Eigen::MatrixXd &nominal_tail_state,
       const Eigen::VectorXd &initT,
-      const minco::TerminalMappingBase<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> *terminal_mapping,
+      const minco::TerminalMappingBase<ego_planner::TRAJ_DIM, ego_planner::SNAP_S> *terminal_mapping,
       const double max_vel,
       const double omega_max,
       const char *mode_label,
@@ -511,7 +525,7 @@ namespace
     debug = PerchingInitialGuessDebug{};
     const auto *perching_mapping =
         terminal_mapping != nullptr
-            ? dynamic_cast<const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::MINCO_S> *>(terminal_mapping)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<ego_planner::TRAJ_DIM, ego_planner::SNAP_S> *>(terminal_mapping)
             : nullptr;
     if (perching_mapping == nullptr || initT.size() <= 0)
     {
@@ -566,6 +580,169 @@ namespace
              mode_label);
     return optimizer.generateInitialGuess(terminal_mapping);
   }
+
+  double wrapAnglePi(double a)
+  {
+    while (a > M_PI)
+    {
+      a -= 2.0 * M_PI;
+    }
+    while (a < -M_PI)
+    {
+      a += 2.0 * M_PI;
+    }
+    return a;
+  }
+
+  double unwrapNear(const double yaw, const double reference)
+  {
+    return reference + wrapAnglePi(yaw - reference);
+  }
+
+  double facingYawToPerchingTarget(const ego_planner::SnapTraj &position_traj,
+                                   const minco::PerchingSemanticConfig &semantic,
+                                   const double t,
+                                   const double fallback)
+  {
+    const double st = std::min(std::max(0.0, t), position_traj.getTotalDuration());
+    const Eigen::Vector3d pos = position_traj.evaluate(st, 0);
+    const Eigen::Vector3d target =
+        semantic.plate_position +
+        semantic.plate_velocity * (st - semantic.reference_time);
+    const Eigen::Vector3d rel = target - pos;
+    if (rel.head<2>().norm() < 1.0e-4)
+    {
+      return fallback;
+    }
+    return std::atan2(rel.y(), rel.x());
+  }
+
+  struct FixedTimeYawOptimizationContext
+  {
+    ego_planner::YawTraj *traj{nullptr};
+    Eigen::VectorXd durations;
+    ego_planner::YawBoundaryState1D head;
+    ego_planner::YawBoundaryState1D tail;
+    const cost_functional::PerchingYawCostFunctionalManager *cost_manager{nullptr};
+    int samples_per_piece{5};
+    double energy_weight{1.0};
+    int iter{0};
+  };
+
+  double evaluateFixedTimeYawObjective(FixedTimeYawOptimizationContext &ctx,
+                                       const Eigen::Ref<const Eigen::VectorXd> &x,
+                                       Eigen::Ref<Eigen::VectorXd> grad)
+  {
+    grad.setZero();
+    if (ctx.traj == nullptr || ctx.cost_manager == nullptr ||
+        ctx.durations.size() <= 0 || x.size() != std::max(0, static_cast<int>(ctx.durations.size()) - 1))
+    {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    const int piece_num = static_cast<int>(ctx.durations.size());
+    Eigen::Matrix<double, 1, Eigen::Dynamic> inner_points(1, std::max(0, piece_num - 1));
+    for (int i = 0; i < inner_points.cols(); ++i)
+    {
+      inner_points(0, i) = x(i);
+    }
+
+    if (!ctx.traj->generate(inner_points, ctx.head, ctx.tail, ctx.durations))
+    {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    using TrajT = ego_planner::YawTraj;
+    TrajT::CoeffMat gdC =
+        TrajT::CoeffMat::Zero(piece_num * TrajT::COEFF_NUM, ego_planner::YAW_DIM);
+    Eigen::VectorXd gdT = Eigen::VectorXd::Zero(piece_num);
+
+    double total_cost = 0.0;
+    if (ctx.energy_weight > 0.0)
+    {
+      double energy_cost = 0.0;
+      TrajT::CoeffMat gdC_energy;
+      ctx.traj->getEnergyPartialGradByCoeffs(energy_cost, gdC_energy);
+      total_cost += ctx.energy_weight * energy_cost;
+      gdC.noalias() += ctx.energy_weight * gdC_energy;
+    }
+
+    const int samples_per_piece = std::max(1, ctx.samples_per_piece);
+    const auto &coeffs = ctx.traj->getCoefficients();
+    double seg_start_time = 0.0;
+    for (int i = 0; i < piece_num; ++i)
+    {
+      const double T = ctx.durations(i);
+      const double inv_K = 1.0 / static_cast<double>(samples_per_piece);
+      const double dt = T * inv_K;
+      const int base_row = i * TrajT::COEFF_NUM;
+      const auto coeff_block = coeffs.block<TrajT::COEFF_NUM, ego_planner::YAW_DIM>(base_row, 0);
+
+      for (int k = 0; k <= samples_per_piece; ++k)
+      {
+        const double alpha = static_cast<double>(k) * inv_K;
+        const double t = alpha * T;
+        const double trap_weight = (k == 0 || k == samples_per_piece) ? 0.5 : 1.0;
+        const double common_weight = trap_weight * dt;
+        const double t_global = seg_start_time + t;
+        const int logical_idx = i * samples_per_piece + k;
+
+        TrajT::BasisRow b_p, b_v, b_a, b_j, b_s;
+        TrajT::computeBasisFunctions(t, b_p, b_v, b_a, b_j, b_s);
+
+        Eigen::Matrix<double, 1, 1> p = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> v = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> a = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> j = Eigen::Matrix<double, 1, 1>::Zero();
+        p.transpose().noalias() = b_p * coeff_block;
+        v.transpose().noalias() = b_v * coeff_block;
+        a.transpose().noalias() = b_a * coeff_block;
+        j.transpose().noalias() = b_j * coeff_block;
+
+        Eigen::Matrix<double, 1, 1> gp = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> gv = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> ga = Eigen::Matrix<double, 1, 1>::Zero();
+        Eigen::Matrix<double, 1, 1> gj = Eigen::Matrix<double, 1, 1>::Zero();
+        double gt = 0.0;
+
+        const double c_val = ctx.cost_manager->evaluateIntegral(
+            logical_idx, t, t_global, i, k, p, v, a, j, gp, gv, ga, gj, gt);
+        (void)gt;
+        total_cost += c_val * common_weight;
+        gdC.block<TrajT::COEFF_NUM, ego_planner::YAW_DIM>(base_row, 0).noalias() +=
+            (b_p.transpose() * gp.transpose() +
+             b_v.transpose() * gv.transpose() +
+             b_a.transpose() * ga.transpose() +
+             b_j.transpose() * gj.transpose()) *
+            common_weight;
+      }
+      seg_start_time += T;
+    }
+
+    Eigen::Matrix<double, ego_planner::YAW_DIM, Eigen::Dynamic> grad_by_points;
+    Eigen::VectorXd grad_by_times;
+    ego_planner::YawBoundaryState1D grad_head;
+    ego_planner::YawBoundaryState1D grad_tail;
+    ctx.traj->propagateGradFull(gdC, gdT, grad_by_points, grad_by_times, grad_head, grad_tail);
+    for (int i = 0; i < grad.size(); ++i)
+    {
+      grad(i) = grad_by_points(0, i);
+    }
+    return total_cost;
+  }
+
+  double fixedTimeYawCostCallback(void *func_data, const double *x, double *grad, const int n)
+  {
+    auto *ctx = reinterpret_cast<FixedTimeYawOptimizationContext *>(func_data);
+    Eigen::Map<const Eigen::VectorXd> x_vec(x, n);
+    Eigen::Map<Eigen::VectorXd> grad_vec(grad, n);
+    ctx->iter++;
+    if (ctx->cost_manager != nullptr)
+    {
+      ctx->cost_manager->resetAccumulation();
+    }
+    return evaluateFixedTimeYawObjective(*ctx, x_vec, grad_vec);
+  }
 } // namespace
 
 namespace ego_planner
@@ -586,6 +763,7 @@ namespace ego_planner
     tracking_cost_manager_.setTrackingSemanticGuide(nullptr);
     tracking_semantic_enabled_ = false;
     tracking_semantic_guide_.clear();
+    has_perching_yaw_traj_ = false;
   }
 
   void PolyTrajOptimizer::syncConstraintPointStorage(const Eigen::MatrixXd &constraint_points)
@@ -606,6 +784,144 @@ namespace ego_planner
       cps_.cp_size = cp_num;
     }
     cps_.points = constraint_points;
+  }
+
+  bool PolyTrajOptimizer::getPerchingYawTrajectory(YawTraj &traj) const
+  {
+    if (!has_perching_yaw_traj_)
+    {
+      return false;
+    }
+    traj = perching_yaw_traj_;
+    return true;
+  }
+
+  bool PolyTrajOptimizer::optimizePerchingYawProjectionTrajectory(
+      const SnapTraj &position_traj,
+      const minco::PerchingSemanticConfig &semantic_config,
+      const double yaw0,
+      double &final_cost)
+  {
+    has_perching_yaw_traj_ = false;
+    final_cost = 0.0;
+    if (position_traj.getPieceNum() <= 0 || position_traj.getTotalDuration() <= 1.0e-6)
+    {
+      return false;
+    }
+
+    Eigen::VectorXd durations = position_traj.getDurations();
+    if ((durations.array() <= 0.0).any())
+    {
+      return false;
+    }
+
+    const int piece_num = static_cast<int>(durations.size());
+    const double total_T = durations.sum();
+    std::vector<double> knot_yaw(static_cast<std::size_t>(piece_num + 1), yaw0);
+    double accum_t = 0.0;
+    for (int i = 1; i <= piece_num; ++i)
+    {
+      accum_t += durations(i - 1);
+      const double raw_yaw =
+          facingYawToPerchingTarget(position_traj, semantic_config, accum_t, knot_yaw[static_cast<std::size_t>(i - 1)]);
+      knot_yaw[static_cast<std::size_t>(i)] =
+          unwrapNear(raw_yaw, knot_yaw[static_cast<std::size_t>(i - 1)]);
+    }
+
+    YawBoundaryState1D head = YawBoundaryState1D::Zero();
+    YawBoundaryState1D tail = YawBoundaryState1D::Zero();
+    head(0, 0) = yaw0;
+    head(0, 1) = 0.0;
+    tail(0, 0) = knot_yaw.back();
+    tail(0, 1) = 0.0;
+
+    perching_yaw_cost_manager_.position_traj = &position_traj;
+    perching_yaw_cost_manager_.semantic_config = &semantic_config;
+    perching_yaw_cost_manager_.camera = perching_projection_camera_;
+    perching_yaw_cost_manager_.projection = perching_projection_config_;
+    perching_yaw_cost_manager_.projection.weight = wei_perching_yaw_projection_;
+    perching_yaw_cost_manager_.wei_yaw_rate = wei_perching_yaw_rate_;
+    perching_yaw_cost_manager_.wei_yaw_acc = wei_perching_yaw_acc_;
+    perching_yaw_cost_manager_.max_yaw_rate = perching_yaw_max_rate_;
+    perching_yaw_cost_manager_.max_yaw_acc = perching_yaw_max_acc_;
+    perching_yaw_cost_manager_.smooth_eps = perching_projection_config_.smooth_eps;
+
+    FixedTimeYawOptimizationContext ctx;
+    ctx.traj = &perching_yaw_traj_;
+    ctx.durations = durations;
+    ctx.head = head;
+    ctx.tail = tail;
+    ctx.cost_manager = &perching_yaw_cost_manager_;
+    ctx.samples_per_piece = cps_num_prePiece_;
+    ctx.energy_weight = wei_perching_yaw_energy_;
+
+    Eigen::VectorXd x_init(std::max(0, piece_num - 1));
+    for (int i = 0; i < x_init.size(); ++i)
+    {
+      x_init(i) = knot_yaw[static_cast<std::size_t>(i + 1)];
+    }
+
+    if (x_init.size() <= 0)
+    {
+      Eigen::VectorXd grad_empty;
+      final_cost = evaluateFixedTimeYawObjective(ctx, x_init, grad_empty);
+      has_perching_yaw_traj_ = std::isfinite(final_cost);
+      return has_perching_yaw_traj_;
+    }
+
+    std::vector<double> x_storage(static_cast<std::size_t>(x_init.size()));
+    memcpy(x_storage.data(), x_init.data(), x_init.size() * sizeof(double));
+
+    lbfgs::lbfgs_parameter_t lbfgs_params;
+    lbfgs::lbfgs_load_default_parameters(&lbfgs_params);
+    lbfgs_params.mem_size = 8;
+    lbfgs_params.max_iterations = 80;
+    lbfgs_params.g_epsilon = 1.0e-5;
+    lbfgs_params.min_step = 1.0e-32;
+    lbfgs_params.past = 3;
+    lbfgs_params.delta = 1.0e-4;
+
+    const int result = lbfgs::lbfgs_optimize(
+        static_cast<int>(x_storage.size()),
+        x_storage.data(),
+        &final_cost,
+        fixedTimeYawCostCallback,
+        NULL,
+        NULL,
+        &ctx,
+        &lbfgs_params);
+
+    Eigen::Map<const Eigen::VectorXd> x_final(x_storage.data(), x_storage.size());
+    Eigen::VectorXd grad_final = Eigen::VectorXd::Zero(x_final.size());
+    final_cost = evaluateFixedTimeYawObjective(ctx, x_final, grad_final);
+    const bool accepted =
+        std::isfinite(final_cost) &&
+        (result == lbfgs::LBFGS_CONVERGENCE ||
+         result == lbfgs::LBFGSERR_MAXIMUMITERATION ||
+         result == lbfgs::LBFGS_ALREADY_MINIMIZED ||
+         result == lbfgs::LBFGS_STOP ||
+         result == lbfgs::LBFGSERR_ROUNDING_ERROR);
+    has_perching_yaw_traj_ = accepted;
+
+    if (accepted)
+    {
+      const double yaw_end = perching_yaw_traj_.evaluate(total_T, 0)(0);
+      ROS_INFO("[PerchingYawProjection] solved pieces=%d cost=%.3f iter=%d yaw0=%.2f yawT=%.2f weight=%.2f",
+               piece_num,
+               final_cost,
+               ctx.iter,
+               wrapAnglePi(yaw0),
+               wrapAnglePi(yaw_end),
+               wei_perching_yaw_projection_);
+    }
+    else
+    {
+      ROS_WARN("[PerchingYawProjection] optimize failed result=%d (%s) cost=%.3f",
+               result,
+               lbfgs::lbfgs_strerror(result),
+               final_cost);
+    }
+    return accepted;
   }
 
   // =====================================================
@@ -638,19 +954,27 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    mincoOpt_.setEnergyWeight(rho_energy_);
-    mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    if (perching_acceptance_active_)
+    {
+      snapOpt_.setEnergyWeight(rho_energy_);
+      snapOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    }
+    else
+    {
+      mincoOpt_.setEnergyWeight(rho_energy_);
+      mincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    }
     if (perching_acceptance_active_ &&
         plain_warm_start_origin_ != WarmStartOrigin::PERCHING)
     {
-      if (mincoOpt_.hasWarmStartGuess())
+      if (snapOpt_.hasWarmStartGuess())
       {
         const char *origin =
             plain_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
         ROS_INFO("[PerchingInitGuess] mode=plain cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
                  origin);
       }
-      mincoOpt_.clearWarmStartGuess();
+      snapOpt_.clearWarmStartGuess();
       plain_warm_start_origin_ = WarmStartOrigin::NONE;
     }
 
@@ -668,7 +992,16 @@ namespace ego_planner
     for (int i = 0; i < piece_num_; ++i)
       time_segs[i] = initT(i);
 
-    mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    SnapBoundaryState3D snapIniState = toSnapBoundaryState(iniState);
+    SnapBoundaryState3D snapFinState = toSnapBoundaryState(finState);
+    if (perching_acceptance_active_)
+    {
+      snapOpt_.setInitState(time_segs, waypoints, snapIniState, snapFinState);
+    }
+    else
+    {
+      mincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    }
 
     cost_manager_.grid_map = grid_map_;
     cost_manager_.cps = &cps_;
@@ -736,8 +1069,8 @@ namespace ego_planner
     }
 
     const auto *perching_mapping =
-        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
-            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+        (perching_acceptance_active_ && snap_terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, SNAP_S> *>(snap_terminal_mapping_)
             : nullptr;
     perching_cost_manager_.setPerchingSemanticConfig(
         perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
@@ -759,6 +1092,7 @@ namespace ego_planner
     perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
     perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
     perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.wei_perch_height = wei_perching_height_;
     perching_cost_manager_.obs_clearance = obs_clearance_;
     perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
     perching_cost_manager_.safe_margin = safety_margin_;
@@ -774,22 +1108,28 @@ namespace ego_planner
     perching_cost_manager_.robot_radius = perching_robot_radius_;
     perching_cost_manager_.platform_radius = perching_platform_radius_;
     perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.relative_height_min = perching_relative_height_min_;
+    perching_cost_manager_.relative_height_max = perching_relative_height_max_;
+    perching_cost_manager_.mask_platform_from_esdf = perching_mask_platform_from_esdf_;
     perching_cost_manager_.drone_id = drone_id_;
     perching_cost_manager_.t_now = t_now_;
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
     PerchingInitialGuessDebug perching_init_debug;
-    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
-        mincoOpt_,
-        iniState,
-        finState,
-        initT,
-        terminal_mapping_,
-        max_vel_,
-        perching_omega_max_,
-        "plain",
-        perching_init_debug);
+    Eigen::VectorXd x0 =
+        perching_acceptance_active_
+            ? buildPerchingSolverInitialGuess(
+                  snapOpt_,
+                  Eigen::MatrixXd(snapIniState),
+                  Eigen::MatrixXd(snapFinState),
+                  initT,
+                  snap_terminal_mapping_,
+                  max_vel_,
+                  perching_omega_max_,
+                  "plain",
+                  perching_init_debug)
+            : mincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -867,20 +1207,20 @@ namespace ego_planner
 
         if (!flag_swarm_too_close)
         {
-          const MINCOTraj &traj = mincoOpt_.getTrajectory();
           if (perching_acceptance_active_ &&
-              terminal_mapping_ != nullptr &&
-              terminal_mapping_->enabled())
+              snap_terminal_mapping_ != nullptr &&
+              snap_terminal_mapping_->enabled())
           {
+            const SnapTraj &traj = snapOpt_.getTrajectory();
             PerchingTerminalMetrics metrics;
             Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
             const Eigen::VectorXd extra_vars =
-                (terminal_mapping_ != nullptr && terminal_mapping_->enabled() &&
-                 terminal_mapping_->extraVariableDim() > 0)
-                    ? x_final.tail(terminal_mapping_->extraVariableDim())
+                (snap_terminal_mapping_ != nullptr && snap_terminal_mapping_->enabled() &&
+                 snap_terminal_mapping_->extraVariableDim() > 0)
+                    ? x_final.tail(snap_terminal_mapping_->extraVariableDim())
                     : Eigen::VectorXd{};
             const bool metrics_ok =
-                evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, metrics);
+                evaluatePerchingTerminalMetrics(traj, snapIniState, snapFinState, *snap_terminal_mapping_, extra_vars, metrics);
             const bool approach_collision_free =
                 metrics_ok && isTrajectoryCollisionFreeUntil(traj, metrics.approach_check_until);
             const bool terminal_ok =
@@ -907,6 +1247,7 @@ namespace ego_planner
           }
           else
           {
+            const MINCOTraj &traj = mincoOpt_.getTrajectory();
             Eigen::MatrixXd init_points = getInitConstraintPoints();
             std::vector<std::pair<int, int>> segments_nouse;
             if (finelyCheckAndSetConstraintPoints(segments_nouse, traj, init_points, false) == CHK_RET::OBS_FREE)
@@ -948,16 +1289,23 @@ namespace ego_planner
     if (flag_success)
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
-      mincoOpt_.setWarmStartGuess(x_final);
+      if (perching_acceptance_active_)
+      {
+        snapOpt_.setWarmStartGuess(x_final);
+      }
+      else
+      {
+        mincoOpt_.setWarmStartGuess(x_final);
+      }
       plain_warm_start_origin_ =
           perching_acceptance_active_ ? WarmStartOrigin::PERCHING
                                       : WarmStartOrigin::GENERIC;
       if (perching_acceptance_active_ &&
-          terminal_mapping_ != nullptr &&
-          terminal_mapping_->enabled() &&
-          terminal_mapping_->extraVariableDim() > 0)
+          snap_terminal_mapping_ != nullptr &&
+          snap_terminal_mapping_->enabled() &&
+          snap_terminal_mapping_->extraVariableDim() > 0)
       {
-        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
+        last_perching_extra_vars_ = x_final.tail(snap_terminal_mapping_->extraVariableDim());
         has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
       }
     }
@@ -1002,14 +1350,14 @@ namespace ego_planner
   bool PolyTrajOptimizer::optimizePerchingTrajectory(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
-      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
       double &final_cost)
   {
-    terminal_mapping_ = &terminal_mapping;
+    snap_terminal_mapping_ = &terminal_mapping;
     perching_acceptance_active_ = true;
     const bool success = optimizeTrajectory(iniState, finState, initInnerPts, initT, final_cost);
     perching_acceptance_active_ = false;
-    terminal_mapping_ = nullptr;
+    snap_terminal_mapping_ = nullptr;
     return success;
   }
 
@@ -1043,19 +1391,27 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    distanceFieldMincoOpt_.setEnergyWeight(rho_energy_);
-    distanceFieldMincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    if (perching_acceptance_active_)
+    {
+      distanceFieldSnapOpt_.setEnergyWeight(rho_energy_);
+      distanceFieldSnapOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    }
+    else
+    {
+      distanceFieldMincoOpt_.setEnergyWeight(rho_energy_);
+      distanceFieldMincoOpt_.setSamplesPerPiece(cps_num_prePiece_);
+    }
     if (perching_acceptance_active_ &&
         esdf_warm_start_origin_ != WarmStartOrigin::PERCHING)
     {
-      if (distanceFieldMincoOpt_.hasWarmStartGuess())
+      if (distanceFieldSnapOpt_.hasWarmStartGuess())
       {
         const char *origin =
             esdf_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
         ROS_INFO("[PerchingInitGuess] mode=esdf cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
                  origin);
       }
-      distanceFieldMincoOpt_.clearWarmStartGuess();
+      distanceFieldSnapOpt_.clearWarmStartGuess();
       esdf_warm_start_origin_ = WarmStartOrigin::NONE;
     }
 
@@ -1073,12 +1429,29 @@ namespace ego_planner
       time_segs[i] = initT(i);
     }
 
+    SnapBoundaryState3D snapIniState = toSnapBoundaryState(iniState);
+    SnapBoundaryState3D snapFinState = toSnapBoundaryState(finState);
     const MINCOTraj init_traj = generateTrajectory(iniState, finState, initInnerPts, initT);
-    const Eigen::MatrixXd init_cps = init_traj.getInitConstraintPoints(cps_num_prePiece_);
+    SnapTraj init_snap_traj;
+    if (perching_acceptance_active_)
+    {
+      init_snap_traj.generate(initInnerPts, snapIniState, snapFinState, initT);
+    }
+    const Eigen::MatrixXd init_cps =
+        perching_acceptance_active_
+            ? init_snap_traj.getInitConstraintPoints(cps_num_prePiece_)
+            : init_traj.getInitConstraintPoints(cps_num_prePiece_);
     cps_.resize_cp(init_cps.cols());
     cps_.points = init_cps;
 
-    distanceFieldMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    if (perching_acceptance_active_)
+    {
+      distanceFieldSnapOpt_.setInitState(time_segs, waypoints, snapIniState, snapFinState);
+    }
+    else
+    {
+      distanceFieldMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    }
 
     distance_field_cost_manager_.grid_map = grid_map_;
     distance_field_cost_manager_.cps = &cps_;
@@ -1145,8 +1518,8 @@ namespace ego_planner
     }
 
     const auto *perching_mapping =
-        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
-            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+        (perching_acceptance_active_ && snap_terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, SNAP_S> *>(snap_terminal_mapping_)
             : nullptr;
     perching_cost_manager_.setPerchingSemanticConfig(
         perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
@@ -1168,6 +1541,7 @@ namespace ego_planner
     perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
     perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
     perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.wei_perch_height = wei_perching_height_;
     perching_cost_manager_.obs_clearance = obs_clearance_;
     perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
     perching_cost_manager_.safe_margin = safety_margin_;
@@ -1183,22 +1557,28 @@ namespace ego_planner
     perching_cost_manager_.robot_radius = perching_robot_radius_;
     perching_cost_manager_.platform_radius = perching_platform_radius_;
     perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.relative_height_min = perching_relative_height_min_;
+    perching_cost_manager_.relative_height_max = perching_relative_height_max_;
+    perching_cost_manager_.mask_platform_from_esdf = perching_mask_platform_from_esdf_;
     perching_cost_manager_.drone_id = drone_id_;
     perching_cost_manager_.t_now = t_now_;
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
     PerchingInitialGuessDebug perching_init_debug;
-    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
-        distanceFieldMincoOpt_,
-        iniState,
-        finState,
-        initT,
-        terminal_mapping_,
-        max_vel_,
-        perching_omega_max_,
-        "esdf",
-        perching_init_debug);
+    Eigen::VectorXd x0 =
+        perching_acceptance_active_
+            ? buildPerchingSolverInitialGuess(
+                  distanceFieldSnapOpt_,
+                  Eigen::MatrixXd(snapIniState),
+                  Eigen::MatrixXd(snapFinState),
+                  initT,
+                  snap_terminal_mapping_,
+                  max_vel_,
+                  perching_omega_max_,
+                  "esdf",
+                  perching_init_debug)
+            : distanceFieldMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -1219,7 +1599,7 @@ namespace ego_planner
     lbfgs_params.past = 3;
     lbfgs_params.delta = 1.0e-2;
 
-    const auto computeMinSdf = [&](const MINCOTraj &traj, const double until_time = -1.0) -> double
+    const auto computeMinSdf = [&](const auto &traj, const double until_time = -1.0) -> double
     {
       const double total_duration = traj.getTotalDuration();
       const double horizon =
@@ -1235,9 +1615,11 @@ namespace ego_planner
       return std::isfinite(min_sdf) ? min_sdf : 0.0;
     };
 
-    const double sdf_collision_tol = -std::max(0.10, 0.5 * grid_map_->getResolution());
+    const double sdf_collision_tol =
+        -std::max(0.10, 0.5 * grid_map_->getResolution());
     const double sdf_soft_margin = std::max(0.0, 0.5 * obs_clearance_);
-    const double init_min_sdf = computeMinSdf(init_traj);
+    const double init_min_sdf =
+        perching_acceptance_active_ ? computeMinSdf(init_snap_traj) : computeMinSdf(init_traj);
     const bool init_esdf_free = init_min_sdf >= sdf_collision_tol;
 
     do
@@ -1284,7 +1666,6 @@ namespace ego_planner
           }
         }
 
-        const MINCOTraj &traj = distanceFieldMincoOpt_.getTrajectory();
         double min_sdf = 0.0;
         bool flag_collision_free = false;
         bool flag_margin_safe = false;
@@ -1293,16 +1674,17 @@ namespace ego_planner
         bool perching_terminal_ok = true;
 
         if (perching_acceptance_active_ &&
-            terminal_mapping_ != nullptr &&
-            terminal_mapping_->enabled())
+            snap_terminal_mapping_ != nullptr &&
+            snap_terminal_mapping_->enabled())
         {
+          const SnapTraj &traj = distanceFieldSnapOpt_.getTrajectory();
           Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
           const Eigen::VectorXd extra_vars =
-              terminal_mapping_->extraVariableDim() > 0
-                  ? x_final.tail(terminal_mapping_->extraVariableDim())
+              snap_terminal_mapping_->extraVariableDim() > 0
+                  ? x_final.tail(snap_terminal_mapping_->extraVariableDim())
                   : Eigen::VectorXd{};
           perching_metrics_ok =
-              evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, perching_metrics);
+              evaluatePerchingTerminalMetrics(traj, snapIniState, snapFinState, *snap_terminal_mapping_, extra_vars, perching_metrics);
           min_sdf = computeMinSdf(traj, perching_metrics.approach_check_until);
           flag_collision_free = min_sdf >= sdf_collision_tol;
           flag_margin_safe = min_sdf >= sdf_soft_margin;
@@ -1311,6 +1693,7 @@ namespace ego_planner
         }
         else
         {
+          const MINCOTraj &traj = distanceFieldMincoOpt_.getTrajectory();
           min_sdf = computeMinSdf(traj);
           flag_collision_free = min_sdf >= sdf_collision_tol;
           flag_margin_safe = min_sdf >= sdf_soft_margin;
@@ -1388,23 +1771,23 @@ namespace ego_planner
     if (!flag_success && init_esdf_free)
     {
       if (perching_acceptance_active_ &&
-          terminal_mapping_ != nullptr &&
-          terminal_mapping_->enabled())
+          snap_terminal_mapping_ != nullptr &&
+          snap_terminal_mapping_->enabled())
       {
         PerchingTerminalMetrics metrics;
         const Eigen::VectorXd extra_vars =
-            (terminal_mapping_ != nullptr && terminal_mapping_->enabled() &&
-             terminal_mapping_->extraVariableDim() > 0)
-                ? x0.tail(terminal_mapping_->extraVariableDim())
+            (snap_terminal_mapping_ != nullptr && snap_terminal_mapping_->enabled() &&
+             snap_terminal_mapping_->extraVariableDim() > 0)
+                ? x0.tail(snap_terminal_mapping_->extraVariableDim())
                 : Eigen::VectorXd{};
         const bool metrics_ok =
-            evaluatePerchingTerminalMetrics(init_traj, iniState, finState, *terminal_mapping_, extra_vars, metrics);
+            evaluatePerchingTerminalMetrics(init_snap_traj, snapIniState, snapFinState, *snap_terminal_mapping_, extra_vars, metrics);
         if (metrics_ok && perchingTerminalAccepted(metrics, perching_check_config_))
         {
           Eigen::VectorXd grad_dummy = Eigen::VectorXd::Zero(variable_num_);
-          final_cost = distanceFieldMincoOpt_.evaluateWithTerminalMapping(
-              x0, grad_dummy, time_cost_, perching_cost_manager_, terminal_mapping_);
-          distanceFieldMincoOpt_.setWarmStartGuess(x0);
+          final_cost = distanceFieldSnapOpt_.evaluateWithTerminalMapping(
+              x0, grad_dummy, time_cost_, perching_cost_manager_, snap_terminal_mapping_);
+          distanceFieldSnapOpt_.setWarmStartGuess(x0);
           last_perching_extra_vars_ = extra_vars;
           has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
           ROS_WARN("Perching ESDF optimize fallback: use feasible init trajectory (init_min_sdf=%.3f tol=%.3f contact_err=%.3f tangential_speed=%.3f normal_speed=%.3f).",
@@ -1424,23 +1807,6 @@ namespace ego_planner
                  init_min_sdf,
                  sdf_collision_tol);
         return true;
-      }
-    }
-
-    if (flag_success)
-    {
-      Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
-      distanceFieldMincoOpt_.setWarmStartGuess(x_final);
-      esdf_warm_start_origin_ =
-          perching_acceptance_active_ ? WarmStartOrigin::PERCHING
-                                      : WarmStartOrigin::GENERIC;
-      if (perching_acceptance_active_ &&
-          terminal_mapping_ != nullptr &&
-          terminal_mapping_->enabled() &&
-          terminal_mapping_->extraVariableDim() > 0)
-      {
-        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
-        has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
       }
     }
 
@@ -1480,14 +1846,14 @@ namespace ego_planner
   bool PolyTrajOptimizer::optimizePerchingTrajectoryWithDistanceField(
       const Eigen::MatrixXd &iniState, const Eigen::MatrixXd &finState,
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
-      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
       double &final_cost)
   {
-    terminal_mapping_ = &terminal_mapping;
+    snap_terminal_mapping_ = &terminal_mapping;
     perching_acceptance_active_ = true;
     const bool success = optimizeTrajectoryWithDistanceField(iniState, finState, initInnerPts, initT, final_cost);
     perching_acceptance_active_ = false;
-    terminal_mapping_ = nullptr;
+    snap_terminal_mapping_ = nullptr;
     return success;
   }
 
@@ -1523,20 +1889,28 @@ namespace ego_planner
     t_now_ = ros::Time::now().toSec();
     piece_num_ = initT.size();
 
-    corridorMincoOpt_.setEnergyWeight(rho_energy_);
     const int corridor_samples_per_piece = std::max(cps_num_prePiece_ * 4, 16);
-    corridorMincoOpt_.setSamplesPerPiece(corridor_samples_per_piece);
+    if (perching_acceptance_active_)
+    {
+      corridorSnapOpt_.setEnergyWeight(rho_energy_);
+      corridorSnapOpt_.setSamplesPerPiece(corridor_samples_per_piece);
+    }
+    else
+    {
+      corridorMincoOpt_.setEnergyWeight(rho_energy_);
+      corridorMincoOpt_.setSamplesPerPiece(corridor_samples_per_piece);
+    }
     if (perching_acceptance_active_ &&
         corridor_warm_start_origin_ != WarmStartOrigin::PERCHING)
     {
-      if (corridorMincoOpt_.hasWarmStartGuess())
+      if (corridorSnapOpt_.hasWarmStartGuess())
       {
         const char *origin =
             corridor_warm_start_origin_ == WarmStartOrigin::GENERIC ? "generic" : "none";
         ROS_INFO("[PerchingInitGuess] mode=corridor cleared incompatible warm-start origin=%s; fallback_to_perching_specific_guess",
                  origin);
       }
-      corridorMincoOpt_.clearWarmStartGuess();
+      corridorSnapOpt_.clearWarmStartGuess();
       corridor_warm_start_origin_ = WarmStartOrigin::NONE;
     }
 
@@ -1677,8 +2051,18 @@ namespace ego_planner
     }
 
     corridorSpatialMap_.reset(&corridor_vpolys_, &corridor_vpoly_idx_, piece_num_);
-    corridorMincoOpt_.setSpatialMap(&corridorSpatialMap_);
-    corridorMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    SnapBoundaryState3D snapIniState = toSnapBoundaryState(iniState);
+    SnapBoundaryState3D snapFinState = toSnapBoundaryState(finState);
+    if (perching_acceptance_active_)
+    {
+      corridorSnapOpt_.setSpatialMap(&corridorSpatialMap_);
+      corridorSnapOpt_.setInitState(time_segs, waypoints, snapIniState, snapFinState);
+    }
+    else
+    {
+      corridorMincoOpt_.setSpatialMap(&corridorSpatialMap_);
+      corridorMincoOpt_.setInitState(time_segs, waypoints, iniState, finState);
+    }
 
     corridor_cost_manager_.setCorridor(&normalized_corridor, &corridor_hpoly_idx_);
     corridor_cost_manager_.setReferencePoints(&corridor_reference_points, wei_corridor_ref_);
@@ -1744,8 +2128,8 @@ namespace ego_planner
     }
 
     const auto *perching_mapping =
-        (perching_acceptance_active_ && terminal_mapping_ != nullptr)
-            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, MINCO_S> *>(terminal_mapping_)
+        (perching_acceptance_active_ && snap_terminal_mapping_ != nullptr)
+            ? dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, SNAP_S> *>(snap_terminal_mapping_)
             : nullptr;
     perching_cost_manager_.setPerchingSemanticConfig(
         perching_mapping != nullptr ? &perching_mapping->semanticConfig() : nullptr);
@@ -1767,6 +2151,7 @@ namespace ego_planner
     perching_cost_manager_.wei_perch_thrust = wei_perching_thrust_;
     perching_cost_manager_.wei_perch_omega = wei_perching_omega_;
     perching_cost_manager_.wei_perch_collision = wei_perching_collision_;
+    perching_cost_manager_.wei_perch_height = wei_perching_height_;
     perching_cost_manager_.obs_clearance = obs_clearance_;
     perching_cost_manager_.obs_clearance_soft = obs_clearance_soft_;
     perching_cost_manager_.safe_margin = safety_margin_;
@@ -1782,22 +2167,28 @@ namespace ego_planner
     perching_cost_manager_.robot_radius = perching_robot_radius_;
     perching_cost_manager_.platform_radius = perching_platform_radius_;
     perching_cost_manager_.floor_height = perching_floor_height_;
+    perching_cost_manager_.relative_height_min = perching_relative_height_min_;
+    perching_cost_manager_.relative_height_max = perching_relative_height_max_;
+    perching_cost_manager_.mask_platform_from_esdf = perching_mask_platform_from_esdf_;
     perching_cost_manager_.drone_id = drone_id_;
     perching_cost_manager_.t_now = t_now_;
     perching_cost_manager_.touch_goal = touch_goal_;
     perching_cost_manager_.min_ellip_dist2_ptr = &min_ellip_dist2_;
 
     PerchingInitialGuessDebug perching_init_debug;
-    Eigen::VectorXd x0 = buildPerchingSolverInitialGuess(
-        corridorMincoOpt_,
-        iniState,
-        finState,
-        initT,
-        terminal_mapping_,
-        max_vel_,
-        perching_omega_max_,
-        "corridor",
-        perching_init_debug);
+    Eigen::VectorXd x0 =
+        perching_acceptance_active_
+            ? buildPerchingSolverInitialGuess(
+                  corridorSnapOpt_,
+                  Eigen::MatrixXd(snapIniState),
+                  Eigen::MatrixXd(snapFinState),
+                  initT,
+                  snap_terminal_mapping_,
+                  max_vel_,
+                  perching_omega_max_,
+                  "corridor",
+                  perching_init_debug)
+            : corridorMincoOpt_.generateInitialGuess(terminal_mapping_);
     variable_num_ = x0.size();
     if (variable_num_ <= 0)
     {
@@ -1874,50 +2265,70 @@ namespace ego_planner
                                     pow((swarm_clearance_ + swarm_trajs_->at(i).des_clearance) * 1.25, 2);
           }
         }
-        const MINCOTraj &traj = corridorMincoOpt_.getTrajectory();
         const bool perching_mode =
             perching_acceptance_active_ &&
-            terminal_mapping_ != nullptr &&
-            terminal_mapping_->enabled();
+            snap_terminal_mapping_ != nullptr &&
+            snap_terminal_mapping_->enabled();
         PerchingTerminalMetrics perching_metrics;
         bool perching_metrics_ok = true;
         bool perching_terminal_ok = true;
-        double approach_until = traj.getTotalDuration();
-        if (perching_mode)
-        {
-          Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
-          const Eigen::VectorXd extra_vars =
-              terminal_mapping_->extraVariableDim() > 0
-                  ? x_final.tail(terminal_mapping_->extraVariableDim())
-                  : Eigen::VectorXd{};
-          perching_metrics_ok =
-              evaluatePerchingTerminalMetrics(traj, iniState, finState, *terminal_mapping_, extra_vars, perching_metrics);
-          approach_until = perching_metrics.approach_check_until;
-          perching_terminal_ok = perching_metrics_ok &&
-                                 perchingTerminalAccepted(perching_metrics, perching_check_config_);
-        }
-        const bool flag_collision_free =
-            perching_mode ? isTrajectoryCollisionFreeUntil(traj, approach_until)
-                          : isTrajectoryCollisionFree(traj);
-
+        bool flag_collision_free = false;
+        bool flag_inside_corridor = false;
+        DynamicsCheckDebug dyn_debug;
+        TrajectoryCheckDebug debug;
+        double approach_until = 0.0;
         const double hard_corridor_margin =
             grid_map_ ? -0.5 * grid_map_->getResolution() : -1.0e-3;
-        const bool flag_inside_corridor =
-            perching_mode ? isTrajectoryInsideCorridorUntil(traj,
-                                                            normalized_corridor,
-                                                            hard_corridor_margin,
-                                                            approach_until)
-                          : isTrajectoryInsideCorridor(traj,
-                                                       normalized_corridor,
-                                                       hard_corridor_margin);
 
-        const DynamicsCheckDebug dyn_debug =
-            analyzeTrajectoryDynamics(traj,
-                                      grid_map_,
-                                      max_vel_,
-                                      max_acc_,
-                                      max_jer_,
-                                      1.03);
+        const auto evaluate_corridor_candidate = [&](const auto &traj)
+        {
+          approach_until = traj.getTotalDuration();
+          if (perching_mode)
+          {
+            Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
+            const Eigen::VectorXd extra_vars =
+                snap_terminal_mapping_->extraVariableDim() > 0
+                    ? x_final.tail(snap_terminal_mapping_->extraVariableDim())
+                    : Eigen::VectorXd{};
+            perching_metrics_ok =
+                evaluatePerchingTerminalMetrics(corridorSnapOpt_.getTrajectory(), snapIniState, snapFinState, *snap_terminal_mapping_, extra_vars, perching_metrics);
+            approach_until = perching_metrics.approach_check_until;
+            perching_terminal_ok = perching_metrics_ok &&
+                                   perchingTerminalAccepted(perching_metrics, perching_check_config_);
+          }
+
+          flag_collision_free =
+              perching_mode ? isTrajectoryCollisionFreeUntil(traj, approach_until)
+                            : isTrajectoryCollisionFree(traj);
+          flag_inside_corridor =
+              perching_mode ? isTrajectoryInsideCorridorUntil(traj,
+                                                              normalized_corridor,
+                                                              hard_corridor_margin,
+                                                              approach_until)
+                            : isTrajectoryInsideCorridor(traj,
+                                                         normalized_corridor,
+                                                         hard_corridor_margin);
+          dyn_debug = analyzeTrajectoryDynamics(traj,
+                                                grid_map_,
+                                                max_vel_,
+                                                max_acc_,
+                                                max_jer_,
+                                                1.03);
+          debug = analyzeTrajectoryCheck(traj,
+                                         grid_map_,
+                                         normalized_corridor,
+                                         corridor_clearance_,
+                                         max_vel_);
+        };
+
+        if (perching_mode)
+        {
+          evaluate_corridor_candidate(corridorSnapOpt_.getTrajectory());
+        }
+        else
+        {
+          evaluate_corridor_candidate(corridorMincoOpt_.getTrajectory());
+        }
         const bool flag_dyn_feasible = dyn_debug.feasible;
 
         if (!flag_swarm_too_close &&
@@ -1930,13 +2341,6 @@ namespace ego_planner
         }
         else
         {
-          const TrajectoryCheckDebug debug =
-              analyzeTrajectoryCheck(traj,
-                                     grid_map_,
-                                     normalized_corridor,
-                                     corridor_clearance_,
-                                     max_vel_);
-
           if (perching_mode)
           {
             ROS_WARN("Perching corridor optimize rejected: inside_corridor=%s approach_collision_free=%s terminal_ok=%s dyn_ok=%s swarm_safe=%s cost=%.3f "
@@ -2018,16 +2422,23 @@ namespace ego_planner
     if (flag_success)
     {
       Eigen::Map<const Eigen::VectorXd> x_final(x_init.data(), variable_num_);
-      corridorMincoOpt_.setWarmStartGuess(x_final);
+      if (perching_acceptance_active_)
+      {
+        corridorSnapOpt_.setWarmStartGuess(x_final);
+      }
+      else
+      {
+        corridorMincoOpt_.setWarmStartGuess(x_final);
+      }
       corridor_warm_start_origin_ =
           perching_acceptance_active_ ? WarmStartOrigin::PERCHING
                                       : WarmStartOrigin::GENERIC;
       if (perching_acceptance_active_ &&
-          terminal_mapping_ != nullptr &&
-          terminal_mapping_->enabled() &&
-          terminal_mapping_->extraVariableDim() > 0)
+          snap_terminal_mapping_ != nullptr &&
+          snap_terminal_mapping_->enabled() &&
+          snap_terminal_mapping_->extraVariableDim() > 0)
       {
-        last_perching_extra_vars_ = x_final.tail(terminal_mapping_->extraVariableDim());
+        last_perching_extra_vars_ = x_final.tail(snap_terminal_mapping_->extraVariableDim());
         has_last_perching_extra_vars_ = last_perching_extra_vars_.size() > 0;
       }
     }
@@ -2070,10 +2481,10 @@ namespace ego_planner
       const Eigen::MatrixXd &initInnerPts, const Eigen::VectorXd &initT,
       const spatial_map::PolyhedraH &corridor_hpolys,
       const Eigen::VectorXi *corridor_piece_idx,
-      const minco::TerminalMappingBase<TRAJ_DIM, MINCO_S> &terminal_mapping,
+      const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
       double &final_cost)
   {
-    terminal_mapping_ = &terminal_mapping;
+    snap_terminal_mapping_ = &terminal_mapping;
     perching_acceptance_active_ = true;
     const bool success = optimizeTrajectory(iniState,
                                             finState,
@@ -2083,7 +2494,7 @@ namespace ego_planner
                                             corridor_piece_idx,
                                             final_cost);
     perching_acceptance_active_ = false;
-    terminal_mapping_ = nullptr;
+    snap_terminal_mapping_ = nullptr;
     return success;
   }
 
@@ -2981,6 +3392,49 @@ namespace ego_planner
     return true;
   }
 
+  bool PolyTrajOptimizer::isTrajectoryCollisionFree(const SnapTraj &traj) const
+  {
+    if (!grid_map_)
+    {
+      return true;
+    }
+
+    const double t_step = std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1));
+    const double total_duration = traj.getTotalDuration();
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += t_step)
+    {
+      const double sample_t = std::min(t, total_duration);
+      if (grid_map_->getInflateOccupancy(traj.evaluate(sample_t, 0)) != 0)
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  bool PolyTrajOptimizer::isTrajectoryCollisionFreeUntil(const SnapTraj &traj,
+                                                         const double until_time) const
+  {
+    if (!grid_map_)
+    {
+      return true;
+    }
+
+    const double horizon = std::min(std::max(0.0, until_time), traj.getTotalDuration());
+    const double t_step = std::min(0.05, grid_map_->getResolution() / std::max(max_vel_, 0.1));
+    for (double t = 0.0; t <= horizon + 1.0e-6; t += t_step)
+    {
+      const double sample_t = std::min(t, horizon);
+      if (grid_map_->getInflateOccupancy(traj.evaluate(sample_t, 0)) != 0)
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   bool PolyTrajOptimizer::pointInsidePolytope(const Eigen::Vector3d &pt,
                                             const spatial_map::PolyhedronH &hpoly,
                                             double margin) const
@@ -3022,6 +3476,40 @@ namespace ego_planner
   }
 
   bool PolyTrajOptimizer::isTrajectoryInsideCorridorUntil(const MINCOTraj &traj,
+                                                          const spatial_map::PolyhedraH &corridor_hpolys,
+                                                          double margin,
+                                                          double until_time) const
+  {
+    const double total_duration = traj.getTotalDuration();
+    const double horizon = std::min(std::max(0.0, until_time), total_duration);
+    const double dt = std::min(0.05, 0.5 * corridor_smoothing_);
+    for (double t = 0.0; t <= horizon + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, horizon);
+      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
+      if (!pointInsideCorridor(pt, corridor_hpolys, margin))
+        return false;
+    }
+    return true;
+  }
+
+  bool PolyTrajOptimizer::isTrajectoryInsideCorridor(const SnapTraj &traj,
+                                                    const spatial_map::PolyhedraH &corridor_hpolys,
+                                                    double margin) const
+  {
+    const double total_duration = traj.getTotalDuration();
+    const double dt = std::min(0.05, 0.5 * corridor_smoothing_);
+    for (double t = 0.0; t <= total_duration + 1.0e-6; t += dt)
+    {
+      const double sample_t = std::min(t, total_duration);
+      const Eigen::Vector3d pt = traj.evaluate(sample_t, 0);
+      if (!pointInsideCorridor(pt, corridor_hpolys, margin))
+        return false;
+    }
+    return true;
+  }
+
+  bool PolyTrajOptimizer::isTrajectoryInsideCorridorUntil(const SnapTraj &traj,
                                                           const spatial_map::PolyhedraH &corridor_hpolys,
                                                           double margin,
                                                           double until_time) const
@@ -3129,6 +3617,96 @@ namespace ego_planner
     return metrics.valid;
   }
 
+  bool PolyTrajOptimizer::evaluatePerchingTerminalMetrics(
+      const SnapTraj &traj,
+      const SnapBoundaryState3D &iniState,
+      const SnapBoundaryState3D &nominalTailState,
+      const minco::TerminalMappingBase<TRAJ_DIM, SNAP_S> &terminal_mapping,
+      const Eigen::Ref<const Eigen::VectorXd> &extra_vars,
+      PerchingTerminalMetrics &metrics) const
+  {
+    metrics = PerchingTerminalMetrics{};
+    if (!terminal_mapping.enabled())
+    {
+      return false;
+    }
+
+    const double total_duration = traj.getTotalDuration();
+    const double approach_until =
+        std::min(total_duration,
+                 std::max(0.0, total_duration - std::max(0.0, perching_check_config_.terminal_relax_time)));
+    const Eigen::VectorXd cache_T = traj.getDurations();
+    if (cache_T.size() <= 0)
+    {
+      return false;
+    }
+
+    SnapBoundaryState3D mapped_head = iniState;
+    SnapBoundaryState3D mapped_tail = nominalTailState;
+    terminal_mapping.mapBoundaryStates(iniState,
+                                       nominalTailState,
+                                       cache_T,
+                                       extra_vars,
+                                       mapped_head,
+                                       mapped_tail);
+
+    const double eps = std::max(1.0e-3, 1.0e-3 * std::max(1.0, total_duration));
+    Eigen::VectorXd cache_T_eps = cache_T;
+    cache_T_eps(cache_T_eps.size() - 1) += eps;
+    SnapBoundaryState3D mapped_head_eps = iniState;
+    SnapBoundaryState3D mapped_tail_eps = nominalTailState;
+    terminal_mapping.mapBoundaryStates(iniState,
+                                       nominalTailState,
+                                       cache_T_eps,
+                                       extra_vars,
+                                       mapped_head_eps,
+                                       mapped_tail_eps);
+
+    const Eigen::Vector3d expected_contact_position = mapped_tail.col(0);
+    const Eigen::Vector3d expected_contact_velocity = mapped_tail.col(1);
+    const Eigen::Vector3d estimated_plate_velocity =
+        (mapped_tail_eps.col(0) - mapped_tail.col(0)) / eps;
+    Eigen::Vector3d surface_normal = expected_contact_position - nominalTailState.col(0);
+    if (const auto *perching_mapping =
+            dynamic_cast<const minco::PerchingTerminalMapping<TRAJ_DIM, SNAP_S> *>(&terminal_mapping))
+    {
+      surface_normal = perching_mapping->semanticConfig().surface_z;
+    }
+    if (!surface_normal.allFinite() || surface_normal.norm() < 1.0e-6)
+    {
+      surface_normal = Eigen::Vector3d::UnitZ();
+    }
+    else
+    {
+      surface_normal.normalize();
+    }
+
+    const Eigen::Vector3d final_position = traj.evaluate(total_duration, 0);
+    const Eigen::Vector3d final_velocity = traj.evaluate(total_duration, 1);
+    const Eigen::Vector3d relative_velocity = final_velocity - expected_contact_velocity;
+    const double signed_normal_speed = relative_velocity.dot(surface_normal);
+    const Eigen::Vector3d tangential_velocity =
+        relative_velocity - signed_normal_speed * surface_normal;
+
+    metrics.valid = expected_contact_position.allFinite() &&
+                    estimated_plate_velocity.allFinite() &&
+                    final_position.allFinite() &&
+                    final_velocity.allFinite();
+    metrics.total_duration = total_duration;
+    metrics.approach_check_until = approach_until;
+    metrics.expected_contact_position = expected_contact_position;
+    metrics.expected_contact_velocity = expected_contact_velocity;
+    metrics.expected_plate_velocity = estimated_plate_velocity;
+    metrics.surface_normal = surface_normal;
+    metrics.final_position = final_position;
+    metrics.final_velocity = final_velocity;
+    metrics.contact_position_error = (final_position - expected_contact_position).norm();
+    metrics.relative_tangential_speed = tangential_velocity.norm();
+    metrics.signed_relative_normal_speed = signed_normal_speed;
+    metrics.relative_normal_speed = std::abs(signed_normal_speed);
+    return metrics.valid;
+  }
+
   // =====================================================
   //  Setters
   // =====================================================
@@ -3159,13 +3737,62 @@ namespace ego_planner
     nh.param("optimization/weight_perching_thrust", wei_perching_thrust_, 10000.0);
     nh.param("optimization/weight_perching_omega", wei_perching_omega_, 20000.0);
     nh.param("optimization/weight_perching_collision", wei_perching_collision_, 1000000.0);
+    nh.param("optimization/weight_perching_height", wei_perching_height_, 20000.0);
     nh.param("optimization/weight_perching_time", wei_perching_time_, 100000.0);
+    nh.param("optimization/weight_perching_yaw_projection", wei_perching_yaw_projection_, 80.0);
+    nh.param("optimization/weight_perching_yaw_rate", wei_perching_yaw_rate_, 20.0);
+    nh.param("optimization/weight_perching_yaw_acc", wei_perching_yaw_acc_, 5.0);
+    nh.param("optimization/weight_perching_yaw_energy", wei_perching_yaw_energy_, 1.0);
     nh.param("optimization/perching_floor_height", perching_floor_height_, 0.10);
     nh.param("optimization/perching_thrust_min", perching_thrust_min_, 4.0);
     nh.param("optimization/perching_thrust_max", perching_thrust_max_, 18.0);
     nh.param("optimization/perching_omega_max", perching_omega_max_, 3.0);
     nh.param("optimization/perching_robot_radius", perching_robot_radius_, 0.18);
     nh.param("optimization/perching_platform_radius", perching_platform_radius_, 1.00);
+    nh.param("optimization/perching_relative_height_min", perching_relative_height_min_, 0.03);
+    nh.param("optimization/perching_relative_height_max", perching_relative_height_max_, 3.00);
+    nh.param("optimization/perching_yaw_max_rate", perching_yaw_max_rate_, 1.2);
+    nh.param("optimization/perching_yaw_max_acc", perching_yaw_max_acc_, 3.0);
+    nh.param("optimization/perching_projection_margin_ratio", perching_projection_config_.image_margin_ratio, 0.08);
+    nh.param("optimization/perching_projection_min_depth", perching_projection_config_.min_depth, 0.20);
+    nh.param("optimization/perching_projection_smooth_eps", perching_projection_config_.smooth_eps, 0.03);
+    nh.param("optimization/perching_projection_center_weight_ratio", perching_projection_config_.center_weight_ratio, 1.0);
+    nh.param("optimization/perching_projection_boundary_weight_ratio", perching_projection_config_.boundary_weight_ratio, 2.0);
+    nh.param("optimization/perching_projection_depth_weight_ratio", perching_projection_config_.depth_weight_ratio, 4.0);
+    nh.param("optimization/perching_projection_target_surface_offset", perching_projection_config_.target_surface_offset, 0.0);
+    nh.param("optimization/perching_projection_camera_fx", perching_projection_camera_.fx, perching_projection_camera_.fx);
+    nh.param("optimization/perching_projection_camera_fy", perching_projection_camera_.fy, perching_projection_camera_.fy);
+    nh.param("optimization/perching_projection_camera_cx", perching_projection_camera_.cx, perching_projection_camera_.cx);
+    nh.param("optimization/perching_projection_camera_cy", perching_projection_camera_.cy, perching_projection_camera_.cy);
+    nh.param("optimization/perching_projection_camera_width", perching_projection_camera_.width, perching_projection_camera_.width);
+    nh.param("optimization/perching_projection_camera_height", perching_projection_camera_.height, perching_projection_camera_.height);
+    double perching_projection_camera_x = perching_projection_camera_.p_bc.x();
+    double perching_projection_camera_y = perching_projection_camera_.p_bc.y();
+    double perching_projection_camera_z = perching_projection_camera_.p_bc.z();
+    nh.param("optimization/perching_projection_camera_x", perching_projection_camera_x, perching_projection_camera_x);
+    nh.param("optimization/perching_projection_camera_y", perching_projection_camera_y, perching_projection_camera_y);
+    nh.param("optimization/perching_projection_camera_z", perching_projection_camera_z, perching_projection_camera_z);
+    perching_projection_camera_.p_bc =
+        Eigen::Vector3d(perching_projection_camera_x,
+                        perching_projection_camera_y,
+                        perching_projection_camera_z);
+    bool perching_projection_camera_use_rpy = false;
+    nh.param("optimization/perching_projection_camera_use_rpy", perching_projection_camera_use_rpy, false);
+    if (perching_projection_camera_use_rpy)
+    {
+      double camera_roll = 0.0;
+      double camera_pitch = 0.0;
+      double camera_yaw = 0.0;
+      nh.param("optimization/perching_projection_camera_roll", camera_roll, 0.0);
+      nh.param("optimization/perching_projection_camera_pitch", camera_pitch, 0.0);
+      nh.param("optimization/perching_projection_camera_yaw", camera_yaw, 0.0);
+      perching_projection_camera_.R_bc =
+          (Eigen::AngleAxisd(camera_yaw, Eigen::Vector3d::UnitZ()) *
+           Eigen::AngleAxisd(camera_pitch, Eigen::Vector3d::UnitY()) *
+           Eigen::AngleAxisd(camera_roll, Eigen::Vector3d::UnitX()))
+              .toRotationMatrix();
+    }
+    nh.param("optimization/perching_mask_platform_from_esdf", perching_mask_platform_from_esdf_, true);
     nh.param("optimization/perching_terminal_relax_time", perching_check_config_.terminal_relax_time, 0.25);
     nh.param("optimization/perching_contact_position_tolerance", perching_check_config_.contact_position_tolerance, 0.08);
     nh.param("optimization/perching_relative_tangential_speed_tolerance", perching_check_config_.relative_tangential_speed_tolerance, 0.15);
@@ -3197,13 +3824,34 @@ namespace ego_planner
     wei_perching_thrust_ = std::max(0.0, wei_perching_thrust_);
     wei_perching_omega_ = std::max(0.0, wei_perching_omega_);
     wei_perching_collision_ = std::max(0.0, wei_perching_collision_);
+    wei_perching_height_ = std::max(0.0, wei_perching_height_);
     wei_perching_time_ = std::max(0.0, wei_perching_time_);
+    wei_perching_yaw_projection_ = std::max(0.0, wei_perching_yaw_projection_);
+    wei_perching_yaw_rate_ = std::max(0.0, wei_perching_yaw_rate_);
+    wei_perching_yaw_acc_ = std::max(0.0, wei_perching_yaw_acc_);
+    wei_perching_yaw_energy_ = std::max(0.0, wei_perching_yaw_energy_);
     perching_floor_height_ = std::max(-5.0, perching_floor_height_);
     perching_thrust_min_ = std::max(0.0, perching_thrust_min_);
     perching_thrust_max_ = std::max(perching_thrust_min_ + 1.0e-3, perching_thrust_max_);
     perching_omega_max_ = std::max(0.1, perching_omega_max_);
     perching_robot_radius_ = std::max(0.01, perching_robot_radius_);
     perching_platform_radius_ = std::max(0.05, perching_platform_radius_);
+    perching_relative_height_min_ = std::max(0.0, perching_relative_height_min_);
+    perching_relative_height_max_ = std::max(perching_relative_height_min_ + 1.0e-3, perching_relative_height_max_);
+    perching_yaw_max_rate_ = std::max(0.1, perching_yaw_max_rate_);
+    perching_yaw_max_acc_ = std::max(0.1, perching_yaw_max_acc_);
+    perching_projection_config_.weight = wei_perching_yaw_projection_;
+    perching_projection_config_.image_margin_ratio =
+        std::min(0.90, std::max(0.0, perching_projection_config_.image_margin_ratio));
+    perching_projection_config_.min_depth = std::max(1.0e-3, perching_projection_config_.min_depth);
+    perching_projection_config_.smooth_eps = std::max(1.0e-6, perching_projection_config_.smooth_eps);
+    perching_projection_config_.center_weight_ratio = std::max(0.0, perching_projection_config_.center_weight_ratio);
+    perching_projection_config_.boundary_weight_ratio = std::max(0.0, perching_projection_config_.boundary_weight_ratio);
+    perching_projection_config_.depth_weight_ratio = std::max(0.0, perching_projection_config_.depth_weight_ratio);
+    perching_projection_camera_.fx = std::max(1.0, perching_projection_camera_.fx);
+    perching_projection_camera_.fy = std::max(1.0, perching_projection_camera_.fy);
+    perching_projection_camera_.width = std::max(2.0, perching_projection_camera_.width);
+    perching_projection_camera_.height = std::max(2.0, perching_projection_camera_.height);
     perching_check_config_.terminal_relax_time = std::max(0.0, perching_check_config_.terminal_relax_time);
     perching_check_config_.contact_position_tolerance = std::max(0.0, perching_check_config_.contact_position_tolerance);
     perching_check_config_.relative_tangential_speed_tolerance = std::max(0.0, perching_check_config_.relative_tangential_speed_tolerance);

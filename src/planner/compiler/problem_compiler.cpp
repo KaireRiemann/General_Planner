@@ -13,40 +13,6 @@ using ego_planner::core::TaskSemanticArtifact;
 using ego_planner::core::TaskDefinition;
 using ego_planner::core::TaskType;
 
-double extractPerchingApproachDistance(const TaskDefinition &task_definition,
-                                       const ego_planner::core::StateDefinition &contact_state,
-                                       const ego_planner::core::StateDefinition &approach_state)
-{
-  if (!contact_state.valid || !approach_state.valid)
-  {
-    return 0.0;
-  }
-
-  const Eigen::VectorXd *manifold_params = nullptr;
-  if (task_definition.goal.manifold_params.size() >= 21)
-  {
-    manifold_params = &task_definition.goal.manifold_params;
-  }
-  else if (!task_definition.phases.empty() &&
-           task_definition.phases.back().goal.manifold_params.size() >= 21)
-  {
-    manifold_params = &task_definition.phases.back().goal.manifold_params;
-  }
-
-  if (manifold_params != nullptr)
-  {
-    const Eigen::Vector3d surface_z = manifold_params->segment<3>(18);
-    if (surface_z.allFinite() && surface_z.norm() > 1.0e-6)
-    {
-      return std::max(0.0,
-                      (contact_state.position - approach_state.position)
-                          .dot(surface_z.normalized()));
-    }
-  }
-
-  return std::max(0.0, (contact_state.position - approach_state.position).norm());
-}
-
 ActiveSpaceModel selectStateToStateSpaceModel(const TaskDefinition &task_definition,
                                               const ego_planner::core::PlanningContext &context)
 {
@@ -138,33 +104,20 @@ TaskSemanticArtifact buildTaskSemanticArtifact(const TaskDefinition &task_defini
 
   if (task_definition.type == TaskType::PERCHING)
   {
+    artifact.perching.valid = task_definition.goal.state.valid;
     artifact.perching.contact_state = task_definition.goal.state;
     artifact.perching.terminal_manifold_params = task_definition.goal.manifold_params;
-    if ((!artifact.perching.contact_state.valid ||
-         artifact.perching.terminal_manifold_params.size() == 0) &&
-        !task_definition.phases.empty())
-    {
-      const auto &final_phase = task_definition.phases.back();
-      if (!artifact.perching.contact_state.valid)
-      {
-        artifact.perching.contact_state = final_phase.goal.state;
-      }
-      if (artifact.perching.terminal_manifold_params.size() == 0)
-      {
-        artifact.perching.terminal_manifold_params = final_phase.goal.manifold_params;
-      }
-    }
-
     if (!task_definition.phases.empty())
     {
       artifact.perching.approach_anchor_state = task_definition.phases.front().goal.state;
-      artifact.perching.approach_distance =
-          extractPerchingApproachDistance(task_definition,
-                                          artifact.perching.contact_state,
-                                          artifact.perching.approach_anchor_state);
+      if (artifact.perching.approach_anchor_state.valid &&
+          artifact.perching.contact_state.valid)
+      {
+        artifact.perching.approach_distance =
+            (artifact.perching.contact_state.position -
+             artifact.perching.approach_anchor_state.position).norm();
+      }
     }
-
-    artifact.perching.valid = artifact.perching.contact_state.valid;
     artifact.perching.touch_goal =
         task_definition.runtime_policy.touch_goal || task_definition.goal.touch_goal;
   }

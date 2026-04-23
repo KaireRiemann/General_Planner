@@ -164,11 +164,29 @@ public:
  *
  * The same mapping works for S=3 (minimum jerk, P/V/A tail constraints) and
  * for S=4 (minimum snap, P/V/A/J tail constraints). When S=4, terminal jerk
- * is explicitly forced to zero as in the paper. This repository currently
- * executes the runtime trajectory through the S=3 path; the S=4 mapping/alias
- * is provided so the backend is perching-ready without introducing a fake
- * half-wired runtime path.
+ * is explicitly forced to zero as in the paper.
  */
+struct PerchingSemanticConfig
+{
+  Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
+  double reference_time{0.0};
+  Eigen::Vector3d surface_x{Eigen::Vector3d::UnitX()};
+  Eigen::Vector3d surface_y{Eigen::Vector3d::UnitY()};
+  Eigen::Vector3d surface_z{Eigen::Vector3d::UnitZ()};
+  double robot_l{0.0};
+  double v_plus{0.0};
+  double thrust_nominal{9.81};
+  double thrust_range{0.0};
+  bool use_dynamics_terminal_accel{false};
+  Eigen::Vector2d nu_seed{Eigen::Vector2d::Zero()};
+  double tau_f_seed{0.0};
+  double pre_contact_distance{0.4};
+  double terminal_relax_time{0.35};
+  double weight_nu{1.0e-2};
+  double weight_tau_f{1.0e-3};
+};
+
 template <int DIM, int S>
 class PerchingTerminalMapping final : public TerminalMappingBase<DIM, S>
 {
@@ -177,27 +195,7 @@ public:
   static_assert(S >= 3, "PerchingTerminalMapping requires boundary derivatives up to acceleration.");
 
   using BoundaryState = typename TerminalMappingBase<DIM, S>::BoundaryState;
-
-  struct PerchingSemanticConfig
-  {
-    Eigen::Vector3d plate_position{Eigen::Vector3d::Zero()};
-    Eigen::Vector3d plate_velocity{Eigen::Vector3d::Zero()};
-    double reference_time{0.0};
-    Eigen::Vector3d surface_x{Eigen::Vector3d::UnitX()};
-    Eigen::Vector3d surface_y{Eigen::Vector3d::UnitY()};
-    Eigen::Vector3d surface_z{Eigen::Vector3d::UnitZ()};
-    double robot_l{0.0};
-    double v_plus{0.0};
-    double thrust_nominal{9.81};
-    double thrust_range{0.0};
-    bool use_dynamics_terminal_accel{false};
-    Eigen::Vector2d nu_seed{Eigen::Vector2d::Zero()};
-    double tau_f_seed{0.0};
-    double pre_contact_distance{0.4};
-    double terminal_relax_time{0.35};
-    double weight_nu{1.0e-2};
-    double weight_tau_f{1.0e-3};
-  };
+  using PerchingSemanticConfig = minco::PerchingSemanticConfig;
 
   enum ExtraIndex
   {

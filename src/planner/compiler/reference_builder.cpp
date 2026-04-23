@@ -3,30 +3,6 @@
 namespace ego_planner::compiler
 {
 
-namespace
-{
-
-void populatePhaseGoalCache(const core::GoalDefinition &goal,
-                            core::PhaseProblemSpec &phase_problem)
-{
-  phase_problem.goal = goal;
-  phase_problem.terminal_is_set = goal.isTerminalSet();
-  phase_problem.terminal_is_manifold = goal.isTerminalManifold();
-  phase_problem.goal_state.valid = goal.state.valid;
-  phase_problem.goal_state.position = goal.state.position;
-  phase_problem.goal_state.velocity = goal.state.velocity;
-  phase_problem.goal_state.acceleration = goal.state.acceleration;
-  phase_problem.manifold_params = goal.manifold_params;
-
-  phase_problem.has_cached_goal_state = goal.state.valid;
-  phase_problem.cached_goal_state = goal.state;
-  phase_problem.has_cached_manifold_params = goal.manifold_params.size() > 0;
-  phase_problem.cached_manifold_params =
-      phase_problem.has_cached_manifold_params ? goal.manifold_params : Eigen::VectorXd{};
-}
-
-} // namespace
-
 bool ReferenceBuilder::build(const core::PlanningContext &context,
                              const core::TaskDefinition &task_definition,
                              core::PlanningProblem &problem) const
@@ -62,6 +38,18 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
     problem.terminal_boundary.velocity = task_definition.goal.state.velocity;
     problem.terminal_boundary.acceleration = task_definition.goal.state.acceleration;
   }
+
+  auto fill_phase_problem_compat = [](core::PhaseProblemSpec &phase_problem,
+                                      const core::GoalDefinition &goal)
+  {
+    phase_problem.goal = goal;
+    phase_problem.goal_state = goal.state;
+    phase_problem.manifold_params = goal.manifold_params;
+    phase_problem.has_cached_goal_state = goal.state.valid;
+    phase_problem.cached_goal_state = goal.state;
+    phase_problem.has_cached_manifold_params = goal.manifold_params.size() > 0;
+    phase_problem.cached_manifold_params = goal.manifold_params;
+  };
 
   for (const auto &reference : task_definition.references)
   {
@@ -125,28 +113,23 @@ bool ReferenceBuilder::build(const core::PlanningContext &context,
   {
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = task_definition.task_name.empty() ? "phase" : task_definition.task_name;
-    populatePhaseGoalCache(task_definition.goal, phase_problem);
-    phase_problem.objective_mask = task_definition.objective_constraint_policy.objective_mask;
-    phase_problem.constraint_mask = task_definition.objective_constraint_policy.constraint_mask;
+    phase_problem.terminal_is_set = task_definition.goal.isTerminalSet();
+    phase_problem.terminal_is_manifold = task_definition.goal.isTerminalManifold();
+    fill_phase_problem_compat(phase_problem, task_definition.goal);
     problem.phase_specs.push_back(phase_problem);
     return true;
   }
 
   problem.phase_specs.reserve(task_definition.phases.size());
-  for (std::size_t phase_index = 0; phase_index < task_definition.phases.size(); ++phase_index)
+  for (const auto &phase : task_definition.phases)
   {
-    const auto &phase = task_definition.phases[phase_index];
     core::PhaseProblemSpec phase_problem;
     phase_problem.name = phase.name;
-    populatePhaseGoalCache(phase.goal, phase_problem);
+    phase_problem.terminal_is_set = phase.goal.isTerminalSet();
+    phase_problem.terminal_is_manifold = phase.goal.isTerminalManifold();
+    fill_phase_problem_compat(phase_problem, phase.goal);
     phase_problem.objective_mask = phase.objective_mask;
     phase_problem.constraint_mask = phase.constraint_mask;
-
-    // Perching phases are lowered in order:
-    //   phase 0 -> approach_anchor
-    //   phase 1 -> contact_final
-    // The concrete goal content is preserved in phase_problem.goal,
-    // phase_problem.goal_state, and phase_problem.manifold_params.
     problem.phase_specs.push_back(phase_problem);
   }
   return true;

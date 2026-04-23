@@ -2,6 +2,7 @@
 #define _PLAN_CONTAINER_H_
 
 #include <Eigen/Eigen>
+#include <algorithm>
 #include <vector>
 #include <ros/ros.h>
 #include "traj_utils/minco_types.hpp"
@@ -32,6 +33,9 @@ namespace ego_planner
   struct LocalTrajData
   {
     MINCOTraj3D traj;
+    SnapTraj3D snap_traj;
+    YawTraj1D yaw_traj;
+    int order{MINCOTraj3D::ORDER};
     int drone_id; // A negative value indicates no received trajectories.
     int traj_id;
     double duration;
@@ -42,9 +46,52 @@ namespace ego_planner
     std::vector<double> yaw_time;
     std::vector<double> yaw_ref;
     bool has_yaw_ref{false};
+    bool has_yaw_traj{false};
+
+    bool usesSnapTrajectory() const
+    {
+      return order == SnapTraj3D::ORDER;
+    }
+
+    int boundaryDerivativeNum() const
+    {
+      return usesSnapTrajectory()
+                 ? SnapTraj3D::BOUNDARY_DERIVATIVE_NUM
+                 : MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
+    }
+
+    Eigen::VectorXd getDurations() const
+    {
+      return usesSnapTrajectory() ? snap_traj.getDurations() : traj.getDurations();
+    }
+
+    Eigen::MatrixXd getPositions() const
+    {
+      return usesSnapTrajectory() ? snap_traj.getPositions() : traj.getPositions();
+    }
+
+    Eigen::MatrixXd getInitConstraintPoints(const int samples_per_piece) const
+    {
+      return usesSnapTrajectory()
+                 ? snap_traj.getInitConstraintPoints(samples_per_piece)
+                 : traj.getInitConstraintPoints(samples_per_piece);
+    }
+
+    Eigen::Vector3d evaluate(const double t, const int derivative_order) const
+    {
+      return usesSnapTrajectory()
+                 ? snap_traj.evaluate(t, derivative_order)
+                 : traj.evaluate(t, derivative_order);
+    }
 
     double sampleYaw(double t_local) const
     {
+      if (has_yaw_traj && yaw_traj.getPieceNum() > 0)
+      {
+        const double t = std::min(std::max(0.0, t_local), yaw_traj.getTotalDuration());
+        return yaw_traj.evaluate(t, 0)(0);
+      }
+
       if (!has_yaw_ref || yaw_time.empty() || yaw_ref.empty() || yaw_time.size() != yaw_ref.size())
       {
         return 0.0;
@@ -94,6 +141,13 @@ namespace ego_planner
       local_traj.drone_id = -1;
       local_traj.duration = 0.0;
       local_traj.traj_id = 0;
+      local_traj.order = MINCOTraj3D::ORDER;
+      local_traj.snap_traj = SnapTraj3D();
+      local_traj.yaw_traj = YawTraj1D();
+      local_traj.yaw_time.clear();
+      local_traj.yaw_ref.clear();
+      local_traj.has_yaw_ref = false;
+      local_traj.has_yaw_traj = false;
     }
 
     void setLocalTraj(const MINCOTraj3D &trajectory, const double &world_time, const int drone_id = -1)
@@ -107,9 +161,39 @@ namespace ego_planner
       local_traj.start_time = world_time;
       local_traj.end_time = world_time + local_traj.duration;
       local_traj.traj = trajectory;
+      local_traj.order = MINCOTraj3D::ORDER;
+      local_traj.snap_traj = SnapTraj3D();
+      local_traj.yaw_traj = YawTraj1D();
       local_traj.yaw_time.clear();
       local_traj.yaw_ref.clear();
       local_traj.has_yaw_ref = false;
+      local_traj.has_yaw_traj = false;
+    }
+
+    void setLocalTraj(const SnapTraj3D &trajectory, const double &world_time, const int drone_id = -1)
+    {
+      local_traj.drone_id = drone_id;
+      local_traj.traj_id++;
+
+      local_traj.duration = trajectory.getTotalDuration();
+      local_traj.start_pos = trajectory.evaluate(0.0, 0);
+
+      local_traj.start_time = world_time;
+      local_traj.end_time = world_time + local_traj.duration;
+      local_traj.snap_traj = trajectory;
+      local_traj.order = SnapTraj3D::ORDER;
+      local_traj.traj = MINCOTraj3D();
+      local_traj.yaw_traj = YawTraj1D();
+      local_traj.yaw_time.clear();
+      local_traj.yaw_ref.clear();
+      local_traj.has_yaw_ref = false;
+      local_traj.has_yaw_traj = false;
+    }
+
+    void setLocalYawTraj(const YawTraj1D &trajectory)
+    {
+      local_traj.yaw_traj = trajectory;
+      local_traj.has_yaw_traj = trajectory.getPieceNum() > 0;
     }
 
     void setLocalYawRef(const std::vector<double> &t_ref,

@@ -1,12 +1,119 @@
 #include <plan_manage/ego_replan_fsm.h>
+#include <traj_utils/PerchingTraj.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <thread>
 
 namespace ego_planner
 {
+  namespace
+  {
+    ros::Publisher perching_traj_pub;
+
+    bool perchingTraj2ROSMsg(const LocalTrajData &data,
+                             const int drone_id,
+                             const double swarm_clearance,
+                             traj_utils::PerchingTraj &perching_msg)
+    {
+      if (!data.usesSnapTrajectory() || data.snap_traj.getPieceNum() <= 0)
+      {
+        return false;
+      }
+
+      constexpr int kBoundaryNum = SnapTraj3D::BOUNDARY_DERIVATIVE_NUM;
+      Eigen::VectorXd durs = data.snap_traj.getDurations();
+      const int M = static_cast<int>(durs.size());
+      if (M <= 0)
+      {
+        return false;
+      }
+
+      perching_msg.drone_id = drone_id;
+      perching_msg.traj_id = data.traj_id;
+      perching_msg.start_time = ros::Time(data.start_time);
+      perching_msg.order = SnapTraj3D::ORDER;
+      perching_msg.des_clearance = swarm_clearance;
+
+      perching_msg.duration.resize(M);
+      for (int i = 0; i < M; ++i)
+      {
+        perching_msg.duration[i] = durs(i);
+      }
+
+      const int num_encoded = M + 2 * kBoundaryNum - 1;
+      perching_msg.coef_x.resize(num_encoded);
+      perching_msg.coef_y.resize(num_encoded);
+      perching_msg.coef_z.resize(num_encoded);
+
+      const double T_total = data.snap_traj.getTotalDuration();
+      for (int d = 0; d < kBoundaryNum; ++d)
+      {
+        const Eigen::Vector3d head_d = data.snap_traj.evaluate(0.0, d);
+        perching_msg.coef_x[d] = head_d(0);
+        perching_msg.coef_y[d] = head_d(1);
+        perching_msg.coef_z[d] = head_d(2);
+
+        const Eigen::Vector3d tail_d = data.snap_traj.evaluate(T_total, d);
+        perching_msg.coef_x[num_encoded - kBoundaryNum + d] = tail_d(0);
+        perching_msg.coef_y[num_encoded - kBoundaryNum + d] = tail_d(1);
+        perching_msg.coef_z[num_encoded - kBoundaryNum + d] = tail_d(2);
+      }
+
+      if (M > 1)
+      {
+        Eigen::MatrixXd positions = data.snap_traj.getPositions();
+        for (int i = 0; i < M - 1; ++i)
+        {
+          perching_msg.coef_x[kBoundaryNum + i] = positions(0, i + 1);
+          perching_msg.coef_y[kBoundaryNum + i] = positions(1, i + 1);
+          perching_msg.coef_z[kBoundaryNum + i] = positions(2, i + 1);
+        }
+      }
+
+      perching_msg.has_yaw = data.has_yaw_traj && data.yaw_traj.getPieceNum() > 0;
+      perching_msg.yaw_order = YawTraj1D::ORDER;
+      perching_msg.coef_yaw.clear();
+      perching_msg.duration_yaw.clear();
+      if (!perching_msg.has_yaw)
+      {
+        return true;
+      }
+
+      constexpr int kYawBoundaryNum = YawTraj1D::BOUNDARY_DERIVATIVE_NUM;
+      Eigen::VectorXd yaw_durs = data.yaw_traj.getDurations();
+      const int yaw_M = static_cast<int>(yaw_durs.size());
+      perching_msg.duration_yaw.resize(yaw_M);
+      for (int i = 0; i < yaw_M; ++i)
+      {
+        perching_msg.duration_yaw[i] = yaw_durs(i);
+      }
+
+      const int yaw_encoded = yaw_M + 2 * kYawBoundaryNum - 1;
+      perching_msg.coef_yaw.resize(yaw_encoded);
+      const double yaw_T_total = data.yaw_traj.getTotalDuration();
+      for (int d = 0; d < kYawBoundaryNum; ++d)
+      {
+        perching_msg.coef_yaw[d] = data.yaw_traj.evaluate(0.0, d)(0);
+        perching_msg.coef_yaw[yaw_encoded - kYawBoundaryNum + d] =
+            data.yaw_traj.evaluate(yaw_T_total, d)(0);
+      }
+
+      if (yaw_M > 1)
+      {
+        Eigen::Matrix<double, 1, Eigen::Dynamic> yaw_positions = data.yaw_traj.getPositions();
+        for (int i = 0; i < yaw_M - 1; ++i)
+        {
+          perching_msg.coef_yaw[kYawBoundaryNum + i] = yaw_positions(0, i + 1);
+        }
+      }
+
+      return true;
+    }
+  } // namespace
+
 
   void EGOReplanFSM::init(ros::NodeHandle &nh)
   {
@@ -222,9 +329,25 @@ namespace ego_planner
                                                                  this,
                                                                  ros::TransportHints().tcpNoDelay());
 
-    poly_traj_pub_ = nh.advertise<traj_utils::PolyTraj>("planning/trajectory", 10);
+    poly_traj_pub_ = nh.advertise<traj_utils::PolyTraj>("planning/trajectory", 10, true);
+    perching_traj_pub = nh.advertise<traj_utils::PerchingTraj>("planning/perching_trajectory", 10, true);
     data_disp_pub_ = nh.advertise<traj_utils::DataDisp>("planning/data_display", 100);
     heartbeat_pub_ = nh.advertise<std_msgs::Empty>("planning/heartbeat", 10);
+    static std::atomic<bool> heartbeat_thread_started{false};
+    if (!heartbeat_thread_started.exchange(true))
+    {
+      std::thread([this]()
+                  {
+                    ros::Rate rate(20.0);
+                    while (ros::ok())
+                    {
+                      std_msgs::Empty heartbeat_msg;
+                      heartbeat_pub_.publish(heartbeat_msg);
+                      rate.sleep();
+                    }
+                  })
+          .detach();
+    }
     ground_height_pub_ = nh.advertise<std_msgs::Float64>("/ground_height_measurement", 10);
     perching_lock_pub_ = nh.advertise<std_msgs::Bool>(perching_lock_topic_, 1, true);
 
@@ -488,7 +611,7 @@ namespace ego_planner
         }
       }
       
-      Eigen::Vector3d pos = info->traj.getPos(t_cur); 
+      Eigen::Vector3d pos = info->evaluate(t_cur, 0);
       bool touch_the_goal = tracking_active ? false : ((local_target_pt_ - final_goal_).norm() < 1e-2);
       const bool arrived_goal =
           (!tracking_active) &&
@@ -560,8 +683,8 @@ namespace ego_planner
 
         const Eigen::Vector3d planned_contact =
             have_planned_local_target_ ? planned_local_target_pt_ : local_target_pt_;
-        const Eigen::Vector3d committed_tail_contact = info->traj.getPos(info->duration);
-        const Eigen::Vector3d committed_tail_velocity = info->traj.getVel(info->duration);
+        const Eigen::Vector3d committed_tail_contact = info->evaluate(info->duration, 0);
+        const Eigen::Vector3d committed_tail_velocity = info->evaluate(info->duration, 1);
         runtime::PerchingTerminalState live_terminal;
         const bool have_live_terminal =
             perching_target_provider_ &&
@@ -961,7 +1084,7 @@ namespace ego_planner
 
     for (double t = t_cur; t < t_end; t += t_step)
     {
-      Eigen::Vector3d pt =info->traj.getPos(t);
+      Eigen::Vector3d pt = info->evaluate(t, 0);
       bool dangerous = false;
 
       double sdf_at_pt = 0.0;
@@ -1012,7 +1135,7 @@ namespace ego_planner
           
           if (t_X > 0 && t_X < planner_manager_->traj_.swarm_traj.at(id).duration)
           {
-            Eigen::Vector3d swarm_predicted = planner_manager_->traj_.swarm_traj.at(id).traj.evaluate(t_X, 0);
+            Eigen::Vector3d swarm_predicted = planner_manager_->traj_.swarm_traj.at(id).evaluate(t_X, 0);
             double dist = (pt - swarm_predicted).norm();
             double allowed_dist = planner_manager_->getSwarmClearance() + planner_manager_->traj_.swarm_traj.at(id).des_clearance;
             
@@ -1047,14 +1170,14 @@ namespace ego_planner
         }
 
         last_safety_replan_attempt_time_ = now;
-        if (planFromLocalTraj(1)) 
+        if (planFromLocalTraj(1))
         {
           ROS_INFO("Plan success when detect collision at future t=%f", t);
           changeFSMExecState(EXEC_TRAJ, "SAFETY");
         }
         else
         {
-          if (time_to_collision < emergency_time_) 
+          if (time_to_collision < emergency_time_)
           {
             ROS_WARN("Emergency stop! Crash in %f seconds", time_to_collision);
             changeFSMExecState(EMERGENCY_STOP, "SAFETY");
@@ -1126,7 +1249,7 @@ namespace ego_planner
     for (double t = t_cur; t <= t_end + 1.0e-6; t += 0.05)
     {
       const double sample_t = std::min(t, info->duration);
-      const Eigen::Vector3d pt = info->traj.getPos(sample_t);
+      const Eigen::Vector3d pt = info->evaluate(sample_t, 0);
       double sdf_at_pt = 0.0;
       if (runtimePointUnsafe(planner_manager_->grid_map_, pt, &sdf_at_pt))
       {
@@ -1379,7 +1502,7 @@ namespace ego_planner
     const double preview_start_t =
         std::min(info->duration,
                  t_cur + std::max(0.05, 0.35 * successor_lead_time));
-    const Eigen::Vector3d preview_start_pt = info->traj.evaluate(preview_start_t, 0);
+    const Eigen::Vector3d preview_start_pt = info->evaluate(preview_start_t, 0);
     if (!local_target_selector_ ||
         !local_target_selector_->peekLocalTarget(planner_manager_->traj_,
                                                 planning_horizen_,
@@ -1610,7 +1733,7 @@ namespace ego_planner
   {
     if (standalonePerchingMode())
     {
-      return TaskRuntimeStage::PERCHING_APPROACH;
+      return TaskRuntimeStage::PERCHING_COMMIT;
     }
     if (use_tracking_task_)
     {
@@ -1745,11 +1868,23 @@ namespace ego_planner
     const double contact_capture_window =
         std::max(std::max(0.90, terminal.approach_distance + 0.35),
                  2.0 * perching_arrive_pos_thresh_);
+    const double prediction_horizon =
+        std::max(0.5, perching_max_prediction_time_);
+    const double reachable_distance =
+        planner_manager_ != nullptr
+            ? 1.2 * std::max(0.1, planner_manager_->pp_.max_vel_) * prediction_horizon
+            : contact_capture_window;
+    const double anchor_handoff_window =
+        std::max(anchor_window, reachable_distance);
+    const double contact_handoff_window =
+        std::max(contact_capture_window, reachable_distance + terminal.approach_distance);
     const double vel_window =
         std::max(0.05, perching_entry_tangent_vel_thresh_);
-    return (dist_to_anchor <= anchor_window ||
-            dist_to_contact <= contact_capture_window) &&
-           rel_tangent_speed <= vel_window;
+    const double handoff_vel_window =
+        std::max(vel_window, 0.5);
+    return (dist_to_anchor <= anchor_handoff_window ||
+            dist_to_contact <= contact_handoff_window) &&
+           rel_tangent_speed <= handoff_vel_window;
   }
 
   bool EGOReplanFSM::shouldEnterPerchingApproach(runtime::PerchingTerminalState &terminal)
@@ -1776,6 +1911,16 @@ namespace ego_planner
     const double contact_capture_window =
         std::max(std::max(0.90, terminal.approach_distance + 0.35),
                  2.0 * perching_arrive_pos_thresh_);
+    const double prediction_horizon =
+        std::max(0.5, perching_max_prediction_time_);
+    const double reachable_distance =
+        planner_manager_ != nullptr
+            ? 1.2 * std::max(0.1, planner_manager_->pp_.max_vel_) * prediction_horizon
+            : contact_capture_window;
+    const double contact_handoff_window =
+        std::max(contact_capture_window, reachable_distance + terminal.approach_distance);
+    const double handoff_vel_window =
+        std::max(std::max(0.05, perching_entry_tangent_vel_thresh_), 0.5);
     const bool inside_contact_capture =
         dist_to_contact <= contact_capture_window;
     const bool gate_ok =
@@ -1786,12 +1931,13 @@ namespace ego_planner
       perching_stage_entry_stable_since_ = -1.0;
       perching_commit_stable_since_ = -1.0;
       ROS_INFO_THROTTLE(0.8,
-                        "[FSM] perching entry gate pending: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f stage=%s",
+                        "[FSM] perching entry gate pending: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f handoff_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f stage=%s",
                         dist_to_anchor,
                         dist_to_contact,
                         contact_capture_window,
+                        contact_handoff_window,
                         rel_tangent_speed,
-                        perching_entry_tangent_vel_thresh_,
+                        handoff_vel_window,
                         rel_normal_speed,
                         taskRuntimeStageString(task_runtime_stage_));
       return false;
@@ -1803,12 +1949,13 @@ namespace ego_planner
       perching_stage_entry_stable_since_ = now;
       perching_commit_stable_since_ = -1.0;
       ROS_INFO_THROTTLE(0.8,
-                        "[FSM] perching handoff captured: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f mode=%s hold=instant",
+                        "[FSM] perching handoff captured: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f handoff_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f mode=%s hold=instant",
                         dist_to_anchor,
                         dist_to_contact,
                         contact_capture_window,
+                        contact_handoff_window,
                         rel_tangent_speed,
-                        perching_entry_tangent_vel_thresh_,
+                        handoff_vel_window,
                         rel_normal_speed,
                         "stable");
       return true;
@@ -1820,12 +1967,13 @@ namespace ego_planner
     }
 
     ROS_INFO_THROTTLE(0.8,
-                      "[FSM] perching handoff gate stable: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f hold=%.2f/%.2f",
+                      "[FSM] perching handoff gate stable: dist_to_anchor=%.2f dist_to_contact=%.2f capture_window=%.2f handoff_window=%.2f rel_tangent_vel=%.2f/%.2f rel_normal_vel=%.2f hold=%.2f/%.2f",
                       dist_to_anchor,
                       dist_to_contact,
                       contact_capture_window,
+                      contact_handoff_window,
                       rel_tangent_speed,
-                      perching_entry_tangent_vel_thresh_,
+                      handoff_vel_window,
                       rel_normal_speed,
                       now - perching_stage_entry_stable_since_,
                       perching_stage_entry_hold_time_);
@@ -2160,12 +2308,13 @@ namespace ego_planner
     have_active_perching_terminal_ = false;
     perching_contact_latched_ = false;
     active_perching_terminal_ = runtime::PerchingTerminalState{};
-        clearFrozenPerchingTerminalReference();
+    clearFrozenPerchingTerminalReference();
     planned_tracking_target_pos_now_.setZero();
     planned_tracking_ref_end_.setZero();
   }
 
-  bool EGOReplanFSM::callCurrentTaskPlan(bool flag_use_poly_init, bool flag_randomPolyTraj)
+  bool EGOReplanFSM::callCurrentTaskPlan(bool flag_use_poly_init,
+                                         bool flag_randomPolyTraj)
   {
     if (use_tracking_task_ && task_runtime_stage_ == TaskRuntimeStage::TRACKING_FOLLOW)
     {
@@ -2198,6 +2347,7 @@ namespace ego_planner
     Eigen::Vector3d tracking_anchor_vel = local_target_vel_;
     runtime::PerchingTerminalState perching_terminal;
     runtime::LocalTargetSelection target_selection;
+    const bool force_plain = shouldForcePlainReplan();
 
     if (tracking_stage_selected && !tracking_active)
     {
@@ -2390,8 +2540,6 @@ namespace ego_planner
       return false;
     }
 
-    const bool force_plain = shouldForcePlainReplan();
-
     core::PlanningContext planning_context;
     if (context_builder_)
     {
@@ -2427,14 +2575,19 @@ namespace ego_planner
       planning_context.preview_glb_t_of_lc_tgt = target_selection.next_glb_t_of_lc_tgt;
       planning_context.preview_last_glb_t_of_lc_tgt = target_selection.previous_glb_t_of_lc_tgt;
     }
-
     // FSM only manages runtime state transitions.
     // Task semantics come from TaskFactory, and the compiler owns problem construction.
+    const bool fast_perching_flow = perching_active && standalonePerchingMode();
     bool task_force_plain = force_plain;
     bool task_prefer_corridor = false;
     bool task_prefer_esdf = false;
     std::string resolved_space_pref = "plain";
-    if (task_force_plain || state2state_space_model_preference_ == "plain")
+    if (fast_perching_flow)
+    {
+      task_force_plain = true;
+      resolved_space_pref = "plain(fast_perching)";
+    }
+    else if (task_force_plain || state2state_space_model_preference_ == "plain")
     {
       task_force_plain = true;
       resolved_space_pref = "plain";
@@ -2533,6 +2686,7 @@ namespace ego_planner
           task_prefer_corridor,
           task_prefer_esdf);
       task_definition.runtime_policy.flag_poly_init = flag_use_poly_init;
+      task_definition.runtime_policy.use_fast_perching_init = fast_perching_flow;
       // Perching seeds should stay deterministic; random transit seeds can
       // drift the moving-contact endpoint and amplify terminal-map instability.
       task_definition.runtime_policy.flag_random_poly_traj = false;
@@ -2589,10 +2743,29 @@ namespace ego_planner
                  planning_solution.corridor_hpolys.size());
       }
 
-      traj_utils::PolyTraj poly_msg;
-      polyTraj2ROSMsg(poly_msg);
-      poly_traj_pub_.publish(poly_msg);
-      broadcast_ploytraj_pub_.publish(poly_msg);
+      const LocalTrajData &local_traj = planner_manager_->traj_.local_traj;
+      if (local_traj.usesSnapTrajectory())
+      {
+        traj_utils::PerchingTraj perching_msg;
+        if (perchingTraj2ROSMsg(local_traj,
+                                planner_manager_->pp_.drone_id,
+                                planner_manager_->getSwarmClearance(),
+                                perching_msg))
+        {
+          perching_traj_pub.publish(perching_msg);
+        }
+        else
+        {
+          ROS_ERROR("[FSM] Failed to encode Snap perching trajectory for traj_server.");
+        }
+      }
+      else
+      {
+        traj_utils::PolyTraj poly_msg;
+        polyTraj2ROSMsg(poly_msg);
+        poly_traj_pub_.publish(poly_msg);
+        broadcast_ploytraj_pub_.publish(poly_msg);
+      }
 
       last_replan_time_ = ros::Time::now().toSec();
 
@@ -2647,7 +2820,7 @@ namespace ego_planner
         have_pending_state2state_target_selection_ = false;
         pending_state2state_target_selection_ = runtime::LocalTargetSelection{};
         planned_local_target_pt_ =
-            planner_manager_->traj_.local_traj.traj.evaluate(
+            planner_manager_->traj_.local_traj.evaluate(
                 planner_manager_->traj_.local_traj.duration, 0);
         planned_local_target_glb_t_ = -1.0;
         planned_final_goal_ = final_goal_;
@@ -2732,10 +2905,11 @@ namespace ego_planner
   {
     LocalTrajData *info = &planner_manager_->traj_.local_traj;
     double t_abs = ros::Time::now().toSec() - info->start_time;
+    const double t_sample = std::min(std::max(0.0, t_abs), info->duration);
 
-    start_pt_ = info->traj.evaluate(t_abs, 0);
-    start_vel_ = info->traj.evaluate(t_abs, 1);
-    start_acc_ = info->traj.evaluate(t_abs, 2);
+    start_pt_ = info->evaluate(t_sample, 0);
+    start_vel_ = info->evaluate(t_sample, 1);
+    start_acc_ = info->evaluate(t_sample, 2);
 
     bool success = callCurrentTaskPlan(false, false);
 
@@ -2769,8 +2943,6 @@ namespace ego_planner
     {
       final_goal_ = next_wp;
       corridor_fail_count_ = 0;
-
-
       constexpr double step_size_t = 0.1;
       int i_end = floor(planner_manager_->traj_.global_traj.duration / step_size_t);
       vector<Eigen::Vector3d> gloabl_traj(i_end);
@@ -3140,7 +3312,7 @@ namespace ego_planner
 
     const double query_dt = std::max(0.0, tracking_replan_current_traj_lookahead_);
     const double sample_t = std::min(info->duration, t_cur + std::max(query_dt, 0.2));
-    const Eigen::Vector3d traj_pos = info->traj.getPos(sample_t);
+    const Eigen::Vector3d traj_pos = info->evaluate(sample_t, 0);
 
     Eigen::Vector3d ref_pos = tracking_target_pos_now_;
     Eigen::Vector3d ref_vel = tracking_target_vel_now_;
@@ -3297,10 +3469,10 @@ namespace ego_planner
   void EGOReplanFSM::RecvBroadcastPolyTrajCallback(const traj_utils::PolyTrajConstPtr &msg)
   {
     constexpr int kBoundaryNum = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
-    constexpr int kOrder = MINCOTraj3D::ORDER;
     const size_t recv_id = (size_t)msg->drone_id;
     if ((int)recv_id == planner_manager_->pp_.drone_id) return;
-    if (msg->drone_id < 0 || msg->order != kOrder) return;
+    if (msg->drone_id < 0) return;
+    if (msg->order != MINCOTraj3D::ORDER) return;
 
     ros::Time t_now = ros::Time::now();
     if (abs((t_now - msg->start_time).toSec()) > 0.25)
@@ -3343,6 +3515,10 @@ namespace ego_planner
       C(i, 2) = msg->coef_z[i];
     }
 
+    Eigen::MatrixXd P_inner;
+    if (M > 1) P_inner = C.block(kBoundaryNum, 0, M - 1, 3).transpose();
+    else P_inner.resize(3, 0);
+
     MINCOBoundaryState3D headState = MINCOBoundaryState3D::Zero();
     MINCOBoundaryState3D tailState = MINCOBoundaryState3D::Zero();
     for (int d = 0; d < kBoundaryNum; ++d)
@@ -3350,15 +3526,11 @@ namespace ego_planner
       headState.col(d) = C.row(d).transpose();
       tailState.col(d) = C.row(Nc - kBoundaryNum + d).transpose();
     }
-
-    Eigen::MatrixXd P_inner;
-    if (M > 1) P_inner = C.block(kBoundaryNum, 0, M - 1, 3).transpose();
-    else P_inner.resize(3, 0);
-
     MINCOTraj3D trajectory;
     trajectory.generate(P_inner, headState, tailState, T);
 
     Eigen::MatrixXd cps_chk = trajectory.getInitConstraintPoints(planner_manager_->getCpsNumPrePiece());
+
     bool far_away = true;
     for (int i = 0; i < cps_chk.cols(); ++i)
     {
@@ -3371,7 +3543,9 @@ namespace ego_planner
 
     if (!far_away || !have_recv_pre_agent_) 
     {
+      planner_manager_->traj_.swarm_traj[recv_id].order = MINCOTraj3D::ORDER;
       planner_manager_->traj_.swarm_traj[recv_id].traj = trajectory;
+      planner_manager_->traj_.swarm_traj[recv_id].snap_traj = SnapTraj3D();
       planner_manager_->traj_.swarm_traj[recv_id].drone_id = recv_id;
       planner_manager_->traj_.swarm_traj[recv_id].traj_id = msg->traj_id;
       planner_manager_->traj_.swarm_traj[recv_id].start_time = msg->start_time.toSec();
@@ -3401,6 +3575,12 @@ namespace ego_planner
   {
     constexpr int kBoundaryNum = MINCOTraj3D::BOUNDARY_DERIVATIVE_NUM;
     auto data = &planner_manager_->traj_.local_traj;
+    if (data->usesSnapTrajectory())
+    {
+      ROS_ERROR("[FSM] polyTraj2ROSMsg called with Snap trajectory. Use PerchingTraj instead.");
+      return;
+    }
+
     Eigen::VectorXd durs = data->traj.getDurations();
     int M = durs.size();
 
@@ -3447,12 +3627,12 @@ namespace ego_planner
     auto map = planner_manager_->grid_map_;
     ros::Time t_now = ros::Time::now();
 
-    double forward_t = 2.0 / planner_manager_->pp_.max_vel_; 
+    double forward_t = 2.0 / planner_manager_->pp_.max_vel_;
     double traj_t = (t_now.toSec() - traj->start_time) + forward_t;
     
     if (traj_t <= traj->duration)
     {
-      Eigen::Vector3d forward_p = traj->traj.evaluate(traj_t, 0); 
+      Eigen::Vector3d forward_p = traj->evaluate(traj_t, 0);
       double reso = map->getResolution();
       
       for (;; forward_p(2) -= reso)
