@@ -19,8 +19,11 @@
     <arg name="tracking_relative_offset_z" default="0.0"/>
     <arg name="enable_esdf" default="true"/>
     <arg name="sfc_path_timeout" default="0.2"/>
-    <arg name="sfc_progress" default="0.75"/>
-    <arg name="sfc_range" default="0.8"/>
+    <arg name="sfc_progress" default="1.2"/>
+    <arg name="sfc_range" default="1.0"/>
+    <arg name="sfc_corridor_margin" default="0.05"/>
+    <arg name="sfc_min_overlap_depth" default="0.05"/>
+    <arg name="sfc_max_seed_length" default="1.2"/>
     <arg name="point_num" default="1"/>
     <arg name="target0_x" default="0.0"/>
     <arg name="target0_y" default="0.0"/>
@@ -88,6 +91,9 @@
         <arg name="sfc_path_timeout" value="$(arg sfc_path_timeout)"/>
         <arg name="sfc_progress" value="$(arg sfc_progress)"/>
         <arg name="sfc_range" value="$(arg sfc_range)"/>
+        <arg name="sfc_corridor_margin" value="$(arg sfc_corridor_margin)"/>
+        <arg name="sfc_min_overlap_depth" value="$(arg sfc_min_overlap_depth)"/>
+        <arg name="sfc_max_seed_length" value="$(arg sfc_max_seed_length)"/>
         <arg name="launch_prefix" value="$(arg launch_prefix)"/>
         <arg name="flight_type" value="$(arg flight_type)"/>
         <arg name="point_num" value="$(arg point_num)"/>

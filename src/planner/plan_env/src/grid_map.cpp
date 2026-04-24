@@ -668,13 +668,20 @@ void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
   md_.camera_r_m_ = cam_T.block<3, 3>(0, 0);
 
   md_.has_odom_ = true;
+  if (pending_cloud_before_odom_)
+  {
+    sensor_msgs::PointCloud2ConstPtr pending_cloud = pending_cloud_before_odom_;
+    pending_cloud_before_odom_.reset();
+    cloudCallback(pending_cloud);
+  }
 }
 
 void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
 {
   if (!md_.has_odom_)
   {
-    std::cout << "grid_map: no odom!" << std::endl;
+    pending_cloud_before_odom_ = img;
+    ROS_WARN_THROTTLE(1.0, "grid_map: waiting for odom before processing cloud.");
     return;
   }
 

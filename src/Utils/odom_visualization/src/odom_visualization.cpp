@@ -25,6 +25,7 @@ bool cov_vel = false;
 bool cov_color = false;
 bool origin = false;
 bool isOriginSet = false;
+bool visualize_cmd_mesh = true;
 colvec poseOrigin(6);
 ros::Publisher posePub;
 ros::Publisher pathPub;
@@ -397,6 +398,9 @@ void odom_callback(const nav_msgs::Odometry::ConstPtr &msg)
 
 void cmd_callback(const quadrotor_msgs::PositionCommand cmd)
 {
+  if (!visualize_cmd_mesh)
+    return;
+
   if (cmd.header.frame_id == string("null"))
     return;
 
@@ -432,9 +436,9 @@ void cmd_callback(const quadrotor_msgs::PositionCommand cmd)
   meshROS.pose.orientation.x = q(1);
   meshROS.pose.orientation.y = q(2);
   meshROS.pose.orientation.z = q(3);
-  meshROS.scale.x = 2.0;
-  meshROS.scale.y = 2.0;
-  meshROS.scale.z = 2.0;
+  meshROS.scale.x = scale;
+  meshROS.scale.y = scale;
+  meshROS.scale.z = scale;
   meshROS.color.a = color_a;
   meshROS.color.r = color_r;
   meshROS.color.g = color_g;
@@ -465,9 +469,14 @@ int main(int argc, char **argv)
   n.param("covariance_velocity", cov_vel, false);
   n.param("covariance_color", cov_color, false);
   n.param("drone_id", _drone_id, -1);
+  n.param("visualize_cmd_mesh", visualize_cmd_mesh, true);
 
   ros::Subscriber sub_odom = n.subscribe("odom", 100, odom_callback);
-  ros::Subscriber sub_cmd = n.subscribe("cmd", 100, cmd_callback);
+  ros::Subscriber sub_cmd;
+  if (visualize_cmd_mesh)
+  {
+    sub_cmd = n.subscribe("cmd", 100, cmd_callback);
+  }
   posePub = n.advertise<geometry_msgs::PoseStamped>("pose", 100, true);
   pathPub = n.advertise<nav_msgs::Path>("path", 100, true);
   velPub = n.advertise<visualization_msgs::Marker>("velocity", 100, true);

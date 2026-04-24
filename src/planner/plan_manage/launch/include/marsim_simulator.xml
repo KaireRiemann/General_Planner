@@ -60,8 +60,11 @@
         <param name="color/b" value="1.0"/>
         <param name="covariance_scale" value="100.0"/>
         <param name="robot_scale" value="$(arg robot_scale)"/>
-        <param name="tf45" value="false"/>
+        <param name="tf45" value="true"/>
         <param name="drone_id" value="$(arg drone_id)"/>
+        <!-- Keep the RViz vehicle mesh tied to measured odom only; pos_cmd is a setpoint and
+             publishing it on the same marker causes visible flicker while tracking. -->
+        <param name="visualize_cmd_mesh" value="false"/>
     </node>
 
     <group if="$(eval lidar_type == 'avia')">

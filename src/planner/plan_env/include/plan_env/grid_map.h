@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigen>
 #include <Eigen/StdVector>
+#include <algorithm>
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <iostream>
@@ -169,6 +170,8 @@ public:
   inline int query(const Eigen::Vector3d &pos) const;
   inline Eigen::Vector3d getUpdatedBoxLow() const;
   inline Eigen::Vector3d getUpdatedBoxHigh() const;
+  inline Eigen::Vector3d getUpdatedBoxLowWithVirtualWall(double margin = 0.0) const;
+  inline Eigen::Vector3d getUpdatedBoxHighWithVirtualWall(double margin = 0.0) const;
   inline void getInflatedOccupiedPoints(std::vector<Eigen::Vector3d> &points) const;
   bool getOdomDepthTimeout() { return md_.flag_depth_odom_timeout_; }
 
@@ -257,6 +260,7 @@ private:
   ros::Subscriber indep_cloud_sub_, indep_odom_sub_, extrinsic_sub_;
   ros::Publisher map_pub_, map_inf_pub_, esdf_pub_;
   ros::Timer occ_timer_, esdf_timer_, vis_timer_, fading_timer_;
+  sensor_msgs::PointCloud2ConstPtr pending_cloud_before_odom_;
   bool freeze_odom_after_depth_{false};
   bool apply_cam_extrinsic_on_odom_{true};
   bool esdf_slice_follow_odom_{false};
@@ -570,6 +574,28 @@ inline Eigen::Vector3d GridMap::getUpdatedBoxLow() const
 inline Eigen::Vector3d GridMap::getUpdatedBoxHigh() const
 {
   return md_.ringbuffer_upbound3d_;
+}
+
+inline Eigen::Vector3d GridMap::getUpdatedBoxLowWithVirtualWall(double margin) const
+{
+  Eigen::Vector3d low = md_.ringbuffer_lowbound3d_;
+  if (mp_.enable_virtual_walll_)
+  {
+    low(2) = std::max(low(2), mp_.virtual_ground_);
+  }
+  low.array() += std::max(0.0, margin);
+  return low;
+}
+
+inline Eigen::Vector3d GridMap::getUpdatedBoxHighWithVirtualWall(double margin) const
+{
+  Eigen::Vector3d high = md_.ringbuffer_upbound3d_;
+  if (mp_.enable_virtual_walll_)
+  {
+    high(2) = std::min(high(2), mp_.virtual_ceil_);
+  }
+  high.array() -= std::max(0.0, margin);
+  return high;
 }
 
 inline void GridMap::getInflatedOccupiedPoints(std::vector<Eigen::Vector3d> &points) const

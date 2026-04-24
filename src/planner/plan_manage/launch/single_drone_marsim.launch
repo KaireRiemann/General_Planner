@@ -10,11 +10,12 @@
     <arg name="init_y" default="0.0"/>
     <arg name="init_z" default="1.0"/>
 
-    <arg name="use_esdf" default="false"/>
+    <arg name="use_esdf" default="true"/>
     <arg name="use_sfc_corridor" default="false"/>
-    <arg name="enable_esdf" default="false"/>
+    <arg name="enable_esdf" default="true"/>
     <arg name="lidar_type" default="mid360"/>
     <arg name="rviz" default="true"/>
+    <arg name="fpv_rviz" default="true"/>
 
     <arg name="use_static_map" default="true"/>
     <arg name="map_name" default="$(find map_generator)/resource/big_field.pcd"/>
@@ -28,6 +29,9 @@
     <arg name="filter_near_radius" default="0.50"/>
     <arg name="filter_ground_enable" default="true"/>
     <arg name="filter_ground_z" default="0.05"/>
+    <arg name="sfc_corridor_margin" default="0.05"/>
+    <arg name="sfc_min_overlap_depth" default="0.05"/>
+    <arg name="sfc_max_seed_length" default="1.2"/>
 
     <group if="$(arg use_static_map)">
         <node pkg="map_generator"
@@ -105,6 +109,9 @@
         <arg name="filter_near_radius" value="$(arg filter_near_radius)"/>
         <arg name="filter_ground_enable" value="$(arg filter_ground_enable)"/>
         <arg name="filter_ground_z" value="$(arg filter_ground_z)"/>
+        <arg name="sfc_corridor_margin" value="$(arg sfc_corridor_margin)"/>
+        <arg name="sfc_min_overlap_depth" value="$(arg sfc_min_overlap_depth)"/>
+        <arg name="sfc_max_seed_length" value="$(arg sfc_max_seed_length)"/>
     </include>
 
     <node if="$(arg rviz)"
@@ -113,4 +120,10 @@
           type="rviz"
           output="screen"
           args="-d $(find ego_planner)/launch/include/marsim_mid360.rviz"/>
+    <node if="$(arg fpv_rviz)"
+          name="rviz_fpv"
+          pkg="rviz"
+          type="rviz"
+          output="screen"
+          args="-d $(find ego_planner)/launch/include/marsim_fpv.rviz"/>
 </launch>
