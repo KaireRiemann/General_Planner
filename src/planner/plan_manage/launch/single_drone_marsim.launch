@@ -13,7 +13,7 @@
     <arg name="use_esdf" default="true"/>
     <arg name="use_sfc_corridor" default="false"/>
     <arg name="enable_esdf" default="true"/>
-    <arg name="lidar_type" default="mid360"/>
+    <arg name="lidar_type" default="os128"/>
     <arg name="rviz" default="true"/>
     <arg name="fpv_rviz" default="true"/>
 

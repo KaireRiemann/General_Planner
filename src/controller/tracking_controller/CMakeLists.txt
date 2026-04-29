@@ -36,7 +36,7 @@ find_package(catkin REQUIRED COMPONENTS
 catkin_package(
  INCLUDE_DIRS include
  #LIBRARIES ${PROJECT_NAME}_node
- CATKIN_DEPENDS message_runtime 
+ CATKIN_DEPENDS message_runtime quadrotor_msgs
 #  DEPENDS system_lib
 )
 
@@ -52,7 +52,8 @@ add_library(${PROJECT_NAME} src/tracking_controller.cpp)
 
 add_executable(${PROJECT_NAME}_node src/tracking_ctl_node.cpp
 src/tracking_controller.cpp
-  )
+)
+add_dependencies(${PROJECT_NAME} ${quadrotor_msgs_EXPORTED_TARGETS})
 target_link_libraries(${PROJECT_NAME}_node
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}

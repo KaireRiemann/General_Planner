@@ -65,12 +65,17 @@ class opengl_pointcloud_render
     opengl_pointcloud_render(){};
     void read_pointcloud_fromfile(std::string map_filename);
     ~opengl_pointcloud_render();
+
     void setParameters(int width, int height, float fx, float fy, float downsample_res, float polar_res_, float yaw_fov_,\
-                 float vertical_fov_,float near,float far,int sensing_rate,int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern);
+                 float vertical_fov_,float near,float far,int sensing_rate,
+                 int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern,
+                 int _use_inf_point = false);
+
     void render_pointcloud(pcl::PointCloud<PointType>::Ptr output_pointcloud, Eigen::Vector3f camera_pos, Eigen::Quaternionf camera_q, double t_pattern_start);
     void input_dyn_clouds(pcl::PointCloud<pcl::PointXYZI> input_cloud);
 
     private:
+    bool use_inf_pt{false};
     int UI_WIDTH;
     int width = 350;
     int height = 350;
@@ -183,8 +188,10 @@ class opengl_pointcloud_render
 };
 
 void opengl_pointcloud_render::setParameters(int width, int height, float fx, float fy, float downsample_res, float polar_res_, float yaw_fov_, float vertical_fov_,\
-                                    float near,float far,int sensing_rate,int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern)
+                                    float near,float far,int sensing_rate,int use_avia_pattern, int use_os128_pattern, int use_minicf_pattern,
+                                    int _use_inf_point)
 {
+    this->use_inf_pt = _use_inf_point;
     this->width = width;
     this->height = height;
     this->fu = fx;
@@ -1259,6 +1266,16 @@ void opengl_pointcloud_render::depth_to_pointcloud(cv::Mat& depth_image, pcl::Po
 
                 //interface with ros
                 temp_point_world = camera2world * (temp_point) + camera;
+
+                if(use_inf_pt) {
+                    PointType temp_pclpt;
+                    temp_pclpt.x = temp_point_world(0);
+                    temp_pclpt.y = temp_point_world(1);
+                    temp_pclpt.z = temp_point_world(2);
+                    temp_pclpt.intensity = density_matrix(v,u);
+                    origin_cloud->points.push_back(temp_pclpt);
+                    depth_ptcloud_vec.push_back(temp_point_world);
+                }
 
                 // if do not want to show the points over sensing range, comment the following code
                 // origin_cloud->points[v * width + u].x = temp_point_world(0);

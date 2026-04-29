@@ -836,7 +836,13 @@ void renderSensedPoints(const ros::TimerEvent &event)
   ros::Time t1 = ros::Time::now();
 
   if (!has_global_map || !has_odom)
+  {
+    if (!has_global_map)
+      ROS_WARN("No global map received yet..");
+    if (!has_odom)      
+      ROS_WARN("No odometry received yet..");
     return;
+  }
 
   Eigen::Quaterniond q;
   q.x() = odom_.pose.pose.orientation.x;
@@ -1741,7 +1747,13 @@ void renderSensedPoints(const ros::TimerEvent &event)
   local_map_filled.height = 1;
   local_map_filled.is_dense = true;
 
-  pcl::toROSMsg(local_map_filled, local_map_pcd);
+  pcl::PointCloud<pcl::PointXYZINormal> local_map_with_normals;
+  pcl::copyPointCloud(local_map_filled, local_map_with_normals);
+  local_map_with_normals.width = local_map_with_normals.points.size();
+  local_map_with_normals.height = 1;
+  local_map_with_normals.is_dense = true;
+
+  pcl::toROSMsg(local_map_with_normals, local_map_pcd);
   local_map_pcd.header = odom_.header;
   local_map_pcd.header.frame_id = "world";
   pub_cloud.publish(local_map_pcd);
@@ -1826,7 +1838,7 @@ void renderSensedPoints(const ros::TimerEvent &event)
     geometry_msgs::PoseStamped totaltime_pub;
     totaltime_pub.pose.position.x = accumulate(comp_time_vec.begin(), comp_time_vec.end(), 0.0) / comp_time_vec.size();
     comp_time_pub.publish(totaltime_pub);
-    //ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp, totaltime_pub.pose.position.x);
+    ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp, totaltime_pub.pose.position.x);
   }
   else
   {
@@ -1922,21 +1934,15 @@ int main(int argc, char **argv)
     pcd_read_status = pcl::io::loadPCDFile<PointType>(uav_model_path, uav_extra_model);
     if (pcd_read_status == -1)
     {
-        ROS_WARN("Failed to read UAV extra model file, fallback to box model rendering.");
-        use_uav_extra_model = false;
+        cout << "can't read uav extra model file." << endl;
+        return 0;
     }
-    else
-    {
-      //downsample uav model
-      sor.setInputCloud(uav_extra_model.makeShared());
-      sor.setLeafSize(downsample_res, downsample_res, downsample_res);
-      sor.filter(uav_extra_model);
-      uav_points_num = uav_extra_model.size();
-    }
-  }
-
-  if (!use_uav_extra_model)
-  {
+    //downsample uav model
+    sor.setInputCloud(uav_extra_model.makeShared());
+    sor.setLeafSize(downsample_res, downsample_res, downsample_res);
+    sor.filter(uav_extra_model);    
+    uav_points_num = uav_extra_model.size();
+  }else{
     uav_size[0] = 0.4;
     uav_size[1] = 0.4;
     uav_size[2] = 0.3;
@@ -1950,6 +1956,7 @@ int main(int argc, char **argv)
 
   // UAV_odom_sub = nh.subscribe("/other_quad/lidar_slam/odom", 1000, UAVOdomCallback);
 
+
   // subscribe point cloud
   global_map_sub = nh.subscribe("global_map", 1, rcvGlobalPointCloudCallBack);
   odom_sub = nh.subscribe("odometry", 50, rcvOdometryCallbck);
@@ -1959,7 +1966,7 @@ int main(int argc, char **argv)
   pub_intercloud = nh.advertise<sensor_msgs::PointCloud2>("sensor_cloud", 10);
   pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("cloud", 10);
   pub_pose = nh.advertise<geometry_msgs::PoseStamped>("sensor_pose", 10);
-  pub_uavcloud = nh.advertise<sensor_msgs::PointCloud2>("uav_cloud", 10); 
+  pub_uavcloud = nh.advertise<sensor_msgs::PointCloud2>("uav_cloud", 10); //扫描机身的点云
   depth_img_pub_ = nh.advertise<sensor_msgs::Image>("depth_img", 10);
   comp_time_pub = nh.advertise<geometry_msgs::PoseStamped>("simulator_compute_time", 10);
   double sensing_duration = 1.0 / sensing_rate;
@@ -1977,13 +1984,13 @@ int main(int argc, char **argv)
   // myfile.open(pkg_path.c_str(), std::ios_base::out); //, std::ios_base::out
 
   // open file to record time consumuption
-  pkg_path = ros::package::getPath("local_sensing_node");  
+  pkg_path = ros::package::getPath("mars_local_sensing_node");  
   pkg_path.append("/data/" + quad_name + "_time_consumption.txt");
   std::cout << "\nFound pkg_path = " << pkg_path << std::endl;
   myfile.open(pkg_path.c_str(), std::ios_base::out); 
 
   // open file to record collision check time consumption
-  pkg_path = ros::package::getPath("local_sensing_node");
+  pkg_path = ros::package::getPath("mars_local_sensing_node");
   pkg_path.append("/data/" + quad_name + "_collision_check_time_consumption.txt");
   std::cout << "\nFound pkg_path = " << pkg_path << std::endl;
   collision_checktime_file.open(pkg_path.c_str(), std::ios_base::out);

@@ -1,86 +1,29 @@
 <launch>
+    <arg name="drone_id"/>
+    <arg name="uav_num_"/>
     <arg name="init_x_"/>
     <arg name="init_y_"/>
     <arg name="init_z_"/>
-    <arg name="map_size_x_"/>
-    <arg name="map_size_y_"/>
-    <arg name="map_size_z_"/>
-    <arg name="odometry_topic"/>
-    <arg name="drone_id"/>
-    <arg name="lidar_type" default="mid360"/>
-    <arg name="use_gpu" default="false"/>
-    <arg name="uav_num" default="1"/>
-    <arg name="global_map_topic" default="/map_generator/global_cloud"/>
-    <arg name="use_uav_extra_model" default="1"/>
-    <arg name="mesh_resource" default="package://odom_visualization/meshes/yunque.dae"/>
-    <arg name="robot_scale" default="1.0"/>
-    <arg name="downsample_resolution" default="0.1"/>
-
-    <node pkg="mars_drone_sim"
-          name="drone_$(arg drone_id)_marsim_dynamics"
-          type="quadrotor_dynamics_node"
-          output="screen">
-        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-        <remap from="~cmd_RPM" to="/drone_$(arg drone_id)_cmdRPM"/>
-        <remap from="~imu" to="/drone_$(arg drone_id)_imu"/>
-        <param name="mass" value="1.9"/>
-        <param name="simulation_rate" value="200"/>
-        <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
-        <param name="init_state_x" value="$(arg init_x_)"/>
-        <param name="init_state_y" value="$(arg init_y_)"/>
-        <param name="init_state_z" value="$(arg init_z_)"/>
-    </node>
-
-    <node pkg="cascadePID"
-          name="drone_$(arg drone_id)_marsim_cascade_pid"
-          type="cascadePID_node"
-          output="screen">
-        <param name="drone_id" value="$(arg drone_id)"/>
-        <param name="controller_rate" value="200"/>
-        <param name="quadrotor_name" value="drone_$(arg drone_id)"/>
-        <param name="init_state_x" value="$(arg init_x_)"/>
-        <param name="init_state_y" value="$(arg init_y_)"/>
-        <param name="init_state_z" value="$(arg init_z_)"/>
-        <param name="init_state_yaw" value="0.0"/>
-        <param name="angle_stable_time" value="0.5"/>
-        <param name="damping_ratio" value="1.0"/>
-        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-        <remap from="~cmd_RPM" to="/drone_$(arg drone_id)_cmdRPM"/>
-        <remap from="~position_cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
-    </node>
-
-    <node pkg="odom_visualization"
-          name="drone_$(arg drone_id)_odom_visualization"
-          type="odom_visualization"
-          output="screen">
-        <remap from="~odom" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-        <remap from="~cmd" to="/drone_$(arg drone_id)_planning/pos_cmd"/>
-        <param name="mesh_resource" value="$(arg mesh_resource)"/>
-        <param name="color/a" value="1.0"/>
-        <param name="color/r" value="0.0"/>
-        <param name="color/g" value="1.0"/>
-        <param name="color/b" value="1.0"/>
-        <param name="covariance_scale" value="100.0"/>
-        <param name="robot_scale" value="$(arg robot_scale)"/>
-        <param name="tf45" value="true"/>
-        <param name="drone_id" value="$(arg drone_id)"/>
-        <!-- Keep the RViz vehicle mesh tied to measured odom only; pos_cmd is a setpoint and
-             publishing it on the same marker causes visible flicker while tracking. -->
-        <param name="visualize_cmd_mesh" value="false"/>
-    </node>
+    <arg name="init_yaw"/>
+    <arg name="odom_topic"/>
+    <arg name="lidar_type"/>
+    <arg name="map_name_"/>
+    <arg name="downsample_resolution_"/>
+    <arg name="use_gpu"/>
+    <arg name="use_uav_extra_model_"/>
 
     <group if="$(arg use_gpu)">
 
         <group if="$(eval lidar_type == 'avia')">
-            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="drone_$(arg drone_id)_marsim_pcl_render_node" output="screen" 
+            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="quad$(arg drone_id)_pcl_render_node" output="screen" 
                 args="$(arg map_name_)">
             <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-            <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+            <remap from="~cloud" to ="/cloud_registered"/>
 
             <param name="drone_id" value="$(arg drone_id)"/>
             <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-            <param name="uav_num" value="$(arg uav_num)"/>
+            <param name="uav_num" value="$(arg uav_num_)"/>
             <param name="is_360lidar" value="0"/>
             <param name="sensing_horizon" value="30.0"/>
             <param name="sensing_rate" value="10.0"/>
@@ -94,7 +37,7 @@
             <param name="hash_cubesize" value="5.0"/>
             <param name="use_avia_pattern" value="1"/>
 
-            <param name="downsample_res" value="$(arg downsample_resolution)"/>
+            <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
             <param name="dynobj_enable" value="0"/>
             <param name="dynobject_size" value="0.8"/>
@@ -102,7 +45,7 @@
             <param name="dyn_mode" value="0"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
             <param name="dyn_velocity" value="1.0"/>
 
-            <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+            <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
             <!-- collision parameter -->
             <param name="collisioncheck_enable" value="0"/>
@@ -114,14 +57,14 @@
         </group>
 
         <group if="$(eval lidar_type == 'mid360')">
-            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="drone_$(arg drone_id)_marsim_pcl_render_node" output="screen" 
+            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="quad$(arg drone_id)_pcl_render_node" output="screen" 
                 args="$(arg map_name_)">
                 <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-                <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+                <remap from="~cloud" to ="/cloud_registered"/>
                 <param name="drone_id" value="$(arg drone_id)"/>
                 <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-                <param name="uav_num" value="$(arg uav_num)"/>
+                <param name="uav_num" value="$(arg uav_num_)"/>
                 <param name="is_360lidar" value="1"/>
                 <param name="sensing_horizon" value="15.0"/>
                 <param name="sensing_rate" value="10.0"/>
@@ -137,7 +80,7 @@
                 <param name="use_vlp32_pattern" value="0"/>
                 <param name="use_minicf_pattern" value="1"/>
 
-                <param name="downsample_res" value="$(arg downsample_resolution)"/>
+                <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
                 <param name="dynobj_enable" value="0"/>
                 <param name="dynobject_size" value="0.8"/>
@@ -145,7 +88,7 @@
                 <param name="dyn_mode" value="0"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
                 <param name="dyn_velocity" value="1.0"/>
 
-                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
                 <!-- collision parameter -->
                 <param name="collisioncheck_enable" value="0"/>
@@ -155,14 +98,14 @@
         </group>
 
         <group if="$(eval lidar_type == 'os128')">
-            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="drone_$(arg drone_id)_marsim_pcl_render_node" output="screen" 
+            <node pkg="mars_local_sensing_node" type="mars_opengl_render_node" name="quad$(arg drone_id)_pcl_render_node" output="screen" 
                 args="$(arg map_name_)">
                 <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-                <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+                <remap from="~cloud" to ="/cloud_registered"/>
                 <param name="drone_id" value="$(arg drone_id)"/>
                 <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-                <param name="uav_num" value="$(arg uav_num)"/>
+                <param name="uav_num" value="$(arg uav_num_)"/>
                 <param name="is_360lidar" value="1"/>
                 <param name="sensing_horizon" value="15.0"/>
                 <param name="sensing_rate" value="10.0"/>
@@ -179,7 +122,7 @@
                 <param name="use_minicf_pattern" value="0"/>
                 <param name="use_os128_pattern" value="1"/>
 
-                <param name="downsample_res" value="$(arg downsample_resolution)"/>
+                <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
                 <param name="dynobj_enable" value="0"/>
                 <param name="dynobject_size" value="0.8"/>
@@ -187,7 +130,7 @@
                 <param name="dyn_mode" value="0"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
                 <param name="dyn_velocity" value="1.0"/>
 
-                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
                 <!-- collision parameter -->
                 <param name="collisioncheck_enable" value="0"/>
@@ -201,14 +144,14 @@
     <group unless="$(arg use_gpu)">
         <!-- Livox Avia launch-prefix="gdb -ex run -args" -->
         <group if="$(eval lidar_type == 'avia')">
-            <node pkg="mars_local_sensing_node" type="mars_pcl_render_node" name="drone_$(arg drone_id)_marsim_pcl_render_node"
+            <node pkg="mars_local_sensing_node" type="mars_pcl_render_node" name="quad$(arg drone_id)_pcl_render_node"
                 output="screen">
                 <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-                <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+                <remap from="~cloud" to ="/cloud_registered"/>
                 <param name="drone_id" value="$(arg drone_id)"/>
                 <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-                <param name="uav_num" value="$(arg uav_num)"/>
+                <param name="uav_num" value="$(arg uav_num_)"/>
                 <param name="is_360lidar" value="0"/>
                 <param name="sensing_horizon" value="30.0"/>
                 <param name="sensing_rate" value="10.0"/>
@@ -222,7 +165,7 @@
                 <param name="hash_cubesize" value="5.0"/>
                 <param name="use_avia_pattern" value="1"/>
 
-                <param name="downsample_res" value="$(arg downsample_resolution)"/>
+                <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
                 <param name="dynobj_enable" value="0"/>
                 <param name="dynobject_size" value="0.8"/>
@@ -230,7 +173,7 @@
                 <param name="dyn_mode" value="0"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
                 <param name="dyn_velocity" value="1.0"/>
 
-                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
                 <!-- collision parameter -->
                 <param name="collisioncheck_enable" value="0"/>
@@ -246,13 +189,13 @@
 launch-prefix="gdb --ex run -args"
         <group if="$(eval lidar_type == 'mid360')">
             <node pkg="mars_local_sensing_node" type="mars_pcl_render_node"
-                name="drone_$(arg drone_id)_marsim_pcl_render_node" output="screen" > <!--  -->
+                name="quad$(arg drone_id)_pcl_render_node" output="screen" > <!--  -->
                 <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-                <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+                <remap from="~cloud" to ="/cloud_registered"/>
                 <param name="drone_id" value="$(arg drone_id)"/>
                 <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-                <param name="uav_num" value="$(arg uav_num)"/>
+                <param name="uav_num" value="$(arg uav_num_)"/>
                 <param name="is_360lidar" value="1"/>
                 <param name="sensing_horizon" value="15.0"/>
                 <param name="sensing_rate" value="10.0"/>
@@ -268,7 +211,7 @@ launch-prefix="gdb --ex run -args"
                 <param name="use_vlp32_pattern" value="0"/>
                 <param name="use_minicf_pattern" value="1"/>
 
-                <param name="downsample_res" value="$(arg downsample_resolution)"/>
+                <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
                 <param name="dynobj_enable" value="0"/>
                 <param name="dynobject_size" value="0.6"/>
@@ -276,7 +219,7 @@ launch-prefix="gdb --ex run -args"
                 <param name="dyn_mode" value="2"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
                 <param name="dyn_velocity" value="3.0"/>
 
-                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
                 <!-- collision parameter -->
                 <param name="collisioncheck_enable" value="0"/>
@@ -287,13 +230,13 @@ launch-prefix="gdb --ex run -args"
 
         <group if="$(eval lidar_type == 'os128')">
             <node pkg="mars_local_sensing_node" type="mars_pcl_render_node"
-                name="drone_$(arg drone_id)_marsim_pcl_render_node" output="screen"> <!--  -->
+                name="quad$(arg drone_id)_pcl_render_node" output="screen"> <!--  -->
                 <remap from="~global_map" to="/map_generator/global_cloud"/>
-                <remap from="~odometry" to="/drone_$(arg drone_id)_$(arg odometry_topic)"/>
-                <!-- <remap from="~cloud" to ="/cloud_registered"/> -->
+                <remap from="~odometry" to="$(arg odom_topic)"/>
+                <remap from="~cloud" to ="/cloud_registered"/>
                 <param name="drone_id" value="$(arg drone_id)"/>
                 <param name="quadrotor_name" value="quad_$(arg drone_id)"/>
-                <param name="uav_num" value="$(arg uav_num)"/>
+                <param name="uav_num" value="$(arg uav_num_)"/>
                 <param name="is_360lidar" value="1"/>
                 <param name="sensing_horizon" value="15.0"/>
                 <param name="sensing_rate" value="10.0"/>
@@ -310,7 +253,7 @@ launch-prefix="gdb --ex run -args"
                 <param name="use_minicf_pattern" value="0"/>
                 <param name="use_os128_pattern" value="1"/>
 
-                <param name="downsample_res" value="$(arg downsample_resolution)"/>
+                <param name="downsample_res" value="$(arg downsample_resolution_)"/>
 
                 <param name="dynobj_enable" value="0"/>
                 <param name="dynobject_size" value="0.8"/>
@@ -318,7 +261,7 @@ launch-prefix="gdb --ex run -args"
                 <param name="dyn_mode" value="0"/><!-- 0 for a=0, 1 for a=g, 2 for random walk -->
                 <param name="dyn_velocity" value="1.0"/>
 
-                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model)"/>
+                <param name="use_uav_extra_model" value="$(arg use_uav_extra_model_)"/>
 
                 <!-- collision parameter -->
                 <param name="collisioncheck_enable" value="0"/>
@@ -328,4 +271,6 @@ launch-prefix="gdb --ex run -args"
             </node>
         </group>        
     </group>
+
+
 </launch>

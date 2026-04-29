@@ -50,6 +50,7 @@ Eigen::Matrix4f sensor2body, sensor2world;
 int output_pcd;
 int collisioncheck_enable;
 int is_360lidar;
+bool use_inf_pt;
 int use_avia_pattern,use_vlp32_pattern,use_minicf_pattern,use_os128_pattern,use_gaussian_filter;
 int livox_linestep;
 double sensing_horizon, sensing_rate, estimation_rate, polar_resolution, yaw_fov, vertical_fov, min_raylength, downsample_res, curvature_limit,hash_cubesize,collision_range;
@@ -634,7 +635,7 @@ void renderSensedPoints(const ros::TimerEvent& event)
       geometry_msgs::PoseStamped totaltime_pub;
       totaltime_pub.pose.position.x = accumulate(comp_time_vec.begin(),comp_time_vec.end(),0.0)/comp_time_vec.size();
       comp_time_pub.publish(totaltime_pub);
-      //ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp,totaltime_pub.pose.position.x);
+      ROS_INFO("Temp compute time = %lf, average compute time = %lf", comp_time_temp,totaltime_pub.pose.position.x);
     }else{
       comp_time_count++;
     }
@@ -699,6 +700,7 @@ int main(int argc, char** argv)
   nh.getParam("use_vlp32_pattern",use_vlp32_pattern);
   nh.getParam("use_minicf_pattern",use_minicf_pattern);
   nh.getParam("use_os128_pattern",use_os128_pattern);
+  nh.getParam("use_inf_pt",use_inf_pt);
 
   nh.getParam("use_gaussian_filter",use_gaussian_filter);
 
@@ -786,7 +788,9 @@ int main(int argc, char** argv)
     image_width = ceil(yaw_fov/polar_resolution);
   }
   image_height = ceil(vertical_fov/polar_resolution);
-  render.setParameters(image_width,image_height,250,250,downsample_res,polar_resolution,yaw_fov,vertical_fov,0.1,sensing_horizon,sensing_rate,use_avia_pattern,use_os128_pattern,use_minicf_pattern);
+  render.setParameters(image_width,image_height,250,250,downsample_res,polar_resolution,
+    yaw_fov,vertical_fov,0.1,sensing_horizon,sensing_rate,use_avia_pattern,use_os128_pattern,
+    use_minicf_pattern,use_inf_pt);
 
   render.read_pointcloud_fromfile(file_name);
   //home/dji/kong_ws/src/Exploration_sim/uav_simulator/map_generator/resource/Knowles_merge_01cutoff.pcd
